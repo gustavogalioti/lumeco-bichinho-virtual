@@ -100,6 +100,13 @@ const els = {
   fishMarker: document.getElementById('fishMarker'),
   btnCatch: document.getElementById('btnCatch'),
   pondMsg: document.getElementById('pondMsg'),
+  ingredients: document.getElementById('ingredients'),
+  btnCook: document.getElementById('btnCook'),
+  namingBox: document.getElementById('namingBox'),
+  dishNameInput: document.getElementById('dishNameInput'),
+  btnConfirmName: document.getElementById('btnConfirmName'),
+  btnCancelName: document.getElementById('btnCancelName'),
+  dishes: document.getElementById('dishes'),
 };
 
 // ---------- estado ----------
@@ -124,6 +131,8 @@ function freshState() {
     lastToy: 0,
     farm: { slots: emptySlots() },
     inventory: { baga: 0, fruta: 0, estrela: 0, peixe: 0 },
+    recipes: {},
+    dishInventory: {},
   };
 }
 
@@ -141,6 +150,8 @@ function withDefaults(s) {
   for (const k of ['baga', 'fruta', 'estrela', 'peixe']) {
     if (typeof s.inventory[k] !== 'number') s.inventory[k] = 0;
   }
+  if (!s.recipes) s.recipes = {};
+  if (!s.dishInventory) s.dishInventory = {};
   return s;
 }
 
@@ -214,6 +225,7 @@ function render() {
 
   renderItems();
   renderFarm();
+  renderKitchen();
 }
 
 function renderItems() {
@@ -539,6 +551,157 @@ function giveFood(id) {
   burstSparkles();
 }
 
+// ---------- cozinha ----------
+
+const selectedIngredients = new Set(); // ephemeral, não persiste
+let pendingRecipeKey = null;
+let pendingIngredientIds = null;
+
+function availableIngredientsList() {
+  const list = [];
+  for (const [id, n] of Object.entries(state.inventory)) {
+    if (n > 0) {
+      const cfg = id === 'peixe' ? FISH_ITEM : CROPS[id];
+      list.push({ id, n, icon: cfg.icon, name: cfg.name });
+    }
+  }
+  return list;
+}
+
+function toggleIngredient(id) {
+  if (selectedIngredients.has(id)) {
+    selectedIngredients.delete(id);
+  } else {
+    if (selectedIngredients.size >= 3) return;
+    selectedIngredients.add(id);
+  }
+  renderKitchen();
+}
+
+function recipeKeyFor(ids) {
+  return ids.slice().sort().join('+');
+}
+
+function consumeIngredients(ids) {
+  for (const id of ids) {
+    state.inventory[id] = Math.max(0, (state.inventory[id] || 0) - 1);
+  }
+}
+
+function tryCook() {
+  const ids = Array.from(selectedIngredients);
+  if (ids.length < 2) return;
+  const key = recipeKeyFor(ids);
+
+  if (state.recipes[key]) {
+    consumeIngredients(ids);
+    state.dishInventory[key] = (state.dishInventory[key] || 0) + 1;
+    selectedIngredients.clear();
+    saveState();
+    renderKitchen();
+    showBubble(`Preparou ${state.recipes[key].name}!`);
+    burstSparkles();
+  } else {
+    pendingRecipeKey = key;
+    pendingIngredientIds = ids;
+    els.namingBox.classList.remove('hidden');
+    els.dishNameInput.value = '';
+    els.dishNameInput.focus();
+  }
+}
+
+function confirmDishName() {
+  const name = els.dishNameInput.value.trim();
+  if (!name || !pendingRecipeKey) return;
+
+  consumeIngredients(pendingIngredientIds);
+  state.recipes[pendingRecipeKey] = { name, icon: '🍲' };
+  state.dishInventory[pendingRecipeKey] = (state.dishInventory[pendingRecipeKey] || 0) + 1;
+
+  selectedIngredients.clear();
+  cancelNaming();
+  saveState();
+  renderKitchen();
+  showBubble(`Criou o prato "${name}"!`);
+  burstSparkles();
+}
+
+function cancelNaming() {
+  pendingRecipeKey = null;
+  pendingIngredientIds = null;
+  els.namingBox.classList.add('hidden');
+}
+
+function dishEffect(key) {
+  const ids = key.split('+');
+  const effect = {};
+  for (const id of ids) {
+    const base = id === 'peixe' ? FISH_ITEM.effect : CROPS[id].effect;
+    for (const [stat, val] of Object.entries(base)) {
+      effect[stat] = (effect[stat] || 0) + val;
+    }
+  }
+  for (const stat of Object.keys(effect)) {
+    effect[stat] = Math.round(effect[stat] * 1.3); // prato cozido rende mais que os ingredientes crus
+  }
+  return effect;
+}
+
+function giveDish(key) {
+  if (!state.dishInventory[key] || state.dishInventory[key] <= 0) return;
+  applyElapsedDecay();
+  const effect = dishEffect(key);
+  for (const [stat, amount] of Object.entries(effect)) {
+    state[stat] = clamp(state[stat] + amount);
+  }
+  state.dishInventory[key] -= 1;
+  saveState();
+  render();
+  bounceCreature();
+  showBubble(`${state.recipes[key].name} — delícia especial!`);
+  burstSparkles();
+}
+
+function renderKitchen() {
+  const avail = availableIngredientsList();
+
+  if (avail.length === 0) {
+    els.ingredients.innerHTML = `<span class="inv-empty">colha ou pesque algo primeiro</span>`;
+  } else {
+    els.ingredients.innerHTML = avail.map(it => `
+      <button class="ing-chip ${selectedIngredients.has(it.id) ? 'on' : ''}" data-ing="${it.id}">
+        <span class="inv-icon">${it.icon}</span>
+        <span class="inv-count">${it.n}</span>
+      </button>
+    `).join('');
+    els.ingredients.querySelectorAll('[data-ing]').forEach(btn => {
+      btn.addEventListener('click', () => toggleIngredient(btn.dataset.ing));
+    });
+  }
+
+  els.btnCook.disabled = selectedIngredients.size < 2;
+
+  renderDishes();
+}
+
+function renderDishes() {
+  const keys = Object.keys(state.dishInventory).filter(k => state.dishInventory[k] > 0);
+  if (keys.length === 0) {
+    els.dishes.innerHTML = '';
+    return;
+  }
+  els.dishes.innerHTML = keys.map(k => `
+    <button class="inv-item" data-give-dish="${k}">
+      <span class="inv-icon">${state.recipes[k].icon}</span>
+      <span class="inv-count">${state.dishInventory[k]}</span>
+      <span class="dish-name">${state.recipes[k].name}</span>
+    </button>
+  `).join('');
+  els.dishes.querySelectorAll('[data-give-dish]').forEach(btn => {
+    btn.addEventListener('click', () => giveDish(btn.dataset.giveDish));
+  });
+}
+
 // ---------- pesca ----------
 
 let fishSessionStart = null;
@@ -599,6 +762,12 @@ els.itemBrinquedo.addEventListener('click', () => toggleItem('brinquedo'));
 els.toyBtn.addEventListener('click', playWithToy);
 els.btnFish.addEventListener('click', startFishing);
 els.btnCatch.addEventListener('click', attemptCatch);
+els.btnCook.addEventListener('click', tryCook);
+els.btnConfirmName.addEventListener('click', confirmDishName);
+els.btnCancelName.addEventListener('click', cancelNaming);
+els.dishNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') confirmDishName();
+});
 
 applyElapsedDecay();
 saveState();

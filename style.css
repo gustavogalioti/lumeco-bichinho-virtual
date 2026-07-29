@@ -634,6 +634,124 @@ body {
   margin: 0;
 }
 
+/* ---------- kitchen ---------- */
+
+.kitchen { margin-top: 16px; }
+
+.ingredients {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ing-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.ing-chip.on {
+  border-color: var(--mint);
+  background: var(--panel-2);
+  box-shadow: 0 0 0 1px rgba(127,231,196,0.25) inset;
+}
+
+.ing-chip .inv-icon { font-size: 14px; }
+.ing-chip .inv-count { color: var(--mint); }
+
+.cook-row {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.cook-btn {
+  padding: 10px 26px;
+  border-radius: 999px;
+  border: none;
+  background: var(--mint);
+  color: #0c1717;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cook-btn:disabled {
+  background: var(--panel);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.naming {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.naming.hidden { display: none; }
+
+.naming input {
+  flex: 1;
+  min-width: 140px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.naming input:focus {
+  outline: none;
+  border-color: var(--mint-soft);
+}
+
+.name-confirm {
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: none;
+  background: var(--mint);
+  color: #0c1717;
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.name-cancel {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.dishes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dish-name {
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 12px;
+}
+
 /* ---------- actions ---------- */
 
 .actions {

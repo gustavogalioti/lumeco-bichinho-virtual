@@ -131,6 +131,23 @@
     </div>
   </section>
 
+  <section class="kitchen" aria-label="Cozinha">
+    <div class="room-head">
+      <span class="room-title">Cozinha</span>
+      <span class="room-sub">escolha 2 ou 3 ingredientes</span>
+    </div>
+    <div class="ingredients" id="ingredients"></div>
+    <div class="cook-row">
+      <button class="cook-btn" id="btnCook" disabled>Cozinhar</button>
+    </div>
+    <div class="naming hidden" id="namingBox">
+      <input type="text" id="dishNameInput" maxlength="24" placeholder="Nome do prato novo...">
+      <button class="name-confirm" id="btnConfirmName">Salvar</button>
+      <button class="name-cancel" id="btnCancelName">cancelar</button>
+    </div>
+    <div class="dishes" id="dishes"></div>
+  </section>
+
   <nav class="actions">
     <button class="action-btn" id="btnFeed" data-action="fome">
       <span class="action-icon">🍓</span>
