@@ -147,17 +147,32 @@ body {
 .creature {
   width: 100%;
   height: auto;
-  animation: bob 3.2s ease-in-out infinite;
+  cursor: pointer;
+  animation: bob 4.4s ease-in-out infinite;
   filter: drop-shadow(0 0 18px var(--glow-color, var(--mint)));
 }
 
 @keyframes bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(2px, -5px) rotate(-1.4deg); }
+  50% { transform: translate(0, -9px) rotate(0deg); }
+  75% { transform: translate(-2px, -5px) rotate(1.4deg); }
 }
 
 .creature.sad { animation-duration: 3.2s; }
 .creature.bounce { animation: hop 0.5s ease-in-out; }
+
+.eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: blink 4.6s ease-in-out infinite;
+}
+.eye:nth-of-type(2) { animation-delay: 0.08s; }
+
+@keyframes blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.12); }
+}
 
 @keyframes hop {
   0% { transform: translateY(0) scale(1); }

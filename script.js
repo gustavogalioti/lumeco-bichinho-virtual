@@ -336,10 +336,8 @@ function creatureMarkup(stageId, c) {
       return `
         <ellipse cx="100" cy="150" rx="34" ry="8" fill="black" opacity="0.001"/>
         <circle cx="100" cy="108" r="46" fill="#152a27" stroke="${c}" stroke-width="3"/>
-        <circle cx="83" cy="102" r="7" fill="${c}"/>
-        <circle cx="117" cy="102" r="7" fill="${c}"/>
-        <circle cx="85" cy="100" r="2.2" fill="#0c1717"/>
-        <circle cx="119" cy="100" r="2.2" fill="#0c1717"/>
+        <g class="eye"><circle cx="83" cy="102" r="7" fill="${c}"/><circle cx="85" cy="100" r="2.2" fill="#0c1717"/></g>
+        <g class="eye"><circle cx="117" cy="102" r="7" fill="${c}"/><circle cx="119" cy="100" r="2.2" fill="#0c1717"/></g>
         <path d="M90 122 Q100 130 110 122" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>
         <path d="M100 44 L103 54 L113 56 L103 59 L100 69 L97 59 L87 56 L97 54 Z" fill="${c}"/>
         <ellipse cx="60" cy="112" rx="8" ry="5" fill="${c}" opacity="0.7"/>
@@ -350,10 +348,8 @@ function creatureMarkup(stageId, c) {
         <ellipse cx="100" cy="118" rx="50" ry="54" fill="#152a27" stroke="${c}" stroke-width="3"/>
         <path d="M58 96 Q40 80 46 56 Q64 62 68 88 Z" fill="${c}" opacity="0.75"/>
         <path d="M142 96 Q160 80 154 56 Q136 62 132 88 Z" fill="${c}" opacity="0.75"/>
-        <circle cx="82" cy="112" r="8" fill="${c}"/>
-        <circle cx="118" cy="112" r="8" fill="${c}"/>
-        <circle cx="84" cy="110" r="2.6" fill="#0c1717"/>
-        <circle cx="120" cy="110" r="2.6" fill="#0c1717"/>
+        <g class="eye"><circle cx="82" cy="112" r="8" fill="${c}"/><circle cx="84" cy="110" r="2.6" fill="#0c1717"/></g>
+        <g class="eye"><circle cx="118" cy="112" r="8" fill="${c}"/><circle cx="120" cy="110" r="2.6" fill="#0c1717"/></g>
         <path d="M88 134 Q100 144 112 134" stroke="${c}" stroke-width="3.5" fill="none" stroke-linecap="round"/>
         <path d="M100 40 L104 52 L116 55 L104 58 L100 70 L96 58 L84 55 L96 52 Z" fill="${c}"/>
         <circle cx="100" cy="118" r="6" fill="${c}" opacity="0.5"/>
@@ -364,10 +360,8 @@ function creatureMarkup(stageId, c) {
         <path d="M52 100 Q22 84 30 46 Q60 52 66 92 Z" fill="${c}" opacity="0.8"/>
         <path d="M148 100 Q178 84 170 46 Q140 52 134 92 Z" fill="${c}" opacity="0.8"/>
         <path d="M76 66 Q100 46 124 66 L118 78 Q100 64 82 78 Z" fill="${c}" opacity="0.9"/>
-        <circle cx="80" cy="116" r="9" fill="${c}"/>
-        <circle cx="120" cy="116" r="9" fill="${c}"/>
-        <circle cx="82" cy="113" r="3" fill="#0c1717"/>
-        <circle cx="122" cy="113" r="3" fill="#0c1717"/>
+        <g class="eye"><circle cx="80" cy="116" r="9" fill="${c}"/><circle cx="82" cy="113" r="3" fill="#0c1717"/></g>
+        <g class="eye"><circle cx="120" cy="116" r="9" fill="${c}"/><circle cx="122" cy="113" r="3" fill="#0c1717"/></g>
         <path d="M86 140 Q100 152 114 140" stroke="${c}" stroke-width="4" fill="none" stroke-linecap="round"/>
         <circle cx="100" cy="122" r="10" fill="${c}" opacity="0.55"/>
         <path d="M100 30 L105 46 L121 50 L105 54 L100 70 L95 54 L79 50 L95 46 Z" fill="${c}"/>
@@ -396,6 +390,24 @@ function bounceCreature() {
   // força reflow para reiniciar a animação
   void els.creatureSvg.offsetWidth;
   els.creatureSvg.classList.add('bounce');
+}
+
+const POKE_MESSAGES = {
+  radiante: ['Hihi, gostei disso!', 'Que carinho bom!', '✨'],
+  ok: ['Oi!', 'Isso faz cócegas!', 'Tô aqui, olha!'],
+  cansado: ['Cuida de mim...', 'Preciso de atenção.', 'Zzz... oi.'],
+};
+
+let lastPoke = 0;
+function pokeCreature() {
+  const now = Date.now();
+  if (now - lastPoke < 500) return; // evita spam de clique
+  lastPoke = now;
+  bounceCreature();
+  const mood = moodFromBrilho(brilho());
+  const list = POKE_MESSAGES[mood.key] || POKE_MESSAGES.ok;
+  showBubble(list[Math.floor(Math.random() * list.length)]);
+  burstSparkles();
 }
 
 function bubbleFor(stat) {
@@ -924,6 +936,7 @@ els.itemCobertor.addEventListener('click', () => toggleItem('cobertor'));
 els.itemTravesseiro.addEventListener('click', () => toggleItem('travesseiro'));
 els.itemBrinquedo.addEventListener('click', () => toggleItem('brinquedo'));
 els.toyBtn.addEventListener('click', playWithToy);
+els.creatureSvg.addEventListener('click', pokeCreature);
 els.btnFish.addEventListener('click', startFishing);
 els.btnCatch.addEventListener('click', attemptCatch);
 els.btnCook.addEventListener('click', tryCook);
