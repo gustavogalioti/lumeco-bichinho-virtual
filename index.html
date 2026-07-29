@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -40,6 +40,11 @@
       <button class="toy" id="toyBtn" title="Brincar">🧸</button>
       <div class="bubble" id="speechBubble"></div>
       <div class="sparkles" id="sparkles"></div>
+      <div class="dock" id="actionDock">
+        <button class="dock-btn" id="btnFeed" data-action="fome" title="Alimentar">🍓</button>
+        <button class="dock-btn" id="btnSleep" data-action="sono" title="Dormir">☾</button>
+        <button class="dock-btn" id="btnClean" data-action="higiene" title="Banho">✧</button>
+      </div>
     </section>
 
     <p class="hint" id="hint">Toque em Alimentar, Dormir ou Banho para cuidar dele.</p>
@@ -169,27 +174,12 @@
     <div class="dishes" id="dishes"></div>
   </section>
 
-  <nav class="actions">
-    <button class="action-btn" id="btnFeed" data-action="fome">
-      <span class="action-icon">🍓</span>
-      <span>Alimentar</span>
-    </button>
-    <button class="action-btn" id="btnSleep" data-action="sono">
-      <span class="action-icon">☾</span>
-      <span>Dormir</span>
-    </button>
-    <button class="action-btn" id="btnClean" data-action="higiene">
-      <span class="action-icon">✧</span>
-      <span>Banho</span>
-    </button>
-  </nav>
-
   <footer class="footer">
     <button class="reset-link" id="btnReset">recomeçar</button>
   </footer>
 
 </div>
 
-<script src="script.js"></script>
+<script src="script.js?v=2"></script>
 </body>
 </html>
