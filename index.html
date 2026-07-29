@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lumeco — seu bichinho de luz</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="scene">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-glyph">✦</span>
+      <span class="brand-name">Lumeco</span>
+    </div>
+    <div class="age-chip">
+      <span id="stageLabel">Ovo</span>
+      <span class="age-dot">·</span>
+      <span id="ageLabel">dia 0</span>
+    </div>
+  </header>
+
+  <main class="terrarium-wrap">
+    <section class="terrarium" id="terrarium">
+      <div class="terrarium-glow" id="terrariumGlow"></div>
+      <div class="floor"></div>
+      <div class="creature-holder">
+        <svg id="creatureSvg" viewBox="0 0 200 200" class="creature">
+          <!-- preenchido via JS -->
+        </svg>
+        <div class="shadow" id="creatureShadow"></div>
+      </div>
+      <div class="bubble" id="speechBubble"></div>
+      <div class="sparkles" id="sparkles"></div>
+    </section>
+
+    <p class="hint" id="hint">Toque em Alimentar, Dormir ou Banho para cuidar dele.</p>
+  </main>
+
+  <section class="stats" aria-label="Status do bichinho">
+    <div class="stat" data-stat="fome">
+      <div class="stat-head">
+        <span class="stat-icon">◆</span>
+        <span class="stat-name">Fome</span>
+        <span class="stat-value" id="valFome">100</span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="barFome"></div></div>
+    </div>
+    <div class="stat" data-stat="sono">
+      <div class="stat-head">
+        <span class="stat-icon">◆</span>
+        <span class="stat-name">Sono</span>
+        <span class="stat-value" id="valSono">100</span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="barSono"></div></div>
+    </div>
+    <div class="stat" data-stat="higiene">
+      <div class="stat-head">
+        <span class="stat-icon">◆</span>
+        <span class="stat-name">Higiene</span>
+        <span class="stat-value" id="valHigiene">100</span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="barHigiene"></div></div>
+    </div>
+    <div class="stat glow-stat" data-stat="brilho">
+      <div class="stat-head">
+        <span class="stat-icon">✦</span>
+        <span class="stat-name">Brilho</span>
+        <span class="stat-value" id="valBrilho">100</span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="barBrilho"></div></div>
+    </div>
+  </section>
+
+  <nav class="actions">
+    <button class="action-btn" id="btnFeed" data-action="fome">
+      <span class="action-icon">🍓</span>
+      <span>Alimentar</span>
+    </button>
+    <button class="action-btn" id="btnSleep" data-action="sono">
+      <span class="action-icon">☾</span>
+      <span>Dormir</span>
+    </button>
+    <button class="action-btn" id="btnClean" data-action="higiene">
+      <span class="action-icon">✧</span>
+      <span>Banho</span>
+    </button>
+  </nav>
+
+  <footer class="footer">
+    <button class="reset-link" id="btnReset">recomeçar</button>
+  </footer>
+
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
