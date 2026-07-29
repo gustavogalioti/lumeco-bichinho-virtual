@@ -107,6 +107,15 @@ const els = {
   btnConfirmName: document.getElementById('btnConfirmName'),
   btnCancelName: document.getElementById('btnCancelName'),
   dishes: document.getElementById('dishes'),
+  chatSub: document.getElementById('chatSub'),
+  chatSetup: document.getElementById('chatSetup'),
+  workerUrlInput: document.getElementById('workerUrlInput'),
+  btnSaveWorker: document.getElementById('btnSaveWorker'),
+  chatBox: document.getElementById('chatBox'),
+  chatLog: document.getElementById('chatLog'),
+  chatInput: document.getElementById('chatInput'),
+  btnSendChat: document.getElementById('btnSendChat'),
+  btnReconfigWorker: document.getElementById('btnReconfigWorker'),
 };
 
 // ---------- estado ----------
@@ -133,6 +142,7 @@ function freshState() {
     inventory: { baga: 0, fruta: 0, estrela: 0, peixe: 0 },
     recipes: {},
     dishInventory: {},
+    chat: { history: [], memory: '', msgCount: 0 },
   };
 }
 
@@ -152,6 +162,10 @@ function withDefaults(s) {
   }
   if (!s.recipes) s.recipes = {};
   if (!s.dishInventory) s.dishInventory = {};
+  if (!s.chat) s.chat = { history: [], memory: '', msgCount: 0 };
+  if (!Array.isArray(s.chat.history)) s.chat.history = [];
+  if (typeof s.chat.memory !== 'string') s.chat.memory = '';
+  if (typeof s.chat.msgCount !== 'number') s.chat.msgCount = 0;
   return s;
 }
 
@@ -551,6 +565,153 @@ function giveFood(id) {
   burstSparkles();
 }
 
+// ---------- conversar (via Worker/Groq) ----------
+
+const WORKER_URL_KEY = 'lumeco-worker-url';
+const SUMMARY_EVERY = 8; // a cada N mensagens do usuário, resume e enxuga o histórico
+const HISTORY_KEEP_AFTER_SUMMARY = 6;
+const HISTORY_MAX = 20;
+
+function getWorkerUrl() {
+  return localStorage.getItem(WORKER_URL_KEY) || '';
+}
+
+function setWorkerUrl(url) {
+  localStorage.setItem(WORKER_URL_KEY, url);
+}
+
+function initChatUI() {
+  const saved = getWorkerUrl();
+  if (saved) {
+    els.chatSetup.classList.add('hidden');
+    els.chatBox.classList.remove('hidden');
+    els.chatSub.textContent = 'ele responde do jeito dele';
+    renderChatLog();
+  } else {
+    els.chatSetup.classList.remove('hidden');
+    els.chatBox.classList.add('hidden');
+    els.chatSub.textContent = 'configure o servidor';
+  }
+}
+
+function saveWorkerUrlFromInput() {
+  const url = els.workerUrlInput.value.trim();
+  if (!url) return;
+  setWorkerUrl(url);
+  initChatUI();
+}
+
+function reconfigureWorker() {
+  els.workerUrlInput.value = getWorkerUrl();
+  els.chatBox.classList.add('hidden');
+  els.chatSetup.classList.remove('hidden');
+  els.chatSub.textContent = 'configure o servidor';
+}
+
+function renderChatLog() {
+  els.chatLog.innerHTML = state.chat.history.map(m => `
+    <div class="chat-msg ${m.role}">${escapeHtml(m.content)}</div>
+  `).join('');
+  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function currentPetStateSummary() {
+  const stage = currentStage();
+  return {
+    name: 'Lumeco',
+    stage: stage.name,
+    day: Math.floor(ageDays()),
+    fome: Math.round(state.fome),
+    sono: Math.round(state.sono),
+    higiene: Math.round(state.higiene),
+    brilho: brilho(),
+    memory: state.chat.memory,
+  };
+}
+
+async function sendChatMessage() {
+  const text = els.chatInput.value.trim();
+  const workerUrl = getWorkerUrl();
+  if (!text || !workerUrl) return;
+
+  state.chat.history.push({ role: 'user', content: text });
+  state.chat.msgCount += 1;
+  els.chatInput.value = '';
+  els.btnSendChat.disabled = true;
+  renderChatLog();
+  saveState();
+
+  // bolha "pensando" temporária, não vai pro histórico salvo
+  const pending = document.createElement('div');
+  pending.className = 'chat-msg assistant pending';
+  pending.textContent = '...';
+  els.chatLog.appendChild(pending);
+  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+
+  try {
+    const res = await fetch(workerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'chat',
+        messages: state.chat.history,
+        petState: currentPetStateSummary(),
+      }),
+    });
+    const data = await res.json();
+    const reply = data.reply || 'Hmm... (não consegui pensar em nada agora)';
+
+    state.chat.history.push({ role: 'assistant', content: reply });
+    trimHistory();
+    saveState();
+    renderChatLog();
+    bounceCreature();
+    burstSparkles();
+
+    if (state.chat.msgCount % SUMMARY_EVERY === 0) {
+      updateChatMemory();
+    }
+  } catch (err) {
+    pending.remove();
+    els.chatLog.insertAdjacentHTML('beforeend', `<div class="chat-msg assistant">(sem conexão com o servidor agora — tenta de novo)</div>`);
+  } finally {
+    els.btnSendChat.disabled = false;
+  }
+}
+
+function trimHistory() {
+  if (state.chat.history.length > HISTORY_MAX) {
+    state.chat.history = state.chat.history.slice(-HISTORY_MAX);
+  }
+}
+
+async function updateChatMemory() {
+  const workerUrl = getWorkerUrl();
+  if (!workerUrl) return;
+  try {
+    const res = await fetch(workerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'summary', messages: state.chat.history }),
+    });
+    const data = await res.json();
+    if (data.reply) {
+      state.chat.memory = data.reply;
+      // depois de resumir, enxuga o histórico bruto pra não crescer sem parar
+      state.chat.history = state.chat.history.slice(-HISTORY_KEEP_AFTER_SUMMARY);
+      saveState();
+    }
+  } catch (err) {
+    // silencioso — só tenta de novo no próximo ciclo
+  }
+}
+
 // ---------- cozinha ----------
 
 const selectedIngredients = new Set(); // ephemeral, não persiste
@@ -768,10 +929,17 @@ els.btnCancelName.addEventListener('click', cancelNaming);
 els.dishNameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') confirmDishName();
 });
+els.btnSaveWorker.addEventListener('click', saveWorkerUrlFromInput);
+els.btnReconfigWorker.addEventListener('click', reconfigureWorker);
+els.btnSendChat.addEventListener('click', sendChatMessage);
+els.chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChatMessage();
+});
 
 applyElapsedDecay();
 saveState();
 render();
+initChatUI();
 setInterval(tick, TICK_MS);
 
 // recalcula ao voltar para a aba, para refletir o tempo que passou
