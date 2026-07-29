@@ -430,6 +430,210 @@ body {
   filter: drop-shadow(0 0 6px var(--mint));
 }
 
+/* ---------- farm ---------- */
+
+.farm { margin-top: 16px; }
+
+.plots {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.plot {
+  aspect-ratio: 1 / 0.9;
+  border-radius: 14px;
+  border: 1px dashed var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 6px;
+  color: var(--text-dim);
+  font-family: var(--font-body);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.plot:hover { border-color: var(--mint-soft); }
+
+.plot.growing {
+  border-style: solid;
+  border-color: var(--line);
+  cursor: default;
+}
+
+.plot.ready {
+  border-style: solid;
+  border-color: var(--mint);
+  background: var(--panel-2);
+  animation: ready-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ready-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(127,231,196,0.0); }
+  50% { box-shadow: 0 0 0 5px rgba(127,231,196,0.12); }
+}
+
+.plot-icon { font-size: 22px; }
+.plot-label { font-size: 10.5px; text-align: center; line-height: 1.25; }
+
+.plot-bar {
+  width: 80%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.plot-bar-fill {
+  height: 100%;
+  background: var(--mint-soft);
+  transition: width 1s linear;
+}
+
+.plot-picker {
+  display: flex;
+  gap: 8px;
+}
+.plot-picker button {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.inventory {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inv-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.inv-item:active { transform: scale(0.95); }
+.inv-item .inv-icon { font-size: 14px; }
+.inv-item .inv-count { color: var(--mint); }
+
+.inv-empty {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* ---------- pond ---------- */
+
+.pond { margin-top: 16px; }
+
+.pond-box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.pond-btn {
+  padding: 10px 22px;
+  border-radius: 999px;
+  border: 1px solid var(--mint-soft);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pond-btn:active { transform: scale(0.96); }
+
+.fish-game {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.fish-game.hidden { display: none; }
+
+.fish-track {
+  position: relative;
+  width: 100%;
+  height: 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.fish-zone {
+  position: absolute;
+  left: 42%;
+  width: 16%;
+  top: 0;
+  bottom: 0;
+  background: rgba(127,231,196,0.22);
+}
+
+.fish-marker {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  width: 10px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--mint);
+  box-shadow: 0 0 8px var(--mint);
+  animation: fish-swim 1.6s ease-in-out infinite;
+}
+
+@keyframes fish-swim {
+  0%, 100% { left: 0; }
+  50% { left: calc(100% - 10px); }
+}
+
+.catch-btn {
+  padding: 9px 24px;
+  border-radius: 999px;
+  border: none;
+  background: var(--mint);
+  color: #0c1717;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.catch-btn:active { transform: scale(0.95); }
+
+.pond-msg {
+  min-height: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
 /* ---------- actions ---------- */
 
 .actions {

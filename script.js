@@ -38,6 +38,29 @@ const ITEM_EFFECTS = {
 const TOY_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2h entre brincadeiras
 const TOY_GAIN = 10; // sobe um pouco os 3 status
 
+const CROPS = {
+  baga: {
+    name: 'Baga Simples', icon: '🫐',
+    growMs: 20 * 60 * 1000, unlockDay: 0,
+    effect: { fome: 22 },
+  },
+  fruta: {
+    name: 'Fruta Solar', icon: '🍑',
+    growMs: 90 * 60 * 1000, unlockDay: 2,
+    effect: { fome: 30, higiene: 10 },
+  },
+  estrela: {
+    name: 'Fruta Estelar', icon: '🌟',
+    growMs: 4 * 60 * 60 * 1000, unlockDay: 4,
+    effect: { fome: 25, sono: 15, higiene: 15 },
+  },
+};
+
+const FISH_ITEM = { name: 'Peixinho', icon: '🐟', effect: { sono: 25 } };
+const FARM_SLOTS = 3;
+const FISH_ZONE = { start: 0.42, end: 0.58 }; // fração do ciclo de 1.6s
+const FISH_CYCLE_MS = 1600;
+
 let state = loadState();
 
 // ---------- elementos ----------
@@ -69,6 +92,14 @@ const els = {
   itemCobertor: document.getElementById('itemCobertor'),
   itemTravesseiro: document.getElementById('itemTravesseiro'),
   itemBrinquedo: document.getElementById('itemBrinquedo'),
+  plots: document.getElementById('plots'),
+  inventory: document.getElementById('inventory'),
+  farmSub: document.getElementById('farmSub'),
+  btnFish: document.getElementById('btnFish'),
+  fishGame: document.getElementById('fishGame'),
+  fishMarker: document.getElementById('fishMarker'),
+  btnCatch: document.getElementById('btnCatch'),
+  pondMsg: document.getElementById('pondMsg'),
 };
 
 // ---------- estado ----------
@@ -91,13 +122,25 @@ function freshState() {
     higiene: 85,
     items: { cobertor: false, travesseiro: false, brinquedo: false },
     lastToy: 0,
+    farm: { slots: emptySlots() },
+    inventory: { baga: 0, fruta: 0, estrela: 0, peixe: 0 },
   };
+}
+
+function emptySlots() {
+  return Array.from({ length: FARM_SLOTS }, () => ({ crop: null, plantedAt: null }));
 }
 
 // garante que estados salvos antes dos itens existirem continuem funcionando
 function withDefaults(s) {
   if (!s.items) s.items = { cobertor: false, travesseiro: false, brinquedo: false };
   if (typeof s.lastToy !== 'number') s.lastToy = 0;
+  if (!s.farm || !Array.isArray(s.farm.slots)) s.farm = { slots: emptySlots() };
+  while (s.farm.slots.length < FARM_SLOTS) s.farm.slots.push({ crop: null, plantedAt: null });
+  if (!s.inventory) s.inventory = { baga: 0, fruta: 0, estrela: 0, peixe: 0 };
+  for (const k of ['baga', 'fruta', 'estrela', 'peixe']) {
+    if (typeof s.inventory[k] !== 'number') s.inventory[k] = 0;
+  }
   return s;
 }
 
@@ -170,6 +213,7 @@ function render() {
   els.hint.textContent = hintFor(stage, mood);
 
   renderItems();
+  renderFarm();
 }
 
 function renderItems() {
@@ -362,6 +406,173 @@ function burstSparkles() {
   }
 }
 
+// ---------- fazenda ----------
+
+function unlockedCrops() {
+  const days = ageDays();
+  return Object.entries(CROPS)
+    .filter(([, c]) => days >= c.unlockDay)
+    .map(([id]) => id);
+}
+
+let pendingSlot = null; // índice do canteiro mostrando o seletor de plantio (não é salvo)
+
+function renderFarm() {
+  const unlocked = unlockedCrops();
+  els.farmSub.textContent = unlocked.length > 1
+    ? 'toque num canteiro vazio'
+    : `próximo plantio libera no dia ${nextUnlockDay()}`;
+
+  els.plots.innerHTML = state.farm.slots.map((slot, i) => plotMarkup(slot, i, unlocked)).join('');
+
+  els.plots.querySelectorAll('[data-plant]').forEach(btn => {
+    btn.addEventListener('click', () => plantSlot(Number(btn.dataset.slot), btn.dataset.plant));
+  });
+  els.plots.querySelectorAll('[data-open]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      pendingSlot = Number(btn.dataset.open);
+      renderFarm();
+    });
+  });
+  els.plots.querySelectorAll('[data-harvest]').forEach(btn => {
+    btn.addEventListener('click', () => harvestSlot(Number(btn.dataset.harvest)));
+  });
+
+  renderInventory();
+}
+
+function nextUnlockDay() {
+  const days = ageDays();
+  const next = Object.values(CROPS).map(c => c.unlockDay).filter(d => d > days).sort((a, b) => a - b)[0];
+  return next !== undefined ? Math.ceil(next) : '—';
+}
+
+function plotMarkup(slot, i, unlocked) {
+  if (!slot.crop) {
+    if (pendingSlot === i && unlocked.length > 0) {
+      return `<div class="plot">
+        <div class="plot-picker">
+          ${unlocked.map(id => `<button data-slot="${i}" data-plant="${id}">${CROPS[id].icon}</button>`).join('')}
+        </div>
+      </div>`;
+    }
+    return `<button class="plot" data-open="${i}">
+      <span class="plot-icon">+</span>
+      <span class="plot-label">plantar</span>
+    </button>`;
+  }
+
+  const crop = CROPS[slot.crop];
+  const elapsed = Date.now() - slot.plantedAt;
+  const ratio = Math.min(1, elapsed / crop.growMs);
+
+  if (ratio >= 1) {
+    return `<button class="plot ready" data-harvest="${i}">
+      <span class="plot-icon">${crop.icon}</span>
+      <span class="plot-label">colher</span>
+    </button>`;
+  }
+
+  const remainMin = Math.ceil((crop.growMs - elapsed) / 60000);
+  return `<div class="plot growing">
+    <span class="plot-icon">${crop.icon}</span>
+    <span class="plot-label">${remainMin < 60 ? remainMin + ' min' : Math.ceil(remainMin / 60) + ' h'}</span>
+    <div class="plot-bar"><div class="plot-bar-fill" style="width:${Math.round(ratio * 100)}%"></div></div>
+  </div>`;
+}
+
+function plantSlot(i, cropId) {
+  state.farm.slots[i] = { crop: cropId, plantedAt: Date.now() };
+  pendingSlot = null;
+  saveState();
+  renderFarm();
+}
+
+function harvestSlot(i) {
+  const slot = state.farm.slots[i];
+  if (!slot.crop) return;
+  state.inventory[slot.crop] = (state.inventory[slot.crop] || 0) + 1;
+  state.farm.slots[i] = { crop: null, plantedAt: null };
+  saveState();
+  renderFarm();
+  showBubble(`Colheu ${CROPS[slot.crop].name}!`);
+  burstSparkles();
+}
+
+function renderInventory() {
+  const items = [
+    ...Object.entries(state.inventory)
+      .filter(([id, n]) => id !== 'peixe' && n > 0)
+      .map(([id, n]) => ({ id, n, ...CROPS[id] })),
+    ...(state.inventory.peixe > 0 ? [{ id: 'peixe', n: state.inventory.peixe, ...FISH_ITEM }] : []),
+  ];
+
+  if (items.length === 0) {
+    els.inventory.innerHTML = `<span class="inv-empty">nada colhido ainda</span>`;
+    return;
+  }
+
+  els.inventory.innerHTML = items.map(it => `
+    <button class="inv-item" data-give="${it.id}">
+      <span class="inv-icon">${it.icon}</span>
+      <span class="inv-count">${it.n}</span>
+    </button>
+  `).join('');
+
+  els.inventory.querySelectorAll('[data-give]').forEach(btn => {
+    btn.addEventListener('click', () => giveFood(btn.dataset.give));
+  });
+}
+
+function giveFood(id) {
+  if (!state.inventory[id] || state.inventory[id] <= 0) return;
+  applyElapsedDecay();
+  const effect = id === 'peixe' ? FISH_ITEM.effect : CROPS[id].effect;
+  for (const [stat, amount] of Object.entries(effect)) {
+    state[stat] = clamp(state[stat] + amount);
+  }
+  state.inventory[id] -= 1;
+  saveState();
+  render();
+  bounceCreature();
+  showBubble('Que gostoso!');
+  burstSparkles();
+}
+
+// ---------- pesca ----------
+
+let fishSessionStart = null;
+let fishAnimTimer = null;
+
+function startFishing() {
+  fishSessionStart = Date.now();
+  els.fishGame.classList.remove('hidden');
+  els.btnFish.style.display = 'none';
+  els.pondMsg.textContent = 'Toque em "Fisgar!" quando o marcador passar pela área clara.';
+}
+
+function attemptCatch() {
+  const elapsed = (Date.now() - fishSessionStart) % FISH_CYCLE_MS;
+  const half = FISH_CYCLE_MS / 2;
+  // replica o progresso ping-pong da animação (0 -> 1 -> 0) usado no CSS
+  const progress = elapsed < half ? elapsed / half : 1 - (elapsed - half) / half;
+
+  const success = progress >= FISH_ZONE.start && progress <= FISH_ZONE.end;
+
+  els.fishGame.classList.add('hidden');
+  els.btnFish.style.display = '';
+
+  if (success) {
+    state.inventory.peixe += 1;
+    saveState();
+    renderFarm();
+    els.pondMsg.textContent = 'Fisgou um peixinho! 🐟';
+    burstSparkles();
+  } else {
+    els.pondMsg.textContent = 'Escapou... tenta de novo.';
+  }
+}
+
 function resetAll() {
   if (!confirm('Recomeçar do zero? Isso apaga o progresso atual.')) return;
   state = freshState();
@@ -386,6 +597,8 @@ els.itemCobertor.addEventListener('click', () => toggleItem('cobertor'));
 els.itemTravesseiro.addEventListener('click', () => toggleItem('travesseiro'));
 els.itemBrinquedo.addEventListener('click', () => toggleItem('brinquedo'));
 els.toyBtn.addEventListener('click', playWithToy);
+els.btnFish.addEventListener('click', startFishing);
+els.btnCatch.addEventListener('click', attemptCatch);
 
 applyElapsedDecay();
 saveState();

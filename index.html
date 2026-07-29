@@ -104,6 +104,33 @@
     </div>
   </section>
 
+  <section class="farm" aria-label="Fazenda">
+    <div class="room-head">
+      <span class="room-title">Fazenda</span>
+      <span class="room-sub" id="farmSub">toque num canteiro vazio</span>
+    </div>
+    <div class="plots" id="plots"></div>
+    <div class="inventory" id="inventory"></div>
+  </section>
+
+  <section class="pond" aria-label="Lago">
+    <div class="room-head">
+      <span class="room-title">Lago</span>
+      <span class="room-sub">pesque na hora certa</span>
+    </div>
+    <div class="pond-box" id="pondBox">
+      <button class="pond-btn" id="btnFish">Pescar</button>
+      <div class="fish-game hidden" id="fishGame">
+        <div class="fish-track">
+          <div class="fish-zone"></div>
+          <div class="fish-marker" id="fishMarker"></div>
+        </div>
+        <button class="catch-btn" id="btnCatch">Fisgar!</button>
+      </div>
+      <p class="pond-msg" id="pondMsg"></p>
+    </div>
+  </section>
+
   <nav class="actions">
     <button class="action-btn" id="btnFeed" data-action="fome">
       <span class="action-icon">🍓</span>
