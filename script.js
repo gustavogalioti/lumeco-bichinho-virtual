@@ -409,11 +409,13 @@ function bubbleFor(stat) {
 }
 
 let bubbleTimeout;
-function showBubble(text) {
+function showBubble(text, opts = {}) {
+  const { duration = 1400, long = false } = opts;
   els.bubble.textContent = text;
+  els.bubble.classList.toggle('bubble-long', long);
   els.bubble.classList.add('show');
   clearTimeout(bubbleTimeout);
-  bubbleTimeout = setTimeout(() => els.bubble.classList.remove('show'), 1400);
+  bubbleTimeout = setTimeout(() => els.bubble.classList.remove('show'), duration);
 }
 
 function burstSparkles() {
@@ -672,6 +674,7 @@ async function sendChatMessage() {
     saveState();
     renderChatLog();
     bounceCreature();
+    showBubble(reply, { duration: 4200, long: true });
     burstSparkles();
 
     if (state.chat.msgCount % SUMMARY_EVERY === 0) {

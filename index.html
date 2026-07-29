@@ -45,6 +45,27 @@
     <p class="hint" id="hint">Toque em Alimentar, Dormir ou Banho para cuidar dele.</p>
   </main>
 
+  <section class="chat-section" aria-label="Conversar">
+    <div class="room-head">
+      <span class="room-title">Conversar</span>
+      <span class="room-sub" id="chatSub">configure o servidor</span>
+    </div>
+
+    <div class="chat-setup" id="chatSetup">
+      <input type="text" id="workerUrlInput" placeholder="Cole a URL do seu Worker (https://...)">
+      <button class="name-confirm" id="btnSaveWorker">Salvar</button>
+    </div>
+
+    <div class="chat-box hidden" id="chatBox">
+      <div class="chat-log" id="chatLog"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" maxlength="300" placeholder="Fale com o Lumeco...">
+        <button class="name-confirm" id="btnSendChat">Enviar</button>
+      </div>
+      <button class="name-cancel" id="btnReconfigWorker">trocar servidor</button>
+    </div>
+  </section>
+
   <section class="stats" aria-label="Status do bichinho">
     <div class="stat" data-stat="fome">
       <div class="stat-head">
@@ -146,27 +167,6 @@
       <button class="name-cancel" id="btnCancelName">cancelar</button>
     </div>
     <div class="dishes" id="dishes"></div>
-  </section>
-
-  <section class="chat-section" aria-label="Conversar">
-    <div class="room-head">
-      <span class="room-title">Conversar</span>
-      <span class="room-sub" id="chatSub">configure o servidor</span>
-    </div>
-
-    <div class="chat-setup" id="chatSetup">
-      <input type="text" id="workerUrlInput" placeholder="Cole a URL do seu Worker (https://...)">
-      <button class="name-confirm" id="btnSaveWorker">Salvar</button>
-    </div>
-
-    <div class="chat-box hidden" id="chatBox">
-      <div class="chat-log" id="chatLog"></div>
-      <div class="chat-input-row">
-        <input type="text" id="chatInput" maxlength="300" placeholder="Fale com o Lumeco...">
-        <button class="name-confirm" id="btnSendChat">Enviar</button>
-      </div>
-      <button class="name-cancel" id="btnReconfigWorker">trocar servidor</button>
-    </div>
   </section>
 
   <nav class="actions">

@@ -192,6 +192,16 @@ body {
   pointer-events: none;
   transition: opacity 0.3s ease, transform 0.3s ease;
   white-space: nowrap;
+  max-width: 88%;
+  z-index: 2;
+}
+
+.bubble.bubble-long {
+  white-space: normal;
+  text-align: center;
+  border-radius: 18px;
+  line-height: 1.4;
+  padding: 10px 16px;
 }
 
 .bubble.show {
