@@ -29,12 +29,15 @@
     <section class="terrarium" id="terrarium">
       <div class="terrarium-glow" id="terrariumGlow"></div>
       <div class="floor"></div>
+      <div class="blanket" id="blanket"></div>
       <div class="creature-holder">
+        <div class="pillow" id="pillow"></div>
         <svg id="creatureSvg" viewBox="0 0 200 200" class="creature">
           <!-- preenchido via JS -->
         </svg>
         <div class="shadow" id="creatureShadow"></div>
       </div>
+      <button class="toy" id="toyBtn" title="Brincar">🧸</button>
       <div class="bubble" id="speechBubble"></div>
       <div class="sparkles" id="sparkles"></div>
     </section>
@@ -74,6 +77,30 @@
         <span class="stat-value" id="valBrilho">100</span>
       </div>
       <div class="bar"><div class="bar-fill" id="barBrilho"></div></div>
+    </div>
+  </section>
+
+  <section class="room" aria-label="Itens do quarto">
+    <div class="room-head">
+      <span class="room-title">Quarto</span>
+      <span class="room-sub">toque para equipar</span>
+    </div>
+    <div class="shelf">
+      <button class="item-toggle" id="itemCobertor" data-item="cobertor">
+        <span class="item-icon">🧣</span>
+        <span class="item-name">Cobertor</span>
+        <span class="item-desc">sono cai mais devagar</span>
+      </button>
+      <button class="item-toggle" id="itemTravesseiro" data-item="travesseiro">
+        <span class="item-icon">🛏️</span>
+        <span class="item-name">Travesseiro</span>
+        <span class="item-desc">dormir rende mais</span>
+      </button>
+      <button class="item-toggle" id="itemBrinquedo" data-item="brinquedo">
+        <span class="item-icon">🧸</span>
+        <span class="item-name">Brinquedo</span>
+        <span class="item-desc">aparece pra brincar</span>
+      </button>
     </div>
   </section>
 

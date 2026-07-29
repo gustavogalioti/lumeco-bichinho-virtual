@@ -28,6 +28,16 @@ const GAIN = {
 
 const TICK_MS = 15000; // recalcula a cada 15s enquanto a página está aberta
 
+// itens de aconchego e seus efeitos
+const ITEM_EFFECTS = {
+  cobertor: { sonoDecayMult: 0.7 },       // sono cai 30% mais devagar
+  travesseiro: { sonoGainMult: 1.2 },     // dormir rende 20% a mais
+  brinquedo: { unlocksToy: true },
+};
+
+const TOY_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2h entre brincadeiras
+const TOY_GAIN = 10; // sobe um pouco os 3 status
+
 let state = loadState();
 
 // ---------- elementos ----------
@@ -53,6 +63,12 @@ const els = {
   btnSleep: document.getElementById('btnSleep'),
   btnClean: document.getElementById('btnClean'),
   btnReset: document.getElementById('btnReset'),
+  pillow: document.getElementById('pillow'),
+  blanket: document.getElementById('blanket'),
+  toyBtn: document.getElementById('toyBtn'),
+  itemCobertor: document.getElementById('itemCobertor'),
+  itemTravesseiro: document.getElementById('itemTravesseiro'),
+  itemBrinquedo: document.getElementById('itemBrinquedo'),
 };
 
 // ---------- estado ----------
@@ -60,7 +76,7 @@ const els = {
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) return withDefaults(JSON.parse(raw));
   } catch (e) { /* ignora storage corrompido */ }
   return freshState();
 }
@@ -73,7 +89,16 @@ function freshState() {
     fome: 85,
     sono: 85,
     higiene: 85,
+    items: { cobertor: false, travesseiro: false, brinquedo: false },
+    lastToy: 0,
   };
+}
+
+// garante que estados salvos antes dos itens existirem continuem funcionando
+function withDefaults(s) {
+  if (!s.items) s.items = { cobertor: false, travesseiro: false, brinquedo: false };
+  if (typeof s.lastToy !== 'number') s.lastToy = 0;
+  return s;
 }
 
 function saveState() {
@@ -91,8 +116,10 @@ function applyElapsedDecay() {
   const minutes = (now - state.lastTick) / 60000;
   if (minutes <= 0) return;
 
+  const sonoDecayMult = state.items.cobertor ? ITEM_EFFECTS.cobertor.sonoDecayMult : 1;
+
   state.fome = clamp(state.fome - DECAY.fome * minutes);
-  state.sono = clamp(state.sono - DECAY.sono * minutes);
+  state.sono = clamp(state.sono - DECAY.sono * sonoDecayMult * minutes);
   state.higiene = clamp(state.higiene - DECAY.higiene * minutes);
   state.lastTick = now;
 }
@@ -141,6 +168,54 @@ function render() {
   els.btnClean.disabled = state.higiene >= 99;
 
   els.hint.textContent = hintFor(stage, mood);
+
+  renderItems();
+}
+
+function renderItems() {
+  els.itemCobertor.classList.toggle('on', state.items.cobertor);
+  els.itemTravesseiro.classList.toggle('on', state.items.travesseiro);
+  els.itemBrinquedo.classList.toggle('on', state.items.brinquedo);
+
+  els.pillow.classList.toggle('equipped', state.items.travesseiro);
+  els.blanket.classList.toggle('equipped', state.items.cobertor);
+
+  els.toyBtn.classList.toggle('equipped', state.items.brinquedo);
+  updateToyCooldown();
+}
+
+function updateToyCooldown() {
+  if (!state.items.brinquedo) return;
+  const remaining = TOY_COOLDOWN_MS - (Date.now() - state.lastToy);
+  if (remaining > 0) {
+    const mins = Math.ceil(remaining / 60000);
+    els.toyBtn.disabled = true;
+    els.toyBtn.title = `Volta a brincar em ${mins} min`;
+  } else {
+    els.toyBtn.disabled = false;
+    els.toyBtn.title = 'Brincar';
+  }
+}
+
+function toggleItem(item) {
+  state.items[item] = !state.items[item];
+  saveState();
+  render();
+}
+
+function playWithToy() {
+  const remaining = TOY_COOLDOWN_MS - (Date.now() - state.lastToy);
+  if (remaining > 0) return;
+  applyElapsedDecay();
+  state.fome = clamp(state.fome + TOY_GAIN);
+  state.sono = clamp(state.sono + TOY_GAIN);
+  state.higiene = clamp(state.higiene + TOY_GAIN);
+  state.lastToy = Date.now();
+  saveState();
+  render();
+  bounceCreature();
+  showBubble('Que divertido! 🧸');
+  burstSparkles();
 }
 
 function setValue(valueEl, barEl, v) {
@@ -234,7 +309,11 @@ function creatureMarkup(stageId, c) {
 
 function doAction(stat) {
   applyElapsedDecay();
-  state[stat] = clamp(state[stat] + GAIN[stat]);
+  let gain = GAIN[stat];
+  if (stat === 'sono' && state.items.travesseiro) {
+    gain = gain * ITEM_EFFECTS.travesseiro.sonoGainMult;
+  }
+  state[stat] = clamp(state[stat] + gain);
   saveState();
   render();
   bounceCreature();
@@ -302,6 +381,11 @@ els.btnFeed.addEventListener('click', () => doAction('fome'));
 els.btnSleep.addEventListener('click', () => doAction('sono'));
 els.btnClean.addEventListener('click', () => doAction('higiene'));
 els.btnReset.addEventListener('click', resetAll);
+
+els.itemCobertor.addEventListener('click', () => toggleItem('cobertor'));
+els.itemTravesseiro.addEventListener('click', () => toggleItem('travesseiro'));
+els.itemBrinquedo.addEventListener('click', () => toggleItem('brinquedo'));
+els.toyBtn.addEventListener('click', playWithToy);
 
 applyElapsedDecay();
 saveState();
