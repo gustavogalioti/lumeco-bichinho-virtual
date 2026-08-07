@@ -48,13 +48,15 @@ function paletteOf(genome) {
 // ---------- estágios ----------
 
 const STAGES = [
-  { id: 0, name: 'Semente',           minGrowth: 0 },
-  { id: 1, name: 'Semente brotando',  minGrowth: 8 },
-  { id: 2, name: 'Broto',             minGrowth: 30 },
-  { id: 3, name: 'Muda',              minGrowth: 100 },
-  { id: 4, name: 'Árvore jovem',      minGrowth: 300 },
-  { id: 5, name: 'Árvore adulta',     minGrowth: 800 },
+  { id: 0, name: 'Semente',           minGrowth: 0,   desc: 'Plantada, esperando a primeira rega.' },
+  { id: 1, name: 'Semente brotando',  minGrowth: 8,   desc: 'Uma rachadura aparece — ela está quase saindo da terra.' },
+  { id: 2, name: 'Broto',             minGrowth: 30,  desc: 'Ela nasce! Ganha nome e passa a conversar com você.' },
+  { id: 3, name: 'Muda',              minGrowth: 100, desc: 'Primeiras folhas de verdade.' },
+  { id: 4, name: 'Árvore jovem',      minGrowth: 300, desc: 'Tronco firme — a espécie sorteada aparece.' },
+  { id: 5, name: 'Árvore adulta',     minGrowth: 800, desc: 'Copa cheia, talvez flores.' },
 ];
+
+const BEYOND_DESC = 'Depois disso ela nunca para: musgo no tronco, ninho de pássaro, vagalumes à noite — e sempre mais um pouco.';
 
 function currentStage() {
   let stage = STAGES[0];
@@ -108,9 +110,12 @@ const els = {
   hint: document.getElementById('hint'),
   equivalence: document.getElementById('equivalence'),
   birthCard: document.getElementById('birthCard'),
+  birthTitle: document.getElementById('birthTitle'),
   birthSpecies: document.getElementById('birthSpecies'),
   treeNameInput: document.getElementById('treeNameInput'),
   btnConfirmTreeName: document.getElementById('btnConfirmTreeName'),
+  btnStagesInfo: document.getElementById('btnStagesInfo'),
+  stagesInfo: document.getElementById('stagesInfo'),
   btnWater: document.getElementById('btnWater'),
   valAgua: document.getElementById('valAgua'),
   valCrescimento: document.getElementById('valCrescimento'),
@@ -244,12 +249,19 @@ function renderHint(stage) {
 }
 
 function renderBirthCard(stage) {
-  if (stage.id >= 2 && !state.tree.name) {
-    const palette = paletteOf(state.tree.genome);
-    els.birthCard.classList.remove('hidden');
-    els.birthSpecies.textContent = `Espécie: ${palette.name}`;
-  } else {
+  if (state.tree.name) {
     els.birthCard.classList.add('hidden');
+    return;
+  }
+  els.birthCard.classList.remove('hidden');
+  if (stage.id >= 2) {
+    const palette = paletteOf(state.tree.genome);
+    els.birthTitle.textContent = 'Sua árvore nasceu! 🌿';
+    els.birthSpecies.textContent = `Espécie: ${palette.name}`;
+    els.birthSpecies.classList.remove('hidden');
+  } else {
+    els.birthTitle.textContent = 'Já pode dar um nome a ela 🌱';
+    els.birthSpecies.classList.add('hidden');
   }
 }
 
@@ -264,6 +276,29 @@ function renderChatGate(stage) {
     els.chatSub.textContent = getWorkerUrl() ? 'ela responde do jeito dela' : 'configure o servidor';
     initChatUI();
   }
+}
+
+function renderStagesInfo() {
+  const current = currentStage();
+  const rows = STAGES.map(s => `
+    <div class="stage-row ${s.id === current.id ? 'current' : ''}">
+      <span class="stage-dot">${s.id === current.id ? '●' : '○'}</span>
+      <span><strong>${s.name}</strong> — <span class="stage-desc">${s.desc}</span></span>
+    </div>
+  `).join('');
+  const beyond = `
+    <div class="stage-row ${current.id === 5 ? 'current' : ''}">
+      <span class="stage-dot">${current.id === 5 ? '●' : '○'}</span>
+      <span><strong>Sempre mais</strong> — <span class="stage-desc">${BEYOND_DESC}</span></span>
+    </div>
+  `;
+  els.stagesInfo.innerHTML = rows + beyond;
+}
+
+function toggleStagesInfo() {
+  renderStagesInfo();
+  els.stagesInfo.classList.toggle('hidden');
+  els.btnStagesInfo.textContent = els.stagesInfo.classList.contains('hidden') ? 'o que vem por aí? ↓' : 'esconder ↑';
 }
 
 // ---------- árvore procedural (SVG) ----------
@@ -668,6 +703,7 @@ els.btnWater.addEventListener('click', waterTree);
 els.treeSvg.addEventListener('click', pokeTree);
 els.btnConfirmTreeName.addEventListener('click', confirmTreeName);
 els.treeNameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmTreeName(); });
+els.btnStagesInfo.addEventListener('click', toggleStagesInfo);
 els.btnReset.addEventListener('click', resetAll);
 els.btnSaveWorker.addEventListener('click', saveWorkerUrlFromInput);
 els.btnReconfigWorker.addEventListener('click', reconfigureWorker);

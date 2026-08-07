@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -44,13 +44,16 @@
   </main>
 
   <div class="birth-card hidden" id="birthCard">
-    <p class="birth-title">Sua árvore nasceu! 🌿</p>
-    <p class="birth-species" id="birthSpecies"></p>
+    <p class="birth-title" id="birthTitle">Sua árvore nasceu! 🌿</p>
+    <p class="birth-species hidden" id="birthSpecies"></p>
     <div class="naming">
       <input type="text" id="treeNameInput" maxlength="24" placeholder="Dê um nome a ela...">
       <button class="name-confirm" id="btnConfirmTreeName">Batizar</button>
     </div>
   </div>
+
+  <button class="stages-toggle" id="btnStagesInfo">o que vem por aí? ↓</button>
+  <div class="stages-info hidden" id="stagesInfo"></div>
 
   <section class="chat-section" aria-label="Conversar">
     <div class="room-head">
@@ -100,6 +103,6 @@
 
 </div>
 
-<script src="script.js?v=1"></script>
+<script src="script.js?v=2"></script>
 </body>
 </html>
