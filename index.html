@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lumeco — seu bichinho de luz</title>
+<title>Raiz — sua árvore cresce com você</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=1">
 </head>
 <body>
 
@@ -15,40 +15,42 @@
 
   <header class="topbar">
     <div class="brand">
-      <span class="brand-glyph">✦</span>
-      <span class="brand-name">Lumeco</span>
+      <span class="brand-glyph">🌱</span>
+      <span class="brand-name" id="brandName">Sua semente</span>
     </div>
     <div class="age-chip">
-      <span id="stageLabel">Ovo</span>
+      <span id="stageLabel">Semente</span>
       <span class="age-dot">·</span>
-      <span id="ageLabel">dia 0</span>
+      <span id="heightLabel">0 cm</span>
     </div>
   </header>
 
-  <main class="terrarium-wrap">
-    <section class="terrarium" id="terrarium">
-      <div class="terrarium-glow" id="terrariumGlow"></div>
-      <div class="floor"></div>
-      <div class="blanket" id="blanket"></div>
-      <div class="creature-holder">
-        <div class="pillow" id="pillow"></div>
-        <svg id="creatureSvg" viewBox="0 0 200 200" class="creature">
-          <!-- preenchido via JS -->
-        </svg>
-        <div class="shadow" id="creatureShadow"></div>
+  <main class="garden-wrap">
+    <section class="garden" id="garden">
+      <div class="sky" id="sky"></div>
+      <div class="ground"></div>
+      <div class="tree-holder">
+        <svg id="treeSvg" viewBox="0 0 200 220" class="tree"></svg>
       </div>
-      <button class="toy" id="toyBtn" title="Brincar">🧸</button>
       <div class="bubble" id="speechBubble"></div>
       <div class="sparkles" id="sparkles"></div>
       <div class="dock" id="actionDock">
-        <button class="dock-btn" id="btnFeed" data-action="fome" title="Alimentar">🍓</button>
-        <button class="dock-btn" id="btnSleep" data-action="sono" title="Dormir">☾</button>
-        <button class="dock-btn" id="btnClean" data-action="higiene" title="Banho">✧</button>
+        <button class="dock-btn" id="btnWater" title="Regar">💧</button>
       </div>
     </section>
 
-    <p class="hint" id="hint">Toque em Alimentar, Dormir ou Banho para cuidar dele.</p>
+    <p class="hint" id="hint">Regue todo dia pra sua semente brotar.</p>
+    <p class="equivalence" id="equivalence"></p>
   </main>
+
+  <div class="birth-card hidden" id="birthCard">
+    <p class="birth-title">Sua árvore nasceu! 🌿</p>
+    <p class="birth-species" id="birthSpecies"></p>
+    <div class="naming">
+      <input type="text" id="treeNameInput" maxlength="24" placeholder="Dê um nome a ela...">
+      <button class="name-confirm" id="btnConfirmTreeName">Batizar</button>
+    </div>
+  </div>
 
   <section class="chat-section" aria-label="Conversar">
     <div class="room-head">
@@ -56,7 +58,9 @@
       <span class="room-sub" id="chatSub">configure o servidor</span>
     </div>
 
-    <div class="chat-setup" id="chatSetup">
+    <p class="chat-locked hidden" id="chatLocked">Ela ainda não brotou — converse com ela assim que sair da terra.</p>
+
+    <div class="chat-setup hidden" id="chatSetup">
       <input type="text" id="workerUrlInput" placeholder="Cole a URL do seu Worker (https://...)">
       <button class="name-confirm" id="btnSaveWorker">Salvar</button>
     </div>
@@ -64,114 +68,30 @@
     <div class="chat-box hidden" id="chatBox">
       <div class="chat-log" id="chatLog"></div>
       <div class="chat-input-row">
-        <input type="text" id="chatInput" maxlength="300" placeholder="Fale com o Lumeco...">
+        <input type="text" id="chatInput" maxlength="300" placeholder="Fale com sua árvore...">
         <button class="name-confirm" id="btnSendChat">Enviar</button>
       </div>
       <button class="name-cancel" id="btnReconfigWorker">trocar servidor</button>
     </div>
   </section>
 
-  <section class="stats" aria-label="Status do bichinho">
-    <div class="stat" data-stat="fome">
+  <section class="stats" aria-label="Status da árvore">
+    <div class="stat" data-stat="agua">
       <div class="stat-head">
         <span class="stat-icon">◆</span>
-        <span class="stat-name">Fome</span>
-        <span class="stat-value" id="valFome">100</span>
+        <span class="stat-name">Água</span>
+        <span class="stat-value" id="valAgua">100</span>
       </div>
-      <div class="bar"><div class="bar-fill" id="barFome"></div></div>
+      <div class="bar"><div class="bar-fill" id="barAgua"></div></div>
     </div>
-    <div class="stat" data-stat="sono">
-      <div class="stat-head">
-        <span class="stat-icon">◆</span>
-        <span class="stat-name">Sono</span>
-        <span class="stat-value" id="valSono">100</span>
-      </div>
-      <div class="bar"><div class="bar-fill" id="barSono"></div></div>
-    </div>
-    <div class="stat" data-stat="higiene">
-      <div class="stat-head">
-        <span class="stat-icon">◆</span>
-        <span class="stat-name">Higiene</span>
-        <span class="stat-value" id="valHigiene">100</span>
-      </div>
-      <div class="bar"><div class="bar-fill" id="barHigiene"></div></div>
-    </div>
-    <div class="stat glow-stat" data-stat="brilho">
+    <div class="stat glow-stat" data-stat="crescimento">
       <div class="stat-head">
         <span class="stat-icon">✦</span>
-        <span class="stat-name">Brilho</span>
-        <span class="stat-value" id="valBrilho">100</span>
+        <span class="stat-name">Crescimento</span>
+        <span class="stat-value" id="valCrescimento">0</span>
       </div>
-      <div class="bar"><div class="bar-fill" id="barBrilho"></div></div>
+      <div class="bar"><div class="bar-fill" id="barCrescimento"></div></div>
     </div>
-  </section>
-
-  <section class="room" aria-label="Itens do quarto">
-    <div class="room-head">
-      <span class="room-title">Quarto</span>
-      <span class="room-sub">toque para equipar</span>
-    </div>
-    <div class="shelf">
-      <button class="item-toggle" id="itemCobertor" data-item="cobertor">
-        <span class="item-icon">🧣</span>
-        <span class="item-name">Cobertor</span>
-        <span class="item-desc">sono cai mais devagar</span>
-      </button>
-      <button class="item-toggle" id="itemTravesseiro" data-item="travesseiro">
-        <span class="item-icon">🛏️</span>
-        <span class="item-name">Travesseiro</span>
-        <span class="item-desc">dormir rende mais</span>
-      </button>
-      <button class="item-toggle" id="itemBrinquedo" data-item="brinquedo">
-        <span class="item-icon">🧸</span>
-        <span class="item-name">Brinquedo</span>
-        <span class="item-desc">aparece pra brincar</span>
-      </button>
-    </div>
-  </section>
-
-  <section class="farm" aria-label="Fazenda">
-    <div class="room-head">
-      <span class="room-title">Fazenda</span>
-      <span class="room-sub" id="farmSub">toque num canteiro vazio</span>
-    </div>
-    <div class="plots" id="plots"></div>
-    <div class="inventory" id="inventory"></div>
-  </section>
-
-  <section class="pond" aria-label="Lago">
-    <div class="room-head">
-      <span class="room-title">Lago</span>
-      <span class="room-sub">pesque na hora certa</span>
-    </div>
-    <div class="pond-box" id="pondBox">
-      <button class="pond-btn" id="btnFish">Pescar</button>
-      <div class="fish-game hidden" id="fishGame">
-        <div class="fish-track">
-          <div class="fish-zone"></div>
-          <div class="fish-marker" id="fishMarker"></div>
-        </div>
-        <button class="catch-btn" id="btnCatch">Fisgar!</button>
-      </div>
-      <p class="pond-msg" id="pondMsg"></p>
-    </div>
-  </section>
-
-  <section class="kitchen" aria-label="Cozinha">
-    <div class="room-head">
-      <span class="room-title">Cozinha</span>
-      <span class="room-sub">escolha 2 ou 3 ingredientes</span>
-    </div>
-    <div class="ingredients" id="ingredients"></div>
-    <div class="cook-row">
-      <button class="cook-btn" id="btnCook" disabled>Cozinhar</button>
-    </div>
-    <div class="naming hidden" id="namingBox">
-      <input type="text" id="dishNameInput" maxlength="24" placeholder="Nome do prato novo...">
-      <button class="name-confirm" id="btnConfirmName">Salvar</button>
-      <button class="name-cancel" id="btnCancelName">cancelar</button>
-    </div>
-    <div class="dishes" id="dishes"></div>
   </section>
 
   <footer class="footer">
@@ -180,6 +100,6 @@
 
 </div>
 
-<script src="script.js?v=3"></script>
+<script src="script.js?v=1"></script>
 </body>
 </html>
