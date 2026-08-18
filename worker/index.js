@@ -54,7 +54,7 @@ async function callGroq(env, systemPrompt, messages, maxTokens) {
       Authorization: `Bearer ${env.GROQ_API_KEY}`,
     },
     body: JSON.stringify({
-      model: env.GROQ_MODEL || "llama-3.1-8b-instant",
+      model: env.GROQ_MODEL || "openai/gpt-oss-20b",
       messages: [{ role: "system", content: systemPrompt }, ...messages],
       max_tokens: maxTokens,
       temperature: 0.8,
