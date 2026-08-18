@@ -146,7 +146,9 @@
     <p>Este protótipo usa o microfone e a voz do seu navegador. Funciona melhor no Chrome.</p>
     <label for="workerUrl">URL do Worker (Groq)</label>
     <input type="text" id="workerUrl" placeholder="https://lumeco-proxy.SEU-SUBDOMINIO.workers.dev">
-    <p style="margin-top:-6px;">Cole a URL que o <code>wrangler deploy</code> te deu. Fica salva neste navegador.</p>
+    <label for="syncKey">Senha de sincronização</label>
+    <input type="password" id="syncKey" placeholder="uma senha só sua, qualquer uma">
+    <p style="margin-top:-6px;">A mesma senha em qualquer aparelho traz a mesma memória do Raiz. Fica salva neste navegador.</p>
     <button id="startBtn">Começar</button>
     <div class="err" id="setupErr">Seu navegador não suporta reconhecimento de voz. Tente pelo Chrome.</div>
   </div>
@@ -365,6 +367,7 @@ let recognition = null;
 let listening = false;
 
 const MEMORY_KEY = 'raiz_companion_memory_v1';
+const SYNC_KEY_STORAGE = 'raiz_sync_key';
 const SUMMARY_EVERY = 8;       // resume a cada 8 mensagens do usuário
 const HISTORY_KEEP_AFTER_SUMMARY = 6;
 const HISTORY_MAX = 20;
@@ -378,6 +381,38 @@ function loadMemoryState(){
 }
 function saveMemoryState(){
   try{ localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); }catch(e){}
+}
+function getSyncKey(){ return localStorage.getItem(SYNC_KEY_STORAGE) || ''; }
+
+async function syncMemoryFromServer(workerUrl){
+  const syncKey = getSyncKey();
+  if(!workerUrl || !syncKey) return;
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'memory_load', key: syncKey })
+    });
+    if(!resp.ok) return;
+    const { data } = await resp.json();
+    if(data){
+      mem = data;
+      history = mem.history || [];
+      saveMemoryState();
+    }
+  }catch(e){ /* segue com a memória local por enquanto */ }
+}
+
+async function pushMemoryToServer(workerUrl){
+  const syncKey = getSyncKey();
+  if(!workerUrl || !syncKey) return;
+  try{
+    await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'memory_save', key: syncKey, data: mem })
+    });
+  }catch(e){ /* fica só local por enquanto, tenta de novo depois */ }
 }
 
 let mem = loadMemoryState();
@@ -426,6 +461,7 @@ async function updateMemory(workerUrl){
       history = history.slice(-HISTORY_KEEP_AFTER_SUMMARY);
       mem.history = history;
       saveMemoryState();
+      pushMemoryToServer(workerUrl);
     }
   }catch(e){ /* tenta de novo no próximo ciclo */ }
 }
@@ -460,6 +496,7 @@ async function askRaiz(userText){
     history.push({role:'assistant', content: parsed.reply});
     mem.history = history;
     saveMemoryState();
+    pushMemoryToServer(workerUrl);
 
     setEmotion(parsed.emotion || 'calmo');
     setCaption('raiz', parsed.reply);
@@ -527,6 +564,10 @@ const workerInput = document.getElementById('workerUrl');
 const savedUrl = localStorage.getItem('raiz_worker_url');
 if(savedUrl) workerInput.value = savedUrl;
 
+const syncKeyInput = document.getElementById('syncKey');
+const savedSyncKey = getSyncKey();
+if(savedSyncKey) syncKeyInput.value = savedSyncKey;
+
 startBtn.addEventListener('click', async ()=>{
   if(!SpeechRecognition){
     setupErr.style.display = 'block';
@@ -538,9 +579,19 @@ startBtn.addEventListener('click', async ()=>{
     setupErr.style.display = 'block';
     return;
   }
+  const syncKey = syncKeyInput.value.trim();
+  if(!syncKey){
+    setupErr.textContent = 'Escolhe uma senha de sincronização (qualquer uma) antes de continuar.';
+    setupErr.style.display = 'block';
+    return;
+  }
   localStorage.setItem('raiz_worker_url', url);
+  localStorage.setItem(SYNC_KEY_STORAGE, syncKey);
   try{
     await navigator.mediaDevices.getUserMedia({audio:true});
+    hint.textContent = 'sincronizando memória...';
+    await syncMemoryFromServer(url);
+    hint.textContent = 'toque para falar';
     initRecognition();
     setupEl.classList.add('hidden');
   }catch(e){

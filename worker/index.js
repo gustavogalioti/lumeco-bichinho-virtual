@@ -3,9 +3,15 @@
  * e conversa com o modelo em nome do site estático no GitHub Pages.
  *
  * Rotas: só existe uma, POST /, com body:
- *   { mode: "chat",      messages: [...], petState: {...} }
- *   { mode: "companion", messages: [...], companionState: {...} }
- *   { mode: "summary",   messages: [...] }
+ *   { mode: "chat",         messages: [...], petState: {...} }
+ *   { mode: "companion",    messages: [...], companionState: {...} }
+ *   { mode: "summary",      messages: [...] }
+ *   { mode: "memory_load",  key: "..." }
+ *   { mode: "memory_save",  key: "...", data: {...} }
+ *
+ * memory_load / memory_save exigem `key` (uma senha simples que só você
+ * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
+ * para guardar a memória do companheiro sincronizada entre aparelhos.
  */
 
 const ALLOWED_ORIGIN = "https://gustavogalioti.github.io";
@@ -102,7 +108,31 @@ export default {
       return json({ error: "invalid_json" }, 400);
     }
 
-    const { mode = "chat", messages = [], petState = {}, companionState = {} } = body;
+    const { mode = "chat" } = body;
+
+    // ---- memória sincronizada (Cloudflare KV) ----
+    if (mode === "memory_load" || mode === "memory_save") {
+      if (!env.COMPANION_KV) {
+        return json({ error: "kv_not_configured" }, 500);
+      }
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const storageKey = "companion:main";
+
+      if (mode === "memory_load") {
+        const raw = await env.COMPANION_KV.get(storageKey);
+        const data = raw ? JSON.parse(raw) : { memory: "", history: [], msgCount: 0 };
+        return json({ data });
+      }
+
+      // memory_save
+      const data = body.data || {};
+      await env.COMPANION_KV.put(storageKey, JSON.stringify(data));
+      return json({ ok: true });
+    }
+
+    const { messages = [], petState = {}, companionState = {} } = body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return json({ error: "messages_required" }, 400);
