@@ -40,6 +40,12 @@ Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando 
 const SUMMARY_PROMPT = `A partir do histórico de conversa abaixo entre uma pessoa e sua árvore de estimação, escreva um resumo de no máximo 3 frases curtas, em português, sobre a pessoa: nome (se disse), gostos, rotina, assuntos recorrentes.
 Não invente nada que não esteja implícito na conversa. Se não houver informação suficiente, diga apenas "Ainda não conversamos o suficiente."`;
 
+const COMPANION_PROMPT = `Você é Raiz, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2-3 frases).
+Responda SEMPRE em JSON puro, sem markdown, sem crases, exatamente neste formato:
+{"emotion":"calmo|feliz|triste|surpreso|animado|pensando","reply":"texto curto da fala"}
+Escolha a emoção que combina genuinamente com o que você está dizendo.`;
+
 async function callGroq(env, systemPrompt, messages, maxTokens) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -96,6 +102,17 @@ export default {
       if (mode === "summary") {
         const reply = await callGroq(env, SUMMARY_PROMPT, trimmed, 150);
         return json({ reply });
+      }
+      if (mode === "companion") {
+        const raw = await callGroq(env, COMPANION_PROMPT, trimmed, 150);
+        const clean = raw.replace(/```json|```/g, "").trim();
+        let parsed;
+        try {
+          parsed = JSON.parse(clean);
+        } catch {
+          parsed = { emotion: "calmo", reply: clean || "..." };
+        }
+        return json(parsed);
       }
       const reply = await callGroq(env, chatSystemPrompt(petState), trimmed, 120);
       return json({ reply });

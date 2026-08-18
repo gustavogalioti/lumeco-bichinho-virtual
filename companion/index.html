@@ -106,6 +106,12 @@
     font-family:'Manrope'; font-weight:700; font-size:15px; color:#241A10;
   }
   .setup-card .err{ color:var(--alert); font-size:13px; margin-top:10px; display:none; }
+  .setup-card input{
+    width:100%; padding:12px 14px; border-radius:12px; margin-bottom:14px;
+    background:#1A130E; border:1px solid rgba(245,236,224,0.12); color:var(--text);
+    font-family:'Manrope'; font-size:14px;
+  }
+  .setup-card label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
 </style>
 </head>
 <body>
@@ -137,7 +143,10 @@
 <div class="setup" id="setup">
   <div class="setup-card">
     <h2>Antes de começar</h2>
-    <p>Este protótipo usa o microfone e a voz do seu navegador. Funciona melhor no Chrome. Toque abaixo e permita o uso do microfone quando o navegador pedir.</p>
+    <p>Este protótipo usa o microfone e a voz do seu navegador. Funciona melhor no Chrome.</p>
+    <label for="workerUrl">URL do Worker (Groq)</label>
+    <input type="text" id="workerUrl" placeholder="https://lumeco-proxy.SEU-SUBDOMINIO.workers.dev">
+    <p style="margin-top:-6px;">Cole a URL que o <code>wrangler deploy</code> te deu. Fica salva neste navegador.</p>
     <button id="startBtn">Começar</button>
     <div class="err" id="setupErr">Seu navegador não suporta reconhecimento de voz. Tente pelo Chrome.</div>
   </div>
@@ -390,27 +399,22 @@ async function askRaiz(userText){
   hint.textContent = 'pensando...';
   history.push({role:'user', content:userText});
 
-  const system = `Você é Raiz, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico). Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2-3 frases). Responda SEMPRE em JSON puro, sem markdown, sem crases, no formato exato:
-{"emotion":"calmo|feliz|triste|surpreso|animado|pensando","reply":"texto curto da fala"}
-Escolha a emoção que combina genuinamente com o que você está dizendo.`;
+  const workerUrl = localStorage.getItem('raiz_worker_url');
 
   try{
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    if(!workerUrl) throw new Error('worker_not_configured');
+
+    const resp = await fetch(workerUrl, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:300,
-        system,
-        messages:[...history.slice(-8)]
+        mode:'companion',
+        messages: history.slice(-8)
       })
     });
-    const data = await resp.json();
-    const raw = (data.content || []).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
-    const clean = raw.replace(/```json|```/g,'').trim();
-    let parsed;
-    try{ parsed = JSON.parse(clean); }
-    catch(e){ parsed = { emotion:'calmo', reply: clean || 'Desculpa, não entendi direito.' }; }
+    if(!resp.ok) throw new Error('worker_error_' + resp.status);
+    const parsed = await resp.json();
+    if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
 
     history.push({role:'assistant', content: parsed.reply});
     setEmotion(parsed.emotion || 'calmo');
@@ -471,11 +475,22 @@ const setupEl = document.getElementById('setup');
 const startBtn = document.getElementById('startBtn');
 const setupErr = document.getElementById('setupErr');
 
+const workerInput = document.getElementById('workerUrl');
+const savedUrl = localStorage.getItem('raiz_worker_url');
+if(savedUrl) workerInput.value = savedUrl;
+
 startBtn.addEventListener('click', async ()=>{
   if(!SpeechRecognition){
     setupErr.style.display = 'block';
     return;
   }
+  const url = workerInput.value.trim();
+  if(!url || !url.startsWith('https://')){
+    setupErr.textContent = 'Cole a URL do Worker (começando com https://) antes de continuar.';
+    setupErr.style.display = 'block';
+    return;
+  }
+  localStorage.setItem('raiz_worker_url', url);
   try{
     await navigator.mediaDevices.getUserMedia({audio:true});
     initRecognition();
