@@ -363,7 +363,25 @@ const caption = document.getElementById('caption');
 const hint = document.getElementById('hint');
 let recognition = null;
 let listening = false;
-let history = [];
+
+const MEMORY_KEY = 'raiz_companion_memory_v1';
+const SUMMARY_EVERY = 8;       // resume a cada 8 mensagens do usuário
+const HISTORY_KEEP_AFTER_SUMMARY = 6;
+const HISTORY_MAX = 20;
+
+function loadMemoryState(){
+  try{
+    const raw = localStorage.getItem(MEMORY_KEY);
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return { history:[], memory:'', msgCount:0 };
+}
+function saveMemoryState(){
+  try{ localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); }catch(e){}
+}
+
+let mem = loadMemoryState();
+let history = mem.history || [];
 
 function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
@@ -394,10 +412,32 @@ function speak(text){
   });
 }
 
+async function updateMemory(workerUrl){
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'summary', messages: history.slice(-16) })
+    });
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(data && data.reply){
+      mem.memory = data.reply;
+      history = history.slice(-HISTORY_KEEP_AFTER_SUMMARY);
+      mem.history = history;
+      saveMemoryState();
+    }
+  }catch(e){ /* tenta de novo no próximo ciclo */ }
+}
+
 async function askRaiz(userText){
   setEmotion('pensando');
   hint.textContent = 'pensando...';
   history.push({role:'user', content:userText});
+  mem.msgCount = (mem.msgCount||0) + 1;
+  if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+  mem.history = history;
+  saveMemoryState();
 
   const workerUrl = localStorage.getItem('raiz_worker_url');
 
@@ -409,7 +449,8 @@ async function askRaiz(userText){
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         mode:'companion',
-        messages: history.slice(-8)
+        messages: history.slice(-8),
+        companionState: { memory: mem.memory || '' }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -417,12 +458,19 @@ async function askRaiz(userText){
     if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
 
     history.push({role:'assistant', content: parsed.reply});
+    mem.history = history;
+    saveMemoryState();
+
     setEmotion(parsed.emotion || 'calmo');
     setCaption('raiz', parsed.reply);
     hint.textContent = 'falando...';
     await speak(parsed.reply);
     hint.textContent = 'toque para falar';
     setEmotion('calmo');
+
+    if(mem.msgCount % SUMMARY_EVERY === 0){
+      updateMemory(workerUrl);
+    }
   }catch(err){
     setEmotion('triste');
     setCaption('raiz', 'Hmm, não consegui pensar agora. Tenta de novo?');

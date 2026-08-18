@@ -3,8 +3,9 @@
  * e conversa com o modelo em nome do site estático no GitHub Pages.
  *
  * Rotas: só existe uma, POST /, com body:
- *   { mode: "chat",    messages: [...], petState: {...} }
- *   { mode: "summary", messages: [...] }
+ *   { mode: "chat",      messages: [...], petState: {...} }
+ *   { mode: "companion", messages: [...], companionState: {...} }
+ *   { mode: "summary",   messages: [...] }
  */
 
 const ALLOWED_ORIGIN = "https://gustavogalioti.github.io";
@@ -40,11 +41,26 @@ Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando 
 const SUMMARY_PROMPT = `A partir do histórico de conversa abaixo entre uma pessoa e sua árvore de estimação, escreva um resumo de no máximo 3 frases curtas, em português, sobre a pessoa: nome (se disse), gostos, rotina, assuntos recorrentes.
 Não invente nada que não esteja implícito na conversa. Se não houver informação suficiente, diga apenas "Ainda não conversamos o suficiente."`;
 
-const COMPANION_PROMPT = `Você é Raiz, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
-Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2-3 frases).
-Responda SEMPRE em JSON puro, sem markdown, sem crases, exatamente neste formato:
+function companionPrompt(companionState = {}) {
+  const memoryLine = companionState.memory
+    ? `O que você já sabe sobre a pessoa, de conversas anteriores: ${companionState.memory}`
+    : `Você ainda está conhecendo essa pessoa — preste atenção no que ela conta, para lembrar depois.`;
+
+  return `Você é Raiz, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
+${memoryLine}
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
+Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"calmo|feliz|triste|surpreso|animado|pensando","reply":"texto curto da fala"}
-Escolha a emoção que combina genuinamente com o que você está dizendo.`;
+Escolha a emoção que combina genuinamente com o que você está dizendo. Nunca deixe o JSON incompleto.`;
+}
+
+function extractReplyFallback(raw) {
+  const m = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (m) {
+    try { return JSON.parse(`"${m[1]}"`); } catch { return m[1]; }
+  }
+  return raw.replace(/^\{.*?"reply"\s*:\s*"?/, "").replace(/"?\}?\s*$/, "").trim() || "Hmm, se perdeu meu pensamento. Pode repetir?";
+}
 
 async function callGroq(env, systemPrompt, messages, maxTokens) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -86,7 +102,7 @@ export default {
       return json({ error: "invalid_json" }, 400);
     }
 
-    const { mode = "chat", messages = [], petState = {} } = body;
+    const { mode = "chat", messages = [], petState = {}, companionState = {} } = body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return json({ error: "messages_required" }, 400);
@@ -104,13 +120,17 @@ export default {
         return json({ reply });
       }
       if (mode === "companion") {
-        const raw = await callGroq(env, COMPANION_PROMPT, trimmed, 150);
+        const raw = await callGroq(env, companionPrompt(companionState), trimmed, 300);
         const clean = raw.replace(/```json|```/g, "").trim();
         let parsed;
         try {
           parsed = JSON.parse(clean);
+          if (!parsed.reply) throw new Error("no_reply_field");
         } catch {
-          parsed = { emotion: "calmo", reply: clean || "..." };
+          parsed = { emotion: "calmo", reply: extractReplyFallback(clean) };
+        }
+        if (!["calmo","feliz","triste","surpreso","animado","pensando"].includes(parsed.emotion)) {
+          parsed.emotion = "calmo";
         }
         return json(parsed);
       }
