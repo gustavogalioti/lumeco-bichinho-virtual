@@ -5,110 +5,78 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Raiz — Companheiro de Voz</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg-0:#120E0B;
-    --bg-1:#1D1611;
-    --surface:#251C15;
-    --amber:#E8A24A;
-    --amber-soft:#F2C879;
-    --sad:#7484A8;
-    --alert:#E8654F;
-    --calm:#6FC6B8;
-    --text:#F5ECE0;
-    --muted:#948577;
-    --ring:rgba(232,162,74,0.35);
+    --bg:#000000;
+    --eye-core:#BFF3FF;
+    --eye-mid:#4FC9FF;
+    --eye-deep:#1B7FE0;
+    --text:#EAF6FF;
+    --muted:#5C7386;
+    --ring:rgba(79,201,255,0.30);
+    --surface:#0A1016;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%; margin:0;}
   body{
-    background:
-      radial-gradient(120% 90% at 50% -10%, #2A2018 0%, var(--bg-0) 55%),
-      var(--bg-0);
+    background:var(--bg);
     color:var(--text);
     font-family:'Manrope', system-ui, sans-serif;
     display:flex; flex-direction:column; align-items:center; justify-content:space-between;
-    min-height:100vh; padding:28px 20px 34px;
+    min-height:100vh; padding:26px 20px 32px;
     overflow:hidden;
     position:relative;
   }
-  #embers{position:fixed; inset:0; pointer-events:none; z-index:0;}
-  .top{ text-align:center; z-index:2; }
+  .top{ text-align:center; z-index:2; opacity:0.7; }
   .brand{
-    font-family:'Baloo 2', sans-serif; font-weight:600; font-size:15px;
-    letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);
+    font-weight:600; font-size:13px;
+    letter-spacing:0.16em; text-transform:uppercase; color:var(--muted);
   }
   .stage{
     flex:1; display:flex; align-items:center; justify-content:center;
     z-index:2; width:100%; position:relative;
   }
-  .device-wrap{ position:relative; display:flex; flex-direction:column; align-items:center; }
-  .roots{
-    position:absolute; bottom:-46px; left:50%; transform:translateX(-50%);
-    width:220px; height:60px; opacity:0.55; z-index:0;
-  }
-  .device{
-    width:min(72vw, 300px); aspect-ratio:1/1;
-    background:linear-gradient(160deg, var(--surface), #1A130E);
-    border-radius:38px;
-    position:relative; z-index:2;
-    box-shadow:
-      0 0 0 1px rgba(245,236,224,0.05) inset,
-      0 30px 60px -20px rgba(0,0,0,0.65),
-      0 0 90px -10px var(--ring);
-    transition:box-shadow 0.6s ease;
-  }
-  canvas#face{ width:100%; height:100%; display:block; }
-  .status-ring{
-    position:absolute; inset:-14px; border-radius:48px;
-    border:2px solid var(--ring); opacity:0; transform:scale(0.94);
-    transition:opacity 0.4s ease, transform 0.4s ease;
-    pointer-events:none;
-  }
-  .device-wrap.listening .status-ring{ opacity:1; transform:scale(1); animation:pulse-ring 1.6s ease-out infinite; }
-  @keyframes pulse-ring{
-    0%{ box-shadow:0 0 0 0 var(--ring); }
-    100%{ box-shadow:0 0 0 18px rgba(232,162,74,0); }
-  }
+  .eye-wrap{ position:relative; width:min(84vw, 440px); aspect-ratio:2.15/1; }
+  canvas#eye{ width:100%; height:100%; display:block; }
   .caption{
     z-index:2; min-height:52px; max-width:560px; text-align:center;
     font-size:16px; line-height:1.5; color:var(--text); opacity:0.92;
-    padding:0 12px; margin-top:22px;
+    padding:0 12px; margin-top:18px;
   }
   .caption .who{ color:var(--muted); font-size:12px; letter-spacing:0.08em; text-transform:uppercase; display:block; margin-bottom:4px; }
   .controls{ z-index:2; display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; }
   .mic-btn{
-    width:78px; height:78px; border-radius:50%; border:none; cursor:pointer;
-    background:linear-gradient(160deg, var(--amber-soft), var(--amber));
+    width:76px; height:76px; border-radius:50%; border:none; cursor:pointer;
+    background:radial-gradient(circle at 35% 30%, var(--eye-core), var(--eye-mid) 55%, var(--eye-deep));
     display:flex; align-items:center; justify-content:center;
-    box-shadow:0 12px 30px -8px rgba(232,162,74,0.55);
+    box-shadow:0 0 30px -4px rgba(79,201,255,0.55), 0 8px 26px -8px rgba(0,0,0,0.8);
     transition:transform 0.15s ease, box-shadow 0.3s ease;
   }
   .mic-btn:active{ transform:scale(0.94); }
-  .mic-btn.on{ background:linear-gradient(160deg, #EF8B76, var(--alert)); box-shadow:0 12px 30px -8px rgba(232,101,79,0.6); }
-  .mic-btn svg{ width:30px; height:30px; }
+  .mic-btn.on{ background:radial-gradient(circle at 35% 30%, #FFE9C8, #FFB199 55%, #E8654F); box-shadow:0 0 30px -4px rgba(232,101,79,0.6); }
+  .mic-btn svg{ width:28px; height:28px; }
   .hint{ font-size:13px; color:var(--muted); text-align:center; }
   .setup{
-    z-index:3; position:fixed; inset:0; background:rgba(10,8,6,0.86);
+    z-index:3; position:fixed; inset:0; background:rgba(0,0,0,0.9);
     display:flex; align-items:center; justify-content:center; padding:24px;
   }
   .setup.hidden{ display:none; }
   .setup-card{
     background:var(--surface); border-radius:24px; padding:26px 24px; max-width:400px;
-    border:1px solid rgba(245,236,224,0.08);
+    border:1px solid rgba(79,201,255,0.14);
   }
-  .setup-card h2{ font-family:'Baloo 2', sans-serif; margin:0 0 8px; font-size:22px; }
+  .setup-card h2{ font-weight:700; margin:0 0 8px; font-size:22px; }
   .setup-card p{ color:var(--muted); font-size:14px; line-height:1.5; margin:0 0 18px; }
   .setup-card button{
     width:100%; padding:14px; border-radius:14px; border:none; cursor:pointer;
-    background:linear-gradient(160deg, var(--amber-soft), var(--amber));
-    font-family:'Manrope'; font-weight:700; font-size:15px; color:#241A10;
+    background:linear-gradient(160deg, var(--eye-core), var(--eye-mid));
+    font-family:'Manrope'; font-weight:700; font-size:15px; color:#031018;
   }
-  .setup-card .err{ color:var(--alert); font-size:13px; margin-top:10px; display:none; }
+  .setup-card .err{ color:#FF8F7A; font-size:13px; margin-top:10px; display:none; }
   .setup-card input{
     width:100%; padding:12px 14px; border-radius:12px; margin-bottom:14px;
-    background:#1A130E; border:1px solid rgba(245,236,224,0.12); color:var(--text);
+    background:#050B10; border:1px solid rgba(79,201,255,0.18); color:var(--text);
     font-family:'Manrope'; font-size:14px;
   }
   .setup-card label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
@@ -116,16 +84,10 @@
 </head>
 <body>
 
-<canvas id="embers"></canvas>
-
-<div class="top"><div class="brand">Raiz · Companheiro</div></div>
+<div class="top"><div class="brand">Raiz</div></div>
 
 <div class="stage">
-  <div class="device-wrap" id="deviceWrap">
-    <svg class="roots" viewBox="0 0 220 60"><path d="M110 0 C 105 20, 70 20, 55 40 M110 0 C 112 22, 140 24, 150 46 M110 0 C 108 18, 108 34, 95 58 M110 0 C 111 20, 118 36, 128 56" stroke="#8A6A3D" stroke-width="2" fill="none" opacity="0.7" stroke-linecap="round"/></svg>
-    <div class="status-ring"></div>
-    <div class="device"><canvas id="face"></canvas></div>
-  </div>
+  <div class="eye-wrap"><canvas id="eye"></canvas></div>
 </div>
 
 <div class="caption" id="caption">
@@ -135,7 +97,7 @@
 
 <div class="controls">
   <button class="mic-btn" id="micBtn" aria-label="Falar">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#241A10" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="#031018" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
   </button>
   <div class="hint" id="hint">toque para falar</div>
 </div>
@@ -155,212 +117,173 @@
 </div>
 
 <script>
-/* ---------- Rosto expressivo (canvas) ---------- */
-const faceCanvas = document.getElementById('face');
-const ctx = faceCanvas.getContext('2d');
+/* ---------- Olho expressivo (canvas) ---------- */
+const eyeCanvas = document.getElementById('eye');
+const ctx = eyeCanvas.getContext('2d');
 let W, H, DPR = Math.min(window.devicePixelRatio || 1, 2);
 
 function resize(){
-  const rect = faceCanvas.getBoundingClientRect();
+  const rect = eyeCanvas.getBoundingClientRect();
   W = rect.width; H = rect.height;
-  faceCanvas.width = W * DPR; faceCanvas.height = H * DPR;
+  eyeCanvas.width = W * DPR; eyeCanvas.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
 window.addEventListener('resize', resize);
 
-const PALETTE = {
-  calmo:   { c1:'#8FE0D2', c2:'#3FA491' },
-  ouvindo: { c1:'#F2C879', c2:'#E8A24A' },
-  pensando:{ c1:'#B9A8E8', c2:'#7C64C4' },
-  feliz:   { c1:'#FFDE8A', c2:'#F2A93B' },
-  triste:  { c1:'#9AB0DD', c2:'#5E71A0' },
-  surpreso:{ c1:'#FFB199', c2:'#E8654F' },
-  animado: { c1:'#FFD37A', c2:'#F08B3B' },
+// glow varia por emoção; o "olho" em si mantém a mesma identidade de cor
+const GLOW = {
+  calmo:    'rgba(79,201,255,0.35)',
+  ouvindo:  'rgba(191,243,255,0.55)',
+  pensando: 'rgba(150,140,255,0.4)',
+  feliz:    'rgba(191,243,255,0.5)',
+  triste:   'rgba(90,130,180,0.3)',
+  surpreso: 'rgba(220,250,255,0.65)',
+  animado:  'rgba(150,240,255,0.6)',
 };
 
 let state = {
   emotion:'calmo',
-  mouthLevel:0,      // 0..1, driven by TTS boundaries
-  targetMouth:0,
-  blink:0,            // 0..1
-  nextBlinkAt:performance.now()+1800,
-  pupilX:0, pupilY:0,
-  targetPupilX:0, targetPupilY:0,
-  bounce:0,
-  thinkDots:0,
+  openness:1,        // 0 fechado .. 1 aberto normal .. 1.3 bem aberto
+  targetOpenness:1,
+  curve:0,            // -1 triste .. 0 neutro .. 1 feliz (curva do "sorriso do olho")
+  targetCurve:0,
+  glowLevel:0.4,
+  targetGlow:0.4,
+  talkPulse:0,        // 0..1, pulso rápido ao falar
+  targetTalk:0,
+  blink:0,
+  nextBlinkAt:performance.now()+2200,
+  driftX:0, driftY:0,
+  sparkles:[],
 };
 
 function setEmotion(e){
-  if(!PALETTE[e]) e='calmo';
+  if(!GLOW[e]) e='calmo';
   state.emotion = e;
+  const map = {
+    calmo:    { openness:1,    curve:0,    glow:0.4 },
+    ouvindo:  { openness:1.18, curve:0,    glow:0.65 },
+    pensando: { openness:0.45, curve:0,    glow:0.45 },
+    feliz:    { openness:0.7,  curve:1,    glow:0.6 },
+    triste:   { openness:0.75, curve:-1,   glow:0.28 },
+    surpreso: { openness:1.35, curve:0,    glow:0.75 },
+    animado:  { openness:1.1,  curve:0.6,  glow:0.7 },
+  };
+  const m = map[e] || map.calmo;
+  state.targetOpenness = m.openness;
+  state.targetCurve = m.curve;
+  state.targetGlow = m.glow;
 }
 
 function loop(t){
   ctx.clearRect(0,0,W,H);
-  drawFace(t);
+  drawEye(t);
   requestAnimationFrame(loop);
 }
 
-function drawFace(t){
-  const cx = W/2, cy = H/2*0.98;
-  const pal = PALETTE[state.emotion];
+function drawEye(t){
+  const cx = W/2, cy = H/2;
 
-  // breathing
-  const breathe = Math.sin(t/1400) * 3;
-
-  // blink timing
-  if(t > state.nextBlinkAt){
+  // blink
+  if(t > state.nextBlinkAt && state.emotion !== 'pensando'){
     state.blink = 1;
-    state.nextBlinkAt = t + 2600 + Math.random()*2600;
+    state.nextBlinkAt = t + 2800 + Math.random()*2800;
   }
-  state.blink = Math.max(0, state.blink - 0.09);
+  state.blink = Math.max(0, state.blink - 0.1);
 
-  // idle pupil drift
-  state.targetPupilX = Math.sin(t/2600) * 5;
-  state.targetPupilY = Math.cos(t/3300) * 3;
-  state.pupilX += (state.targetPupilX - state.pupilX) * 0.05;
-  state.pupilY += (state.targetPupilY - state.pupilY) * 0.05;
+  state.openness += (state.targetOpenness - state.openness) * 0.08;
+  state.curve += (state.targetCurve - state.curve) * 0.08;
+  state.glowLevel += (state.targetGlow - state.glowLevel) * 0.06;
+  state.talkPulse += (state.targetTalk - state.talkPulse) * 0.3;
 
-  // mouth smoothing
-  state.mouthLevel += (state.targetMouth - state.mouthLevel) * 0.35;
+  state.driftX = Math.sin(t/2800) * W*0.01;
+  state.driftY = Math.cos(t/3600) * H*0.01;
 
-  const eyeGap = W*0.24;
-  const eyeW = W*0.19;
-  let eyeH = H*0.20 + breathe;
-  if(state.emotion==='surpreso') eyeH *= 1.35;
-  if(state.emotion==='pensando') eyeH *= 0.55;
-  const blinkScale = 1 - state.blink*0.92;
+  const breathe = 1 + Math.sin(t/1500)*0.015;
+  const talkBoost = 1 + state.talkPulse * 0.12;
 
-  [-1,1].forEach(side=>{
-    const ex = cx + side*eyeGap;
-    const ey = cy - H*0.02;
-    const w = eyeW/2, h = (eyeH/2) * blinkScale;
+  const eyeGap = W*0.30;
+  const baseW = W*0.20;
+  const baseH = H*0.62 * state.openness * breathe * talkBoost * (1 - state.blink*0.94);
 
-    ctx.save();
-    ctx.translate(ex, ey);
-
-    // glow
-    const grad = ctx.createRadialGradient(0,0,2,0,0,Math.max(w,h)*1.8);
-    grad.addColorStop(0, pal.c1);
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.globalAlpha = 0.35;
-    ctx.beginPath(); ctx.ellipse(0,0,w*2,h*2.4,0,0,Math.PI*2); ctx.fill();
-    ctx.globalAlpha = 1;
-
-    if(state.emotion==='feliz' || state.emotion==='animado'){
-      // happy arc eyes ^ ^
-      ctx.strokeStyle = pal.c2;
-      ctx.lineWidth = Math.max(6, w*0.5);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.arc(0, h*0.5, w*0.85, Math.PI*1.15, Math.PI*1.85);
-      ctx.stroke();
-    } else if(state.emotion==='triste'){
-      ctx.fillStyle = pal.c2;
-      roundRect(-w, -h*0.6, w*2, h*1.2, 14);
-      ctx.fill();
-      // droop overlay from top using bg color
-      ctx.fillStyle = '#1D1611';
-      ctx.beginPath();
-      ctx.moveTo(-w, -h*0.6);
-      ctx.lineTo(w, -h*0.6);
-      ctx.lineTo(w, -h*0.6 + h*0.9);
-      ctx.lineTo(-w, -h*0.6 + h*0.3);
-      ctx.closePath(); ctx.fill();
-    } else {
-      ctx.fillStyle = pal.c2;
-      roundRect(-w, -h, w*2, h*2, Math.min(w,h)*0.7);
-      ctx.fill();
-
-      // pupil (little dark dot) for calmo/ouvindo/surpreso/animado
-      if(state.blink < 0.5){
-        ctx.fillStyle = 'rgba(20,14,9,0.55)';
-        ctx.beginPath();
-        ctx.ellipse(state.pupilX*0.3, state.pupilY*0.3, w*0.32, h*0.32, 0, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
-
-    if(state.emotion==='pensando'){
-      ctx.restore();
-      return;
-    }
-    ctx.restore();
+  [-1, 1].forEach(side=>{
+    const ex = cx + side*eyeGap + state.driftX;
+    const ey = cy + state.driftY;
+    drawOneEye(t, ex, ey, baseW, baseH);
   });
 
-  // thinking dots
-  if(state.emotion==='pensando'){
-    ctx.fillStyle = pal.c1;
+  // "pensando": pontinhos orbitando entre os dois olhos
+  if(state.emotion === 'pensando'){
     for(let i=0;i<3;i++){
-      const bob = Math.sin(t/220 + i*1.3)*4;
-      ctx.beginPath();
-      ctx.arc(cx - 24 + i*24, cy - H*0.02 + bob, 5, 0, Math.PI*2);
-      ctx.fill();
+      const ang = t/500 + i*(Math.PI*2/3);
+      const orbR = W*0.06;
+      const px = cx + Math.cos(ang)*orbR;
+      const py = cy + Math.sin(ang)*orbR*0.5 - H*0.36;
+      ctx.fillStyle = 'rgba(191,243,255,0.85)';
+      ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
     }
   }
 
-  // mouth / voice bar
-  const mouthY = cy + H*0.22;
-  const bars = 5;
-  const spacing = W*0.09;
-  for(let i=0;i<bars;i++){
-    const bx = cx + (i - (bars-1)/2) * spacing;
-    const wobble = Math.sin(t/120 + i*1.7) * state.mouthLevel;
-    const base = 4 + state.mouthLevel * 22;
-    const bh = Math.max(4, base + wobble*10 - Math.abs(i-2)*3);
-    ctx.fillStyle = pal.c2;
-    ctx.globalAlpha = 0.85;
-    roundRect(bx - 4, mouthY - bh/2, 8, bh, 4);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+  // "animado": sparkles ao redor
+  if(state.emotion === 'animado' && Math.random() < 0.35){
+    state.sparkles.push({ x: cx + (Math.random()-0.5)*W*0.9, y: cy + (Math.random()-0.5)*H*0.9, life:1 });
   }
+  state.sparkles = state.sparkles.filter(s=>s.life>0);
+  state.sparkles.forEach(s=>{
+    ctx.fillStyle = `rgba(191,243,255,${s.life*0.8})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, 2.2*s.life, 0, Math.PI*2); ctx.fill();
+    s.life -= 0.03;
+  });
 }
 
-function roundRect(x,y,w,h,r){
+function drawOneEye(t, ex, ey, baseW, baseH){
+  // halo externo
+  const haloR = Math.max(baseW, baseH) * 1.7;
+  const halo = ctx.createRadialGradient(ex,ey,0, ex,ey,haloR);
+  halo.addColorStop(0, GLOW[state.emotion]);
+  halo.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = halo;
+  ctx.globalAlpha = state.glowLevel + state.talkPulse*0.25;
+  ctx.beginPath(); ctx.arc(ex, ey, haloR, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // corpo do olho: forma de "lente" com curvatura ajustável (feliz/triste)
+  ctx.save();
+  ctx.translate(ex, ey);
+
+  const w = baseW/2, h = baseH/2;
+  const curveOffset = state.curve * h * 0.5;
+
+  const grad = ctx.createLinearGradient(0,-h,0,h);
+  grad.addColorStop(0, '#BFF3FF');
+  grad.addColorStop(0.45, '#4FC9FF');
+  grad.addColorStop(1, '#1B7FE0');
+  ctx.fillStyle = grad;
+
   ctx.beginPath();
-  ctx.moveTo(x+r,y);
-  ctx.arcTo(x+w,y,x+w,y+h,r);
-  ctx.arcTo(x+w,y+h,x,y+h,r);
-  ctx.arcTo(x,y+h,x,y,r);
-  ctx.arcTo(x,y,x+w,y,r);
+  ctx.moveTo(-w, 0);
+  ctx.bezierCurveTo(-w*0.5, -h + curveOffset, w*0.5, -h + curveOffset, w, 0);
+  ctx.bezierCurveTo(w*0.5, h - curveOffset, -w*0.5, h - curveOffset, -w, 0);
   ctx.closePath();
-}
+  ctx.fill();
 
-/* ---------- Embers ambiente de fundo ---------- */
-const emberCanvas = document.getElementById('embers');
-const ectx = emberCanvas.getContext('2d');
-let embers = [];
-function resizeEmbers(){
-  emberCanvas.width = window.innerWidth; emberCanvas.height = window.innerHeight;
+  // brilho interno (specular) — dá vida e sensação "jovem"/vítrea
+  if(state.blink < 0.5 && h > 4){
+    const specGrad = ctx.createRadialGradient(-w*0.18,-h*0.35,1, -w*0.18,-h*0.35, w*0.55);
+    specGrad.addColorStop(0, 'rgba(255,255,255,0.85)');
+    specGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = specGrad;
+    ctx.beginPath();
+    ctx.ellipse(-w*0.18, -h*0.35, w*0.34, h*0.34, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
-window.addEventListener('resize', resizeEmbers);
-resizeEmbers();
-for(let i=0;i<26;i++){
-  embers.push({
-    x:Math.random()*window.innerWidth,
-    y:Math.random()*window.innerHeight,
-    r:Math.random()*1.6+0.6,
-    s:Math.random()*0.4+0.15,
-    a:Math.random()*0.5+0.15
-  });
-}
-function loopEmbers(){
-  ectx.clearRect(0,0,emberCanvas.width, emberCanvas.height);
-  embers.forEach(e=>{
-    e.y -= e.s;
-    if(e.y < -10){ e.y = emberCanvas.height+10; e.x = Math.random()*emberCanvas.width; }
-    ectx.fillStyle = `rgba(232,162,74,${e.a})`;
-    ectx.beginPath(); ectx.arc(e.x, e.y, e.r, 0, Math.PI*2); ectx.fill();
-  });
-  requestAnimationFrame(loopEmbers);
-}
-loopEmbers();
 
 /* ---------- Voz: reconhecimento + síntese ---------- */
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const micBtn = document.getElementById('micBtn');
-const deviceWrap = document.getElementById('deviceWrap');
 const caption = document.getElementById('caption');
 const hint = document.getElementById('hint');
 let recognition = null;
@@ -368,7 +291,7 @@ let listening = false;
 
 const MEMORY_KEY = 'raiz_companion_memory_v1';
 const SYNC_KEY_STORAGE = 'raiz_sync_key';
-const SUMMARY_EVERY = 8;       // resume a cada 8 mensagens do usuário
+const SUMMARY_EVERY = 8;
 const HISTORY_KEEP_AFTER_SUMMARY = 6;
 const HISTORY_MAX = 20;
 
@@ -400,7 +323,7 @@ async function syncMemoryFromServer(workerUrl){
       history = mem.history || [];
       saveMemoryState();
     }
-  }catch(e){ /* segue com a memória local por enquanto */ }
+  }catch(e){}
 }
 
 async function pushMemoryToServer(workerUrl){
@@ -412,7 +335,7 @@ async function pushMemoryToServer(workerUrl){
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ mode:'memory_save', key: syncKey, data: mem })
     });
-  }catch(e){ /* fica só local por enquanto, tenta de novo depois */ }
+  }catch(e){}
 }
 
 let mem = loadMemoryState();
@@ -422,9 +345,15 @@ function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
 }
 
-function pickPtVoice(){
+// heurística para achar uma voz feminina e jovem em pt-BR no navegador
+const FEMALE_NAME_HINTS = ['luciana','maria','francisca','joana','camila','fernanda','vitória','vitoria','raquel','ana','helena','isabela','carolina','female','mulher'];
+
+function pickYoungFemaleVoice(){
   const voices = speechSynthesis.getVoices();
-  return voices.find(v=>v.lang && v.lang.toLowerCase().startsWith('pt')) || voices[0];
+  const pt = voices.filter(v=>v.lang && v.lang.toLowerCase().startsWith('pt'));
+  const pool = pt.length ? pt : voices;
+  const byHint = pool.find(v => FEMALE_NAME_HINTS.some(h => v.name.toLowerCase().includes(h)));
+  return byHint || pool[0] || voices[0];
 }
 if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged = ()=>{}; }
 
@@ -432,17 +361,17 @@ function speak(text){
   return new Promise(resolve=>{
     if(!('speechSynthesis' in window)){ resolve(); return; }
     const utter = new SpeechSynthesisUtterance(text);
-    const v = pickPtVoice();
+    const v = pickYoungFemaleVoice();
     if(v) utter.voice = v;
     utter.lang = (v && v.lang) || 'pt-BR';
-    utter.rate = 1.02;
-    utter.pitch = 1.05;
+    utter.rate = 1.06;
+    utter.pitch = 1.35; // mais agudo = leitura "jovem"
     utter.onboundary = ()=>{
-      state.targetMouth = 0.55 + Math.random()*0.45;
-      setTimeout(()=>{ state.targetMouth = 0.15; }, 90);
+      state.targetTalk = 0.6 + Math.random()*0.4;
+      setTimeout(()=>{ state.targetTalk = 0.1; }, 100);
     };
-    utter.onend = ()=>{ state.targetMouth = 0; resolve(); };
-    utter.onerror = ()=>{ state.targetMouth = 0; resolve(); };
+    utter.onend = ()=>{ state.targetTalk = 0; resolve(); };
+    utter.onerror = ()=>{ state.targetTalk = 0; resolve(); };
     speechSynthesis.speak(utter);
   });
 }
@@ -463,7 +392,7 @@ async function updateMemory(workerUrl){
       saveMemoryState();
       pushMemoryToServer(workerUrl);
     }
-  }catch(e){ /* tenta de novo no próximo ciclo */ }
+  }catch(e){}
 }
 
 async function askRaiz(userText){
@@ -526,21 +455,18 @@ function initRecognition(){
   recognition.onstart = ()=>{
     listening = true;
     micBtn.classList.add('on');
-    deviceWrap.classList.add('listening');
     setEmotion('ouvindo');
     hint.textContent = 'ouvindo...';
   };
   recognition.onerror = ()=>{
     listening = false;
     micBtn.classList.remove('on');
-    deviceWrap.classList.remove('listening');
     setEmotion('calmo');
     hint.textContent = 'não peguei, toque de novo';
   };
   recognition.onend = ()=>{
     listening = false;
     micBtn.classList.remove('on');
-    deviceWrap.classList.remove('listening');
   };
   recognition.onresult = (e)=>{
     const text = e.results[0][0].transcript;
