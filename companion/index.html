@@ -349,8 +349,7 @@ function setCaption(who, text){
 }
 
 // heurística para ranquear vozes: prioriza vozes "Neural"/"Online" (muito mais naturais,
-// comuns no Edge/Windows) e depois nomes tipicamente femininos, sempre em pt-BR/pt.
-const FEMALE_NAME_HINTS = ['luciana','maria','francisca','joana','camila','fernanda','vitória','vitoria','raquel','ana','helena','isabela','carolina','thalita','yara','female','mulher'];
+// comuns no Edge/Windows), sem preferência de gênero — pega a melhor voz em pt-BR disponível.
 const QUALITY_HINTS = ['neural','online','natural','premium'];
 
 function scoreVoice(v){
@@ -360,7 +359,6 @@ function scoreVoice(v){
   if(lang.startsWith('pt-br')) score += 50;
   else if(lang.startsWith('pt')) score += 25;
   if(QUALITY_HINTS.some(h=>name.includes(h))) score += 100;
-  if(FEMALE_NAME_HINTS.some(h=>name.includes(h))) score += 30;
   return score;
 }
 
@@ -390,8 +388,8 @@ function speak(text){
     const v = pickYoungFemaleVoice();
     if(v) utter.voice = v;
     utter.lang = (v && v.lang) || 'pt-BR';
-    utter.rate = 1.03;
-    utter.pitch = 1.1; // leve toque mais agudo, sem soar artificial
+    utter.rate = 1.02;
+    utter.pitch = 1.0;
     utter.onboundary = ()=>{
       state.targetTalk = 0.6 + Math.random()*0.4;
       setTimeout(()=>{ state.targetTalk = 0.1; }, 100);
