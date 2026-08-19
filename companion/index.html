@@ -112,6 +112,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="#031018" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
   </button>
   <div class="hint" id="hint">toque para falar</div>
+  <button id="resetMemBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:6px;">esquecer conversas e recomeçar</button>
 </div>
 
 <div class="setup" id="setup">
@@ -616,6 +617,18 @@ startBtn.addEventListener('click', async ()=>{
     setupErr.textContent = 'Precisamos da permissão do microfone para continuar.';
     setupErr.style.display = 'block';
   }
+});
+
+const resetMemBtn = document.getElementById('resetMemBtn');
+resetMemBtn.addEventListener('click', async ()=>{
+  if(!confirm('Isso apaga tudo que o Jarbas lembra de você, neste aparelho e sincronizado. Continuar?')) return;
+  mem = { history:[], memory:'', msgCount:0 };
+  history = [];
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) await pushMemoryToServer(workerUrl);
+  setCaption('jarbas', 'Prontinho, começamos do zero.');
+  hint.textContent = 'toque para falar';
 });
 
 resize();
