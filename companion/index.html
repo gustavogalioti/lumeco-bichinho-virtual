@@ -37,7 +37,18 @@
     flex:1; display:flex; align-items:center; justify-content:center;
     z-index:2; width:100%; position:relative;
   }
-  .eye-wrap{ position:relative; width:min(84vw, 440px); aspect-ratio:2.15/1; }
+  .visor{
+    position:relative;
+    background:linear-gradient(160deg, #0E1318, #060809);
+    border-radius:34px;
+    padding:min(6vw, 34px) min(9vw, 54px);
+    border:1px solid rgba(79,201,255,0.10);
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.02) inset,
+      0 40px 80px -30px rgba(0,0,0,0.9),
+      0 0 70px -18px rgba(79,201,255,0.18);
+  }
+  .eye-wrap{ position:relative; width:min(78vw, 400px); aspect-ratio:2.15/1; }
   canvas#eye{ width:100%; height:100%; display:block; }
   .caption{
     z-index:2; min-height:52px; max-width:560px; text-align:center;
@@ -87,7 +98,7 @@
 <div class="top"><div class="brand">Jarbas</div></div>
 
 <div class="stage">
-  <div class="eye-wrap"><canvas id="eye"></canvas></div>
+  <div class="visor"><div class="eye-wrap"><canvas id="eye"></canvas></div></div>
 </div>
 
 <div class="caption" id="caption">
@@ -205,9 +216,9 @@ function drawEye(t){
   const breathe = 1 + Math.sin(t/1500)*0.015;
   const talkBoost = 1 + state.talkPulse * 0.12;
 
-  const eyeGap = W*0.30;
-  const baseW = W*0.20;
-  const baseH = H*0.62 * state.openness * breathe * talkBoost * (1 - state.blink*0.94);
+  const eyeGap = W*0.27;
+  const baseW = W*0.24;
+  const baseH = H*0.5 * state.openness * breathe * talkBoost * (1 - state.blink*0.94);
 
   [-1, 1].forEach(side=>{
     const ex = cx + side*eyeGap + state.driftX;
@@ -272,13 +283,21 @@ function drawOneEye(t, ex, ey, baseW, baseH){
 
   // brilho interno (specular) — dá vida e sensação "jovem"/vítrea
   if(state.blink < 0.5 && h > 4){
-    const specGrad = ctx.createRadialGradient(-w*0.18,-h*0.35,1, -w*0.18,-h*0.35, w*0.55);
-    specGrad.addColorStop(0, 'rgba(255,255,255,0.85)');
+    const specGrad = ctx.createRadialGradient(-w*0.22,-h*0.4,1, -w*0.22,-h*0.4, w*0.5);
+    specGrad.addColorStop(0, 'rgba(255,255,255,0.95)');
     specGrad.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = specGrad;
     ctx.beginPath();
-    ctx.ellipse(-w*0.18, -h*0.35, w*0.34, h*0.34, 0, 0, Math.PI*2);
+    ctx.ellipse(-w*0.22, -h*0.4, w*0.32, h*0.32, 0, 0, Math.PI*2);
     ctx.fill();
+
+    // realce fino na borda superior — dá acabamento de "vidro/tela"
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = Math.max(1.5, h*0.045);
+    ctx.beginPath();
+    ctx.moveTo(-w*0.85, -h*0.15 + curveOffset*0.6);
+    ctx.bezierCurveTo(-w*0.5, -h*0.92 + curveOffset, w*0.5, -h*0.92 + curveOffset, w*0.85, -h*0.15 + curveOffset*0.6);
+    ctx.stroke();
   }
 
   ctx.restore();
