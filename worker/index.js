@@ -56,8 +56,8 @@ function companionPrompt(companionState = {}) {
 ${memoryLine}
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"emotion":"calmo|feliz|triste|surpreso|animado|pensando","reply":"texto curto da fala"}
-Escolha a emoção que combina genuinamente com o que você está dizendo. Nunca deixe o JSON incompleto.`;
+{"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
+Use "confirmado" quando estiver concordando ou confirmando algo que a pessoa disse. Use "focado" quando estiver prestando atenção séria em algo específico. Escolha a emoção que combina genuinamente com o que você está dizendo. Nunca deixe o JSON incompleto.`;
 }
 
 function extractReplyFallback(raw) {
@@ -157,10 +157,10 @@ export default {
           parsed = JSON.parse(clean);
           if (!parsed.reply) throw new Error("no_reply_field");
         } catch {
-          parsed = { emotion: "calmo", reply: extractReplyFallback(clean) };
+          parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
         }
-        if (!["calmo","feliz","triste","surpreso","animado","pensando"].includes(parsed.emotion)) {
-          parsed.emotion = "calmo";
+        if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
+          parsed.emotion = "neutro";
         }
         return json(parsed);
       }

@@ -8,14 +8,15 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#000000;
-    --eye-core:#BFF3FF;
-    --eye-mid:#4FC9FF;
-    --eye-deep:#1B7FE0;
-    --text:#EAF6FF;
+    --bg:#050709;
+    --panel-1:#12171C;
+    --panel-2:#0A0D10;
+    --cyan:#00E0FF;
+    --cyan-soft:#7CF0FF;
+    --text:#E6ECF3;
     --muted:#5C7386;
-    --ring:rgba(79,201,255,0.30);
-    --surface:#0A1016;
+    --ring:rgba(0,224,255,0.32);
+    --surface:#0E1319;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%; margin:0;}
@@ -39,16 +40,16 @@
   }
   .visor{
     position:relative;
-    background:linear-gradient(160deg, #0E1318, #060809);
-    border-radius:34px;
-    padding:min(6vw, 34px) min(9vw, 54px);
-    border:1px solid rgba(79,201,255,0.10);
+    background:linear-gradient(165deg, var(--panel-1), var(--panel-2));
+    border-radius:56px;
+    padding:min(9vw, 46px) min(8vw, 44px);
+    border:2px solid rgba(0,224,255,0.28);
     box-shadow:
-      0 0 0 1px rgba(255,255,255,0.02) inset,
-      0 40px 80px -30px rgba(0,0,0,0.9),
-      0 0 70px -18px rgba(79,201,255,0.18);
+      0 0 0 1px rgba(255,255,255,0.03) inset,
+      0 40px 90px -30px rgba(0,0,0,0.9),
+      0 0 60px -10px rgba(0,224,255,0.22);
   }
-  .eye-wrap{ position:relative; width:min(78vw, 400px); aspect-ratio:2.15/1; }
+  .eye-wrap{ position:relative; width:min(72vw, 340px); aspect-ratio:1.35/1; }
   canvas#eye{ width:100%; height:100%; display:block; }
   .caption{
     z-index:2; min-height:52px; max-width:560px; text-align:center;
@@ -59,9 +60,9 @@
   .controls{ z-index:2; display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; }
   .mic-btn{
     width:76px; height:76px; border-radius:50%; border:none; cursor:pointer;
-    background:radial-gradient(circle at 35% 30%, var(--eye-core), var(--eye-mid) 55%, var(--eye-deep));
+    background:radial-gradient(circle at 35% 30%, var(--cyan-soft), var(--cyan) 60%, #0C9BC4);
     display:flex; align-items:center; justify-content:center;
-    box-shadow:0 0 30px -4px rgba(79,201,255,0.55), 0 8px 26px -8px rgba(0,0,0,0.8);
+    box-shadow:0 0 30px -4px rgba(0,224,255,0.55), 0 8px 26px -8px rgba(0,0,0,0.8);
     transition:transform 0.15s ease, box-shadow 0.3s ease;
   }
   .mic-btn:active{ transform:scale(0.94); }
@@ -81,13 +82,13 @@
   .setup-card p{ color:var(--muted); font-size:14px; line-height:1.5; margin:0 0 18px; }
   .setup-card button{
     width:100%; padding:14px; border-radius:14px; border:none; cursor:pointer;
-    background:linear-gradient(160deg, var(--eye-core), var(--eye-mid));
+    background:linear-gradient(160deg, var(--cyan-soft), var(--cyan));
     font-family:'Manrope'; font-weight:700; font-size:15px; color:#031018;
   }
   .setup-card .err{ color:#FF8F7A; font-size:13px; margin-top:10px; display:none; }
   .setup-card input, .setup-card select{
     width:100%; padding:12px 14px; border-radius:12px; margin-bottom:14px;
-    background:#050B10; border:1px solid rgba(79,201,255,0.18); color:var(--text);
+    background:#050B10; border:1px solid rgba(0,224,255,0.2); color:var(--text);
     font-family:'Manrope'; font-size:14px;
   }
   .setup-card label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
@@ -144,49 +145,57 @@ function resize(){
 }
 window.addEventListener('resize', resize);
 
-// glow varia por emoção; o "olho" em si mantém a mesma identidade de cor
+// paleta única (ciano), a intensidade do brilho varia por emoção
 const GLOW = {
-  calmo:    'rgba(79,201,255,0.35)',
-  ouvindo:  'rgba(191,243,255,0.55)',
-  pensando: 'rgba(150,140,255,0.4)',
-  feliz:    'rgba(191,243,255,0.5)',
-  triste:   'rgba(90,130,180,0.3)',
-  surpreso: 'rgba(220,250,255,0.65)',
-  animado:  'rgba(150,240,255,0.6)',
+  neutro:     'rgba(0,224,255,0.32)',
+  focado:     'rgba(0,224,255,0.5)',
+  pensando:   'rgba(124,240,255,0.4)',
+  feliz:      'rgba(124,240,255,0.55)',
+  surpreso:   'rgba(124,240,255,0.7)',
+  confirmado: 'rgba(0,224,255,0.5)',
+};
+
+// alvo de cada parâmetro contínuo por emoção — tudo é interpolado (lerp)
+// quadro a quadro, então a transição entre expressões fica suave/natural.
+const EMOTION_TARGETS = {
+  neutro:     { ring:0, arc:0, lid:0,   focus:0, openness:1,    glow:0.32, mouth:'dashes' },
+  feliz:      { ring:0, arc:1, lid:0,   focus:0, openness:0.85, glow:0.55, mouth:'smile'  },
+  pensando:   { ring:0, arc:0, lid:0.85,focus:0, openness:0.9,  glow:0.4,  mouth:'dashes' },
+  surpreso:   { ring:1, arc:0, lid:0,   focus:0, openness:1.3,  glow:0.7,  mouth:'dot'    },
+  focado:     { ring:0, arc:0, lid:0,   focus:1, openness:1,    glow:0.5,  mouth:'dashes' },
+  confirmado: { ring:0, arc:0, lid:0,   focus:0, openness:1,    glow:0.5,  mouth:'check'  },
 };
 
 let state = {
-  emotion:'calmo',
-  openness:1,        // 0 fechado .. 1 aberto normal .. 1.3 bem aberto
-  targetOpenness:1,
-  curve:0,            // -1 triste .. 0 neutro .. 1 feliz (curva do "sorriso do olho")
-  targetCurve:0,
-  glowLevel:0.4,
-  targetGlow:0.4,
-  talkPulse:0,        // 0..1, pulso rápido ao falar
-  targetTalk:0,
+  emotion:'neutro',
+  ring:0, targetRing:0,
+  arc:0, targetArc:0,
+  lid:0, targetLid:0,
+  focus:0, targetFocus:0,
+  openness:1, targetOpenness:1,
+  glowLevel:0.32, targetGlow:0.32,
+  talkPulse:0, targetTalk:0,
   blink:0,
   nextBlinkAt:performance.now()+2200,
-  driftX:0, driftY:0,
-  sparkles:[],
+  mouthType:'dashes', prevMouthType:'dashes', mouthProgress:1,
 };
 
 function setEmotion(e){
-  if(!GLOW[e]) e='calmo';
+  if(!EMOTION_TARGETS[e]) e='neutro';
+  const changed = state.emotion !== e;
   state.emotion = e;
-  const map = {
-    calmo:    { openness:1,    curve:0,    glow:0.4 },
-    ouvindo:  { openness:1.18, curve:0,    glow:0.65 },
-    pensando: { openness:0.45, curve:0,    glow:0.45 },
-    feliz:    { openness:0.7,  curve:1,    glow:0.6 },
-    triste:   { openness:0.75, curve:-1,   glow:0.28 },
-    surpreso: { openness:1.35, curve:0,    glow:0.75 },
-    animado:  { openness:1.1,  curve:0.6,  glow:0.7 },
-  };
-  const m = map[e] || map.calmo;
+  const m = EMOTION_TARGETS[e];
+  state.targetRing = m.ring;
+  state.targetArc = m.arc;
+  state.targetLid = m.lid;
+  state.targetFocus = m.focus;
   state.targetOpenness = m.openness;
-  state.targetCurve = m.curve;
   state.targetGlow = m.glow;
+  if(changed && m.mouth !== state.mouthType){
+    state.prevMouthType = state.mouthType;
+    state.mouthType = m.mouth;
+    state.mouthProgress = 0;
+  }
 }
 
 function loop(t){
@@ -195,112 +204,174 @@ function loop(t){
   requestAnimationFrame(loop);
 }
 
-function drawEye(t){
-  const cx = W/2, cy = H/2;
+function roundRect(x,y,w,h,r){
+  const rr = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr,y);
+  ctx.arcTo(x+w,y,x+w,y+h,rr);
+  ctx.arcTo(x+w,y+h,x,y+h,rr);
+  ctx.arcTo(x,y+h,x,y,rr);
+  ctx.arcTo(x,y,x+w,y,rr);
+  ctx.closePath();
+}
 
-  // blink
-  if(t > state.nextBlinkAt && state.emotion !== 'pensando'){
+function drawEye(t){
+  const cx = W/2, cy = H*0.42;
+
+  if(t > state.nextBlinkAt && state.emotion !== 'pensando' && state.emotion !== 'surpreso'){
     state.blink = 1;
     state.nextBlinkAt = t + 2800 + Math.random()*2800;
   }
-  state.blink = Math.max(0, state.blink - 0.1);
+  state.blink = Math.max(0, state.blink - 0.12);
 
-  state.openness += (state.targetOpenness - state.openness) * 0.08;
-  state.curve += (state.targetCurve - state.curve) * 0.08;
+  const LERP = 0.09;
+  state.ring += (state.targetRing - state.ring) * LERP;
+  state.arc += (state.targetArc - state.arc) * LERP;
+  state.lid += (state.targetLid - state.lid) * LERP;
+  state.focus += (state.targetFocus - state.focus) * LERP;
+  state.openness += (state.targetOpenness - state.openness) * LERP;
   state.glowLevel += (state.targetGlow - state.glowLevel) * 0.06;
   state.talkPulse += (state.targetTalk - state.talkPulse) * 0.3;
+  state.mouthProgress = Math.min(1, state.mouthProgress + 0.06);
 
-  state.driftX = Math.sin(t/2800) * W*0.01;
-  state.driftY = Math.cos(t/3600) * H*0.01;
+  const breathe = 1 + Math.sin(t/1500)*0.02;
+  const talkBoost = 1 + state.talkPulse * 0.08;
+  const blinkScale = 1 - state.blink*0.9;
 
-  const breathe = 1 + Math.sin(t/1500)*0.015;
-  const talkBoost = 1 + state.talkPulse * 0.12;
+  const size = Math.min(W,H) * 0.34 * state.openness * breathe * talkBoost * blinkScale;
+  const eyeGap = W*0.24;
 
-  const eyeGap = W*0.27;
-  const baseW = W*0.24;
-  const baseH = H*0.5 * state.openness * breathe * talkBoost * (1 - state.blink*0.94);
-
-  [-1, 1].forEach(side=>{
-    const ex = cx + side*eyeGap + state.driftX;
-    const ey = cy + state.driftY;
-    drawOneEye(t, ex, ey, baseW, baseH);
-  });
-
-  // "pensando": pontinhos orbitando entre os dois olhos
-  if(state.emotion === 'pensando'){
-    for(let i=0;i<3;i++){
-      const ang = t/500 + i*(Math.PI*2/3);
-      const orbR = W*0.06;
-      const px = cx + Math.cos(ang)*orbR;
-      const py = cy + Math.sin(ang)*orbR*0.5 - H*0.36;
-      ctx.fillStyle = 'rgba(191,243,255,0.85)';
-      ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
-    }
-  }
-
-  // "animado": sparkles ao redor
-  if(state.emotion === 'animado' && Math.random() < 0.35){
-    state.sparkles.push({ x: cx + (Math.random()-0.5)*W*0.9, y: cy + (Math.random()-0.5)*H*0.9, life:1 });
-  }
-  state.sparkles = state.sparkles.filter(s=>s.life>0);
-  state.sparkles.forEach(s=>{
-    ctx.fillStyle = `rgba(191,243,255,${s.life*0.8})`;
-    ctx.beginPath(); ctx.arc(s.x, s.y, 2.2*s.life, 0, Math.PI*2); ctx.fill();
-    s.life -= 0.03;
-  });
-}
-
-function drawOneEye(t, ex, ey, baseW, baseH){
-  // halo externo
-  const haloR = Math.max(baseW, baseH) * 1.7;
-  const halo = ctx.createRadialGradient(ex,ey,0, ex,ey,haloR);
+  // halo geral atrás dos dois olhos
+  const halo = ctx.createRadialGradient(cx,cy,0, cx,cy,Math.max(W,H)*0.55);
   halo.addColorStop(0, GLOW[state.emotion]);
   halo.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = halo;
-  ctx.globalAlpha = state.glowLevel + state.talkPulse*0.25;
-  ctx.beginPath(); ctx.arc(ex, ey, haloR, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = state.glowLevel*0.6 + state.talkPulse*0.2;
+  ctx.fillRect(0,0,W,H);
   ctx.globalAlpha = 1;
 
-  // corpo do olho: forma de "lente" com curvatura ajustável (feliz/triste)
+  drawOneEye(cx - eyeGap, cy, size, t, false);
+  drawOneEye(cx + eyeGap, cy, size, t, true);
+
+  // "pensando": pontinhos orbitando acima, entre os dois olhos
+  if(state.lid > 0.3){
+    const a = Math.min(1, state.lid);
+    for(let i=0;i<3;i++){
+      const ang = t/500 + i*(Math.PI*2/3);
+      const orbR = size*0.5;
+      const px = cx + Math.cos(ang)*orbR;
+      const py = cy - size*1.05 + Math.sin(ang)*orbR*0.4;
+      ctx.fillStyle = `rgba(124,240,255,${0.8*a})`;
+      ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  drawMouth(cx, cy + size*0.95, size);
+}
+
+function drawOneEye(ex, ey, size, t, isRightEye){
   ctx.save();
   ctx.translate(ex, ey);
 
-  const w = baseW/2, h = baseH/2;
-  const curveOffset = state.curve * h * 0.5;
+  const s = size/2;
+  const grad = ctx.createLinearGradient(0,-s,0,s);
+  grad.addColorStop(0, '#7CF0FF');
+  grad.addColorStop(0.5, '#00E0FF');
+  grad.addColorStop(1, '#0C9BC4');
 
-  const grad = ctx.createLinearGradient(0,-h,0,h);
-  grad.addColorStop(0, '#BFF3FF');
-  grad.addColorStop(0.45, '#4FC9FF');
-  grad.addColorStop(1, '#1B7FE0');
-  ctx.fillStyle = grad;
-
-  ctx.beginPath();
-  ctx.moveTo(-w, 0);
-  ctx.bezierCurveTo(-w*0.5, -h + curveOffset, w*0.5, -h + curveOffset, w, 0);
-  ctx.bezierCurveTo(w*0.5, h - curveOffset, -w*0.5, h - curveOffset, -w, 0);
-  ctx.closePath();
-  ctx.fill();
-
-  // brilho interno (specular) — dá vida e sensação "jovem"/vítrea
-  if(state.blink < 0.5 && h > 4){
-    const specGrad = ctx.createRadialGradient(-w*0.22,-h*0.4,1, -w*0.22,-h*0.4, w*0.5);
-    specGrad.addColorStop(0, 'rgba(255,255,255,0.95)');
-    specGrad.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = specGrad;
-    ctx.beginPath();
-    ctx.ellipse(-w*0.22, -h*0.4, w*0.32, h*0.32, 0, 0, Math.PI*2);
+  // --- olho quadrado (base neutra/foco/confirmado) ---
+  const squareAlpha = Math.max(0, 1 - state.ring - state.arc - (isRightEye?state.focus:0));
+  if(squareAlpha > 0.01){
+    ctx.globalAlpha = squareAlpha;
+    ctx.fillStyle = grad;
+    roundRect(-s, -s, size, size, size*0.32);
     ctx.fill();
+  }
 
-    // realce fino na borda superior — dá acabamento de "vidro/tela"
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = Math.max(1.5, h*0.045);
+  // --- anel/círculo (surpreso) ---
+  if(state.ring > 0.01){
+    ctx.globalAlpha = state.ring;
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(0,0, s*1.08, 0, Math.PI*2); ctx.fill();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath(); ctx.arc(0,0, s*0.56, 0, Math.PI*2); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // --- arco/sorriso (feliz) ---
+  if(state.arc > 0.01){
+    ctx.globalAlpha = state.arc;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = size*0.26;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(-w*0.85, -h*0.15 + curveOffset*0.6);
-    ctx.bezierCurveTo(-w*0.5, -h*0.92 + curveOffset, w*0.5, -h*0.92 + curveOffset, w*0.85, -h*0.15 + curveOffset*0.6);
+    ctx.arc(0, s*0.15, s*0.85, Math.PI*1.12, Math.PI*1.88);
     ctx.stroke();
   }
 
+  // --- pálpebra semicerrada (pensando) — funde por cima do quadrado ---
+  if(state.lid > 0.01){
+    ctx.globalAlpha = squareAlpha; // já desenhado; agora cobre a parte de cima
+    ctx.fillStyle = '#0E1319';
+    const cut = size * state.lid * 0.62;
+    roundRect(-s-2, -s-2, size+4, cut, size*0.18);
+    ctx.fill();
+  }
+
+  // --- glifo de foco (substitui o olho direito quando "focado") ---
+  if(isRightEye && state.focus > 0.01){
+    ctx.globalAlpha = state.focus;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = size*0.16;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-s*0.6, s*0.15);
+    ctx.lineTo(0, -s*0.35);
+    ctx.lineTo(s*0.6, s*0.15);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
   ctx.restore();
+}
+
+function drawMouth(cx, my, size){
+  const drawGlyph = (type, alpha)=>{
+    if(alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#00E0FF';
+    ctx.fillStyle = '#00E0FF';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if(type === 'dashes'){
+      const n = 5, w = size*0.16, gap = size*0.08, h = size*0.06;
+      const total = n*w + (n-1)*gap;
+      for(let i=0;i<n;i++){
+        const x = cx - total/2 + i*(w+gap);
+        roundRect(x, my - h/2, w, h, h/2);
+        ctx.fill();
+      }
+    } else if(type === 'smile'){
+      ctx.lineWidth = size*0.09;
+      ctx.beginPath();
+      ctx.arc(cx, my - size*0.3, size*0.55, Math.PI*0.18, Math.PI*0.82);
+      ctx.stroke();
+    } else if(type === 'dot'){
+      ctx.beginPath(); ctx.arc(cx, my, size*0.07, 0, Math.PI*2); ctx.fill();
+    } else if(type === 'check'){
+      ctx.lineWidth = size*0.1;
+      ctx.beginPath();
+      ctx.moveTo(cx - size*0.28, my);
+      ctx.lineTo(cx - size*0.06, my + size*0.2);
+      ctx.lineTo(cx + size*0.32, my - size*0.22);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+  drawGlyph(state.prevMouthType, 1 - state.mouthProgress);
+  drawGlyph(state.mouthType, state.mouthProgress);
 }
 
 /* ---------- Voz: reconhecimento + síntese ---------- */
@@ -470,22 +541,22 @@ async function askRaiz(userText){
     saveMemoryState();
     pushMemoryToServer(workerUrl);
 
-    setEmotion(parsed.emotion || 'calmo');
+    setEmotion(parsed.emotion || 'neutro');
     setCaption('jarbas', parsed.reply);
     hint.textContent = 'falando...';
     await speak(parsed.reply);
     hint.textContent = 'toque para falar';
-    setEmotion('calmo');
+    setEmotion('neutro');
 
     if(mem.msgCount % SUMMARY_EVERY === 0){
       updateMemory(workerUrl);
     }
   }catch(err){
-    setEmotion('triste');
+    setEmotion('neutro');
     setCaption('jarbas', 'Hmm, não consegui pensar agora. Tenta de novo?');
     hint.textContent = 'toque para falar';
     await speak('Hmm, não consegui pensar agora.');
-    setEmotion('calmo');
+    setEmotion('neutro');
   }
 }
 
@@ -498,13 +569,13 @@ function initRecognition(){
   recognition.onstart = ()=>{
     listening = true;
     micBtn.classList.add('on');
-    setEmotion('ouvindo');
+    setEmotion('focado');
     hint.textContent = 'ouvindo...';
   };
   recognition.onerror = ()=>{
     listening = false;
     micBtn.classList.remove('on');
-    setEmotion('calmo');
+    setEmotion('neutro');
     hint.textContent = 'não peguei, toque de novo';
   };
   recognition.onend = ()=>{
