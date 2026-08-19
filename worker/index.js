@@ -171,3 +171,4 @@ export default {
     }
   },
 };
+// deploy automatico testado em 2026-08-19T18:56:14Z
