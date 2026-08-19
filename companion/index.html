@@ -123,9 +123,6 @@
     <label for="syncKey">Senha de sincronização</label>
     <input type="password" id="syncKey" placeholder="uma senha só sua, qualquer uma">
     <p style="margin-top:-6px;">A mesma senha em qualquer aparelho traz a mesma memória do Jarbas. Fica salva neste navegador.</p>
-    <label for="voiceSelect">Voz do Jarbas</label>
-    <select id="voiceSelect"></select>
-    <button id="voiceTestBtn" type="button" style="background:transparent; border:1px solid rgba(79,201,255,0.3); color:var(--text); margin-bottom:14px;">▶ ouvir exemplo</button>
     <button id="startBtn">Começar</button>
     <div class="err" id="setupErr">Seu navegador não suporta reconhecimento de voz. Tente pelo Chrome.</div>
   </div>
@@ -443,48 +440,24 @@ function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
 }
 
-// heurística para ranquear vozes: prioriza vozes "Neural"/"Online" (muito mais naturais,
-// comuns no Edge/Windows), sem preferência de gênero — pega a melhor voz em pt-BR disponível.
-const QUALITY_HINTS = ['neural','online','natural','premium'];
-
-function scoreVoice(v){
-  const name = v.name.toLowerCase();
-  const lang = (v.lang||'').toLowerCase();
-  let score = 0;
-  if(lang.startsWith('pt-br')) score += 50;
-  else if(lang.startsWith('pt')) score += 25;
-  if(QUALITY_HINTS.some(h=>name.includes(h))) score += 100;
-  return score;
-}
-
-function listVoiceOptions(){
+// lógica original e simples: pega a primeira voz em português que o navegador tiver.
+// De propósito sem "caçar" a melhor voz — isso é o que muda de aparelho pra aparelho
+// e gera inconsistência. Aqui a regra é sempre a mesma em qualquer dispositivo.
+function pickPtVoice(){
   const voices = speechSynthesis.getVoices();
-  return voices
-    .filter(v=>!v.lang || v.lang.toLowerCase().startsWith('pt') || QUALITY_HINTS.some(h=>v.name.toLowerCase().includes(h)))
-    .sort((a,b)=>scoreVoice(b)-scoreVoice(a));
+  return voices.find(v=>v.lang && v.lang.toLowerCase().startsWith('pt')) || voices[0];
 }
-
-function pickYoungFemaleVoice(){
-  const voices = speechSynthesis.getVoices();
-  const chosenURI = localStorage.getItem('raiz_voice_uri');
-  if(chosenURI){
-    const chosen = voices.find(v=>v.voiceURI === chosenURI);
-    if(chosen) return chosen;
-  }
-  const ranked = listVoiceOptions();
-  return ranked[0] || voices[0];
-}
-if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged = ()=>{ populateVoiceSelect(); }; }
+if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged = ()=>{}; }
 
 function speak(text){
   return new Promise(resolve=>{
     if(!('speechSynthesis' in window)){ resolve(); return; }
     const utter = new SpeechSynthesisUtterance(text);
-    const v = pickYoungFemaleVoice();
+    const v = pickPtVoice();
     if(v) utter.voice = v;
     utter.lang = (v && v.lang) || 'pt-BR';
     utter.rate = 1.02;
-    utter.pitch = 1.0;
+    utter.pitch = 1.05;
     utter.onboundary = ()=>{
       state.targetTalk = 0.6 + Math.random()*0.4;
       setTimeout(()=>{ state.targetTalk = 0.1; }, 100);
@@ -612,37 +585,6 @@ if(savedUrl) workerInput.value = savedUrl;
 const syncKeyInput = document.getElementById('syncKey');
 const savedSyncKey = getSyncKey();
 if(savedSyncKey) syncKeyInput.value = savedSyncKey;
-
-const voiceSelect = document.getElementById('voiceSelect');
-const voiceTestBtn = document.getElementById('voiceTestBtn');
-
-function populateVoiceSelect(){
-  const ranked = listVoiceOptions();
-  if(!ranked.length) return;
-  const savedURI = localStorage.getItem('raiz_voice_uri');
-  voiceSelect.innerHTML = '';
-  ranked.forEach(v=>{
-    const opt = document.createElement('option');
-    opt.value = v.voiceURI;
-    opt.textContent = v.name + (v.lang ? ` (${v.lang})` : '');
-    voiceSelect.appendChild(opt);
-  });
-  if(savedURI && ranked.some(v=>v.voiceURI===savedURI)){
-    voiceSelect.value = savedURI;
-  }
-}
-populateVoiceSelect();
-// alguns navegadores só populam a lista de vozes de forma assíncrona
-setTimeout(populateVoiceSelect, 400);
-
-voiceSelect.addEventListener('change', ()=>{
-  localStorage.setItem('raiz_voice_uri', voiceSelect.value);
-});
-
-voiceTestBtn.addEventListener('click', ()=>{
-  localStorage.setItem('raiz_voice_uri', voiceSelect.value);
-  speak('Oi! Essa é a minha voz. O que achou?');
-});
 
 startBtn.addEventListener('click', async ()=>{
   if(!SpeechRecognition){
