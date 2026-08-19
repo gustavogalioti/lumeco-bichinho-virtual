@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Raiz — Companheiro de Voz</title>
+<title>Jarbas — Companheiro de Voz</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -84,14 +84,14 @@
 </head>
 <body>
 
-<div class="top"><div class="brand">Raiz</div></div>
+<div class="top"><div class="brand">Jarbas</div></div>
 
 <div class="stage">
   <div class="eye-wrap"><canvas id="eye"></canvas></div>
 </div>
 
 <div class="caption" id="caption">
-  <span class="who">raiz</span>
+  <span class="who">jarbas</span>
   toque no botão e comece a falar comigo.
 </div>
 
@@ -110,8 +110,8 @@
     <input type="text" id="workerUrl" placeholder="https://lumeco-proxy.SEU-SUBDOMINIO.workers.dev">
     <label for="syncKey">Senha de sincronização</label>
     <input type="password" id="syncKey" placeholder="uma senha só sua, qualquer uma">
-    <p style="margin-top:-6px;">A mesma senha em qualquer aparelho traz a mesma memória do Raiz. Fica salva neste navegador.</p>
-    <label for="voiceSelect">Voz do Raiz</label>
+    <p style="margin-top:-6px;">A mesma senha em qualquer aparelho traz a mesma memória do Jarbas. Fica salva neste navegador.</p>
+    <label for="voiceSelect">Voz do Jarbas</label>
     <select id="voiceSelect"></select>
     <button id="voiceTestBtn" type="button" style="background:transparent; border:1px solid rgba(79,201,255,0.3); color:var(--text); margin-bottom:14px;">▶ ouvir exemplo</button>
     <button id="startBtn">Começar</button>
@@ -452,7 +452,7 @@ async function askRaiz(userText){
     pushMemoryToServer(workerUrl);
 
     setEmotion(parsed.emotion || 'calmo');
-    setCaption('raiz', parsed.reply);
+    setCaption('jarbas', parsed.reply);
     hint.textContent = 'falando...';
     await speak(parsed.reply);
     hint.textContent = 'toque para falar';
@@ -463,7 +463,7 @@ async function askRaiz(userText){
     }
   }catch(err){
     setEmotion('triste');
-    setCaption('raiz', 'Hmm, não consegui pensar agora. Tenta de novo?');
+    setCaption('jarbas', 'Hmm, não consegui pensar agora. Tenta de novo?');
     hint.textContent = 'toque para falar';
     await speak('Hmm, não consegui pensar agora.');
     setEmotion('calmo');
