@@ -492,7 +492,15 @@ async function updateMemory(workerUrl){
   }catch(e){}
 }
 
+function formatNowPtBR(){
+  return new Date().toLocaleString('pt-BR', {
+    weekday:'long', day:'2-digit', month:'long', year:'numeric',
+    hour:'2-digit', minute:'2-digit'
+  });
+}
+
 async function askRaiz(userText){
+  if(handsFree) startConversationWindow();
   setEmotion('pensando');
   hint.textContent = 'pensando...';
   history.push({role:'user', content:userText});
@@ -512,7 +520,7 @@ async function askRaiz(userText){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '' }
+        companionState: { memory: mem.memory || '', now: formatNowPtBR() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -547,9 +555,26 @@ async function askRaiz(userText){
 /* ---------- Ativação por voz ("modo mãos livres") ---------- */
 const HANDS_FREE_KEY = 'raiz_hands_free';
 const WAKE_WORD = 'jarbas';
+const WAKE_ANSWER_TIMEOUT = 3000;        // espera pela fala após só dizer "jarbas"
+const CONVERSATION_WINDOW_MS = 2 * 60 * 1000; // 2 minutos sem precisar repetir "jarbas"
 let handsFree = localStorage.getItem(HANDS_FREE_KEY) === '1';
 let awaitingCommand = false;
 let awaitingTimeout = null;
+let conversationActive = false;
+let conversationTimeout = null;
+
+function startConversationWindow(){
+  conversationActive = true;
+  clearTimeout(conversationTimeout);
+  conversationTimeout = setTimeout(()=>{
+    conversationActive = false;
+    if(handsFree) hint.textContent = 'diga "jarbas" pra chamar';
+  }, CONVERSATION_WINDOW_MS);
+}
+function endConversationWindow(){
+  conversationActive = false;
+  clearTimeout(conversationTimeout);
+}
 
 function resumeHandsFreeListening(){
   if(!handsFree || listening) return;
@@ -595,7 +620,7 @@ function initRecognition(){
     }
 
     const lower = text.toLowerCase();
-    if(awaitingCommand){
+    if(awaitingCommand || conversationActive){
       clearTimeout(awaitingTimeout);
       awaitingCommand = false;
       recognition.stop();
@@ -620,7 +645,7 @@ function initRecognition(){
           awaitingCommand = false;
           setEmotion('neutro');
           hint.textContent = 'diga "jarbas" pra chamar';
-        }, 7000);
+        }, WAKE_ANSWER_TIMEOUT);
       }
     }
     // sem a palavra de ativação: ignora e continua ouvindo em segundo plano
@@ -643,6 +668,7 @@ handsFreeBtn.addEventListener('click', ()=>{
   handsFree = !handsFree;
   localStorage.setItem(HANDS_FREE_KEY, handsFree ? '1' : '0');
   updateHandsFreeBtn();
+  if(!handsFree) endConversationWindow();
   if(recognition){
     if(listening) recognition.stop();
     recognition.continuous = handsFree;
