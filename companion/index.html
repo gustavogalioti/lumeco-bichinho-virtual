@@ -96,7 +96,10 @@
 </head>
 <body>
 
-<div class="top"><div class="brand">Jarbas</div></div>
+<div class="top">
+  <div class="brand">Jarbas</div>
+  <button id="fullscreenBtn" type="button" aria-label="Tela cheia" style="position:fixed; top:18px; right:18px; background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); border-radius:10px; width:38px; height:38px; cursor:pointer; font-size:16px;">⛶</button>
+</div>
 
 <div class="stage">
   <div class="visor"><div class="eye-wrap"><canvas id="eye"></canvas></div></div>
@@ -112,6 +115,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="#031018" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
   </button>
   <div class="hint" id="hint">toque para falar</div>
+  <button id="handsFreeBtn" type="button" style="background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); font-size:12px; border-radius:20px; padding:6px 14px; cursor:pointer; margin-top:8px;">🎙️ mãos livres: desligado</button>
   <button id="resetMemBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:6px;">esquecer conversas e recomeçar</button>
 </div>
 
@@ -524,7 +528,7 @@ async function askRaiz(userText){
     setCaption('jarbas', parsed.reply);
     hint.textContent = 'falando...';
     await speak(parsed.reply);
-    hint.textContent = 'toque para falar';
+    hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
     setEmotion('neutro');
 
     if(mem.msgCount % SUMMARY_EVERY === 0){
@@ -533,10 +537,26 @@ async function askRaiz(userText){
   }catch(err){
     setEmotion('neutro');
     setCaption('jarbas', 'Hmm, não consegui pensar agora. Tenta de novo?');
-    hint.textContent = 'toque para falar';
+    hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
     await speak('Hmm, não consegui pensar agora.');
     setEmotion('neutro');
   }
+  resumeHandsFreeListening();
+}
+
+/* ---------- Ativação por voz ("modo mãos livres") ---------- */
+const HANDS_FREE_KEY = 'raiz_hands_free';
+const WAKE_WORD = 'jarbas';
+let handsFree = localStorage.getItem(HANDS_FREE_KEY) === '1';
+let awaitingCommand = false;
+let awaitingTimeout = null;
+
+function resumeHandsFreeListening(){
+  if(!handsFree || listening) return;
+  setTimeout(()=>{
+    if(!handsFree || listening) return;
+    try{ recognition.start(); }catch(e){}
+  }, 350);
 }
 
 function initRecognition(){
@@ -544,34 +564,100 @@ function initRecognition(){
   recognition.lang = 'pt-BR';
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
+  recognition.continuous = handsFree;
 
   recognition.onstart = ()=>{
     listening = true;
     micBtn.classList.add('on');
-    setEmotion('focado');
-    hint.textContent = 'ouvindo...';
+    if(!awaitingCommand) setEmotion('focado');
+    hint.textContent = awaitingCommand ? 'pode falar...' : 'ouvindo...';
   };
   recognition.onerror = ()=>{
     listening = false;
     micBtn.classList.remove('on');
     setEmotion('neutro');
-    hint.textContent = 'não peguei, toque de novo';
+    if(!handsFree) hint.textContent = 'não peguei, toque de novo';
+    resumeHandsFreeListening();
   };
   recognition.onend = ()=>{
     listening = false;
     micBtn.classList.remove('on');
+    resumeHandsFreeListening();
   };
   recognition.onresult = (e)=>{
-    const text = e.results[0][0].transcript;
-    setCaption('você', text);
-    askRaiz(text);
+    const text = e.results[e.results.length-1][0].transcript.trim();
+
+    if(!handsFree){
+      setCaption('você', text);
+      recognition.stop();
+      askRaiz(text);
+      return;
+    }
+
+    const lower = text.toLowerCase();
+    if(awaitingCommand){
+      clearTimeout(awaitingTimeout);
+      awaitingCommand = false;
+      recognition.stop();
+      setCaption('você', text);
+      askRaiz(text);
+      return;
+    }
+
+    if(lower.includes(WAKE_WORD)){
+      const idx = lower.lastIndexOf(WAKE_WORD);
+      const rest = text.slice(idx + WAKE_WORD.length).replace(/^[,.\s]+/, '').trim();
+      if(rest.length > 2){
+        recognition.stop();
+        setCaption('você', rest);
+        askRaiz(rest);
+      } else {
+        awaitingCommand = true;
+        setEmotion('focado');
+        hint.textContent = 'pode falar...';
+        clearTimeout(awaitingTimeout);
+        awaitingTimeout = setTimeout(()=>{
+          awaitingCommand = false;
+          setEmotion('neutro');
+          hint.textContent = 'diga "jarbas" pra chamar';
+        }, 7000);
+      }
+    }
+    // sem a palavra de ativação: ignora e continua ouvindo em segundo plano
   };
 }
 
 micBtn.addEventListener('click', ()=>{
   if(!recognition) return;
   if(listening){ recognition.stop(); return; }
+  awaitingCommand = false;
   try{ recognition.start(); }catch(e){}
+});
+
+const handsFreeBtn = document.getElementById('handsFreeBtn');
+function updateHandsFreeBtn(){
+  handsFreeBtn.textContent = handsFree ? '🎙️ mãos livres: ligado' : '🎙️ mãos livres: desligado';
+  hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+}
+handsFreeBtn.addEventListener('click', ()=>{
+  handsFree = !handsFree;
+  localStorage.setItem(HANDS_FREE_KEY, handsFree ? '1' : '0');
+  updateHandsFreeBtn();
+  if(recognition){
+    if(listening) recognition.stop();
+    recognition.continuous = handsFree;
+    if(handsFree) resumeHandsFreeListening();
+  }
+});
+
+/* ---------- Tela cheia ---------- */
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+fullscreenBtn.addEventListener('click', ()=>{
+  if(!document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(()=>{});
+  } else {
+    document.exitFullscreen().catch(()=>{});
+  }
 });
 
 /* ---------- Setup / permissão ---------- */
@@ -612,6 +698,8 @@ startBtn.addEventListener('click', async ()=>{
     await syncMemoryFromServer(url);
     hint.textContent = 'toque para falar';
     initRecognition();
+    updateHandsFreeBtn();
+    resumeHandsFreeListening();
     setupEl.classList.add('hidden');
   }catch(e){
     setupErr.textContent = 'Precisamos da permissão do microfone para continuar.';
