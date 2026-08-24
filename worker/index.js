@@ -12,6 +12,10 @@
  * memory_load / memory_save exigem `key` (uma senha simples que só você
  * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
  * para guardar a memória do companheiro sincronizada entre aparelhos.
+ *
+ * Se o secret TAVILY_API_KEY estiver configurado, o modo "companion" ganha
+ * acesso a uma ferramenta de busca na web (Tavily) — o próprio modelo decide
+ * quando precisa pesquisar algo atual antes de responder.
  */
 
 const ALLOWED_ORIGIN = "https://gustavogalioti.github.io";
@@ -59,6 +63,7 @@ function companionPrompt(companionState = {}) {
   return `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
 ${memoryLine}
 ${nowLine}
+Quando a pergunta exigir informação atual (notícias, preços, previsão do tempo, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar buscar.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -73,28 +78,109 @@ function extractReplyFallback(raw) {
   return raw.replace(/^\{.*?"reply"\s*:\s*"?/, "").replace(/"?\}?\s*$/, "").trim() || "Hmm, se perdeu meu pensamento. Pode repetir?";
 }
 
-async function callGroq(env, systemPrompt, messages, maxTokens) {
+async function groqRequest(env, messages, maxTokens, tools) {
+  const body = {
+    model: env.GROQ_MODEL || "openai/gpt-oss-20b",
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.8,
+  };
+  if (tools) {
+    body.tools = tools;
+    body.tool_choice = "auto";
+  }
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${env.GROQ_API_KEY}`,
     },
-    body: JSON.stringify({
-      model: env.GROQ_MODEL || "openai/gpt-oss-20b",
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
-      max_tokens: maxTokens,
-      temperature: 0.8,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`groq_error: ${detail.slice(0, 300)}`);
   }
+  return res.json();
+}
 
-  const data = await res.json();
+async function callGroq(env, systemPrompt, messages, maxTokens) {
+  const data = await groqRequest(env, [{ role: "system", content: systemPrompt }, ...messages], maxTokens);
   return data.choices?.[0]?.message?.content?.trim() || "...";
+}
+
+const SEARCH_TOOL = {
+  type: "function",
+  function: {
+    name: "buscar_na_web",
+    description:
+      "Busca informação atual na internet: notícias, preços, previsão do tempo, eventos recentes ou qualquer coisa que exija dado de agora. Use só quando a pergunta realmente precisar disso.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Termos de busca, em poucas palavras" },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+async function callTavily(env, query) {
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: env.TAVILY_API_KEY,
+      query,
+      search_depth: "basic",
+      max_results: 3,
+      include_answer: true,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`tavily_error: ${detail.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  let text = data.answer ? `${data.answer}\n\n` : "";
+  (data.results || []).slice(0, 3).forEach((r) => {
+    text += `- ${r.title}: ${String(r.content || "").slice(0, 200)}\n`;
+  });
+  return text.trim().slice(0, 1200) || "A busca não encontrou nada relevante.";
+}
+
+async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
+  const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
+  const canSearch = !!env.TAVILY_API_KEY;
+
+  const first = await groqRequest(env, baseMessages, maxTokens, canSearch ? [SEARCH_TOOL] : undefined);
+  const msg = first.choices?.[0]?.message;
+
+  if (canSearch && msg?.tool_calls?.length) {
+    const call = msg.tool_calls[0];
+    let query = "";
+    try {
+      query = JSON.parse(call.function.arguments).query || "";
+    } catch {}
+
+    let searchResult;
+    try {
+      searchResult = await callTavily(env, query || "");
+    } catch (err) {
+      searchResult = `A busca falhou: ${String(err.message || err)}`;
+    }
+
+    const followUp = [
+      ...baseMessages,
+      { role: "assistant", content: msg.content || null, tool_calls: msg.tool_calls },
+      { role: "tool", tool_call_id: call.id, content: searchResult },
+    ];
+    const second = await groqRequest(env, followUp, maxTokens);
+    return second.choices?.[0]?.message?.content?.trim() || "...";
+  }
+
+  return msg?.content?.trim() || "...";
 }
 
 export default {
@@ -155,7 +241,7 @@ export default {
         return json({ reply });
       }
       if (mode === "companion") {
-        const raw = await callGroq(env, companionPrompt(companionState), trimmed, 300);
+        const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 300);
         const clean = raw.replace(/```json|```/g, "").trim();
         let parsed;
         try {
