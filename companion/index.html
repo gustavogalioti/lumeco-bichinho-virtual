@@ -268,7 +268,7 @@ function drawEye(t){
     }
   }
 
-  drawMouth(cx, cy + size*0.95, size);
+  drawMouth(cx, cy + size*0.95, size, t);
 }
 
 function drawOneEye(ex, ey, size, t, isRightEye){
@@ -343,7 +343,7 @@ function drawOneEye(ex, ey, size, t, isRightEye){
   ctx.restore();
 }
 
-function drawMouth(cx, my, size){
+function drawMouth(cx, my, size, t){
   const drawGlyph = (type, alpha)=>{
     if(alpha <= 0.01) return;
     ctx.save();
@@ -353,10 +353,14 @@ function drawMouth(cx, my, size){
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     if(type === 'dashes'){
-      const n = 5, w = size*0.16, gap = size*0.08, h = size*0.06;
+      const n = 5, w = size*0.16, gap = size*0.08;
       const total = n*w + (n-1)*gap;
+      const talk = state.talkPulse; // 0 parado .. 1 falando
       for(let i=0;i<n;i++){
         const x = cx - total/2 + i*(w+gap);
+        // cada tracinho "bate" em fases levemente diferentes -- parece estar falando
+        const wobble = talk * (0.5 + 0.5*Math.sin(t/90 + i*1.4));
+        const h = size*0.06 + size*0.09*wobble;
         roundRect(x, my - h/2, w, h, h/2);
         ctx.fill();
       }
@@ -594,7 +598,7 @@ function initRecognition(){
   recognition.onstart = ()=>{
     listening = true;
     micBtn.classList.add('on');
-    if(!awaitingCommand) setEmotion('focado');
+    setEmotion('neutro');
     hint.textContent = awaitingCommand ? 'pode falar...' : 'ouvindo...';
   };
   recognition.onerror = ()=>{
@@ -638,7 +642,7 @@ function initRecognition(){
         askRaiz(rest);
       } else {
         awaitingCommand = true;
-        setEmotion('focado');
+        setEmotion('neutro');
         hint.textContent = 'pode falar...';
         clearTimeout(awaitingTimeout);
         awaitingTimeout = setTimeout(()=>{
