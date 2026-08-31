@@ -601,11 +601,18 @@ function initRecognition(){
     setEmotion('neutro');
     hint.textContent = awaitingCommand ? 'pode falar...' : 'ouvindo...';
   };
-  recognition.onerror = ()=>{
+  recognition.onerror = (e)=>{
     listening = false;
     micBtn.classList.remove('on');
     setEmotion('neutro');
-    if(!handsFree) hint.textContent = 'não peguei, toque de novo';
+    const reasons = {
+      'no-speech': 'não ouvi nada, toque e fale',
+      'audio-capture': 'sem acesso ao microfone',
+      'not-allowed': 'permissão de microfone negada',
+      'network': 'sem conexão, tente de novo',
+      'aborted': 'toque de novo',
+    };
+    if(!handsFree) hint.textContent = reasons[e.error] || ('erro: ' + e.error + ', toque de novo');
     resumeHandsFreeListening();
   };
   recognition.onend = ()=>{
@@ -615,6 +622,10 @@ function initRecognition(){
   };
   recognition.onresult = (e)=>{
     const text = e.results[e.results.length-1][0].transcript.trim();
+    if(!text){
+      if(!handsFree) hint.textContent = 'não peguei, toque de novo';
+      return;
+    }
 
     if(!handsFree){
       setCaption('você', text);
@@ -660,7 +671,9 @@ micBtn.addEventListener('click', ()=>{
   if(!recognition) return;
   if(listening){ recognition.stop(); return; }
   awaitingCommand = false;
-  try{ recognition.start(); }catch(e){}
+  try{ recognition.start(); }catch(e){
+    hint.textContent = 'toque de novo em 1s';
+  }
 });
 
 const handsFreeBtn = document.getElementById('handsFreeBtn');
