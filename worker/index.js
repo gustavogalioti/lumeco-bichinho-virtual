@@ -48,8 +48,11 @@ Você é a própria árvore falando — nunca se refira a si mesma como app, IA 
 Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando fizer sentido, sempre com leveza.`;
 }
 
-const SUMMARY_PROMPT = `A partir do histórico de conversa abaixo entre uma pessoa e sua árvore de estimação, escreva um resumo de no máximo 3 frases curtas, em português, sobre a pessoa: nome (se disse), gostos, rotina, assuntos recorrentes.
-Não invente nada que não esteja implícito na conversa. Se não houver informação suficiente, diga apenas "Ainda não conversamos o suficiente."`;
+const SUMMARY_PROMPT_HEADER = (existingMemory) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz, escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome (se disse), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
+
+${existingMemory ? `Isso é o que você já sabia sobre essa pessoa, de conversas anteriores:\n"${existingMemory}"\n\nIMPORTANTE: mantenha tudo isso que ainda for válido e só ACRESCENTE ou ATUALIZE com as novidades da conversa abaixo. Nunca esqueça um fato antigo (como o nome da pessoa) só porque ele não apareceu de novo nessa conversa.` : `Você ainda não tem nenhuma memória anterior sobre essa pessoa — escreva a partir do zero com o que aparecer abaixo.`}
+
+Não invente nada que não esteja implícito na conversa. Se não houver informação nova nem antiga suficiente, diga apenas "Ainda não conversamos o suficiente."`;
 
 function companionPrompt(companionState = {}) {
   const memoryLine = companionState.memory
@@ -63,7 +66,7 @@ function companionPrompt(companionState = {}) {
   return `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
 ${memoryLine}
 ${nowLine}
-Quando a pergunta exigir informação atual (notícias, preços, previsão do tempo, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar buscar.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -115,7 +118,7 @@ const SEARCH_TOOL = {
   function: {
     name: "buscar_na_web",
     description:
-      "Busca informação atual na internet: notícias, preços, previsão do tempo, eventos recentes ou qualquer coisa que exija dado de agora. Use só quando a pergunta realmente precisar disso.",
+      "Busca informação atual na internet: notícias, preços, eventos recentes ou qualquer coisa que exija dado de agora (menos previsão do tempo, que tem ferramenta própria). Use só quando a pergunta realmente precisar disso.",
     parameters: {
       type: "object",
       properties: {
@@ -125,6 +128,61 @@ const SEARCH_TOOL = {
     },
   },
 };
+
+const WEATHER_TOOL = {
+  type: "function",
+  function: {
+    name: "previsao_do_tempo",
+    description:
+      "Retorna a previsão do tempo atual e de amanhã para uma cidade. Use sempre que a pergunta for sobre clima, temperatura, chuva ou previsão do tempo. Se a pessoa não disser a cidade e não tiver dito antes na conversa, pergunte qual cidade antes de usar a ferramenta.",
+    parameters: {
+      type: "object",
+      properties: {
+        cidade: { type: "string", description: "Nome da cidade, e opcionalmente estado/país, ex: 'Jundiaí, SP'" },
+      },
+      required: ["cidade"],
+    },
+  },
+};
+
+const WEATHER_DESCRIPTIONS = {
+  0: "céu limpo", 1: "poucas nuvens", 2: "parcialmente nublado", 3: "nublado",
+  45: "neblina", 48: "neblina com geada",
+  51: "garoa leve", 53: "garoa moderada", 55: "garoa forte",
+  61: "chuva leve", 63: "chuva moderada", 65: "chuva forte",
+  71: "neve leve", 73: "neve moderada", 75: "neve forte",
+  80: "pancadas de chuva leves", 81: "pancadas de chuva moderadas", 82: "pancadas de chuva fortes",
+  95: "trovoadas",
+};
+
+async function callWeather(cidade) {
+  const geoRes = await fetch(
+    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cidade)}&count=1&language=pt&format=json`
+  );
+  if (!geoRes.ok) throw new Error("geocoding_error");
+  const geo = await geoRes.json();
+  const place = geo.results?.[0];
+  if (!place) return `Não encontrei a cidade "${cidade}".`;
+
+  const { latitude, longitude, name, admin1 } = place;
+  const foreRes = await fetch(
+    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+      `&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+      `&timezone=auto&forecast_days=2`
+  );
+  if (!foreRes.ok) throw new Error("forecast_error");
+  const f = await foreRes.json();
+  const cur = f.current;
+  const d = f.daily;
+  const desc = WEATHER_DESCRIPTIONS[cur.weather_code] ?? "condição não identificada";
+
+  let text = `Em ${name}${admin1 ? ", " + admin1 : ""} agora: ${desc}, ${cur.temperature_2m}°C. `;
+  text += `Hoje: mínima ${d.temperature_2m_min[0]}°C, máxima ${d.temperature_2m_max[0]}°C, ${d.precipitation_probability_max[0]}% de chance de chuva.`;
+  if (d.temperature_2m_max[1] !== undefined) {
+    text += ` Amanhã: mínima ${d.temperature_2m_min[1]}°C, máxima ${d.temperature_2m_max[1]}°C, ${d.precipitation_probability_max[1]}% de chance de chuva.`;
+  }
+  return text;
+}
 
 async function callTavily(env, query) {
   const res = await fetch("https://api.tavily.com/search", {
@@ -153,28 +211,34 @@ async function callTavily(env, query) {
 async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
+  const tools = [WEATHER_TOOL];
+  if (canSearch) tools.push(SEARCH_TOOL);
 
-  const first = await groqRequest(env, baseMessages, maxTokens, canSearch ? [SEARCH_TOOL] : undefined);
+  const first = await groqRequest(env, baseMessages, maxTokens, tools);
   const msg = first.choices?.[0]?.message;
 
-  if (canSearch && msg?.tool_calls?.length) {
+  if (msg?.tool_calls?.length) {
     const call = msg.tool_calls[0];
-    let query = "";
-    try {
-      query = JSON.parse(call.function.arguments).query || "";
-    } catch {}
+    let args = {};
+    try { args = JSON.parse(call.function.arguments); } catch {}
 
-    let searchResult;
+    let toolResult;
     try {
-      searchResult = await callTavily(env, query || "");
+      if (call.function.name === "previsao_do_tempo") {
+        toolResult = await callWeather(args.cidade || "");
+      } else if (call.function.name === "buscar_na_web" && canSearch) {
+        toolResult = await callTavily(env, args.query || "");
+      } else {
+        toolResult = "Ferramenta indisponível.";
+      }
     } catch (err) {
-      searchResult = `A busca falhou: ${String(err.message || err)}`;
+      toolResult = `A consulta falhou: ${String(err.message || err)}`;
     }
 
     const followUp = [
       ...baseMessages,
       { role: "assistant", content: msg.content || null, tool_calls: msg.tool_calls },
-      { role: "tool", tool_call_id: call.id, content: searchResult },
+      { role: "tool", tool_call_id: call.id, content: toolResult },
     ];
     const second = await groqRequest(env, followUp, maxTokens);
     return second.choices?.[0]?.message?.content?.trim() || "...";
@@ -237,7 +301,7 @@ export default {
 
     try {
       if (mode === "summary") {
-        const reply = await callGroq(env, SUMMARY_PROMPT, trimmed, 150);
+        const reply = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || ""), trimmed, 200);
         return json({ reply });
       }
       if (mode === "companion") {

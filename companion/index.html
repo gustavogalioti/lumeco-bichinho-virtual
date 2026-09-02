@@ -395,7 +395,7 @@ let listening = false;
 
 const MEMORY_KEY = 'raiz_companion_memory_v1';
 const SYNC_KEY_STORAGE = 'raiz_sync_key';
-const SUMMARY_EVERY = 8;
+const SUMMARY_EVERY = 3;
 const HISTORY_KEEP_AFTER_SUMMARY = 6;
 const HISTORY_MAX = 20;
 
@@ -482,7 +482,7 @@ async function updateMemory(workerUrl){
     const resp = await fetch(workerUrl, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ mode:'summary', messages: history.slice(-16) })
+      body: JSON.stringify({ mode:'summary', messages: history.slice(-16), existingMemory: mem.memory || '' })
     });
     if(!resp.ok) return;
     const data = await resp.json();
@@ -763,6 +763,35 @@ resetMemBtn.addEventListener('click', async ()=>{
 });
 
 resize();
+
+/* ---------- Re-sincroniza ao voltar o foco (troca de app, desbloqueio de tela) ---------- */
+let lastFocusSync = 0;
+async function resyncMemoryOnFocus(){
+  const now = Date.now();
+  if(now - lastFocusSync < 5000) return; // evita sincronizar em excesso
+  lastFocusSync = now;
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(!workerUrl || !getSyncKey()) return;
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'memory_load', key: getSyncKey() })
+    });
+    if(!resp.ok) return;
+    const { data } = await resp.json();
+    // só puxa a "memória" (o que ele sabe sobre você) de outro aparelho;
+    // não sobrescreve o histórico local pra não perder mensagens ainda não sincronizadas
+    if(data && data.memory && data.memory !== mem.memory){
+      mem.memory = data.memory;
+      saveMemoryState();
+    }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible') resyncMemoryOnFocus();
+});
+window.addEventListener('focus', resyncMemoryOnFocus);
 requestAnimationFrame(loop);
 </script>
 </body>
