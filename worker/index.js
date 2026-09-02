@@ -60,13 +60,13 @@ function companionPrompt(companionState = {}) {
     : `Você ainda está conhecendo essa pessoa — preste atenção no que ela conta, para lembrar depois.`;
 
   const nowLine = companionState.now
-    ? `Informação real e atual (use para responder perguntas sobre data/hora — nunca diga que não sabe): agora é ${companionState.now}.`
+    ? `Informação real e atual (use para responder perguntas sobre data/hora — nunca diga que não sabe): agora é ${companionState.now}${companionState.hojeISO ? `, hoje é ${companionState.hojeISO} no formato AAAA-MM-DD` : ''}.`
     : '';
 
   return `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
 ${memoryLine}
 ${nowLine}
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -184,6 +184,92 @@ async function callWeather(cidade) {
   return text;
 }
 
+const CONSULTAR_PAINEL_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_painel",
+    description:
+      "Consulta a agenda de hoje, as tarefas pendentes e as contas pendentes da pessoa no painel de controle pessoal dela. Use sempre que ela perguntar sobre compromissos, agenda, tarefas ou contas a pagar.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const GERENCIAR_TAREFA_TOOL = {
+  type: "function",
+  function: {
+    name: "gerenciar_tarefa",
+    description: "Cria, conclui ou apaga uma tarefa no painel pessoal da pessoa.",
+    parameters: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["criar", "concluir", "apagar"] },
+        texto: { type: "string", description: "O texto da tarefa (ao criar) ou um trecho que identifique a tarefa já existente (ao concluir/apagar)." },
+      },
+      required: ["acao", "texto"],
+    },
+  },
+};
+
+const GERENCIAR_CONTA_TOOL = {
+  type: "function",
+  function: {
+    name: "gerenciar_conta",
+    description: "Marca uma conta como paga, ou apaga uma conta/assinatura do painel financeiro da pessoa.",
+    parameters: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["pagar", "apagar"] },
+        nome: { type: "string", description: "Nome (ou trecho do nome) da conta." },
+      },
+      required: ["acao", "nome"],
+    },
+  },
+};
+
+const GERENCIAR_COMPROMISSO_TOOL = {
+  type: "function",
+  function: {
+    name: "gerenciar_compromisso",
+    description: "Cria ou apaga um compromisso na agenda da pessoa. Para criar, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada no contexto da conversa.",
+    parameters: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["criar", "apagar"] },
+        titulo: { type: "string" },
+        data: { type: "string", description: "Data no formato AAAA-MM-DD, obrigatório ao criar." },
+        hora: { type: "string", description: "Horário no formato HH:MM, opcional." },
+      },
+      required: ["acao", "titulo"],
+    },
+  },
+};
+
+const PAINEL_API_URL = "https://painel-controle-pearl.vercel.app/api/jarbas";
+
+async function callPainelSnapshot(env) {
+  const res = await fetch(`${PAINEL_API_URL}?action=snapshot`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return data.texto || "Não consegui ler os dados do painel agora.";
+}
+
+async function callPainelCommand(env, comando, arg) {
+  const res = await fetch(PAINEL_API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-jarbas-key": env.PAINEL_API_KEY },
+    body: JSON.stringify({ comando, arg }),
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return data.reply || "Feito.";
+}
+
+const TAREFA_ACAO_MAP = { criar: "criar_tarefa", concluir: "concluir_tarefa", apagar: "apagar_tarefa" };
+const CONTA_ACAO_MAP = { pagar: "pagar_conta", apagar: "apagar_conta" };
+const COMPROMISSO_ACAO_MAP = { criar: "criar_compromisso", apagar: "apagar_compromisso" };
+
 async function callTavily(env, query) {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
@@ -211,8 +297,10 @@ async function callTavily(env, query) {
 async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
+  const canPainel = !!env.PAINEL_API_KEY;
   const tools = [WEATHER_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
+  if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
 
   const first = await groqRequest(env, baseMessages, maxTokens, tools);
   const msg = first.choices?.[0]?.message;
@@ -221,13 +309,22 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
     const call = msg.tool_calls[0];
     let args = {};
     try { args = JSON.parse(call.function.arguments); } catch {}
+    const name = call.function.name;
 
     let toolResult;
     try {
-      if (call.function.name === "previsao_do_tempo") {
+      if (name === "previsao_do_tempo") {
         toolResult = await callWeather(args.cidade || "");
-      } else if (call.function.name === "buscar_na_web" && canSearch) {
+      } else if (name === "buscar_na_web" && canSearch) {
         toolResult = await callTavily(env, args.query || "");
+      } else if (name === "consultar_painel" && canPainel) {
+        toolResult = await callPainelSnapshot(env);
+      } else if (name === "gerenciar_tarefa" && canPainel) {
+        toolResult = await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto });
+      } else if (name === "gerenciar_conta" && canPainel) {
+        toolResult = await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome });
+      } else if (name === "gerenciar_compromisso" && canPainel) {
+        toolResult = await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora });
       } else {
         toolResult = "Ferramenta indisponível.";
       }

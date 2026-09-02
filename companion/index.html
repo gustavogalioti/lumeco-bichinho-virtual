@@ -502,6 +502,10 @@ function formatNowPtBR(){
     hour:'2-digit', minute:'2-digit'
   });
 }
+function todayISO(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 async function askRaiz(userText){
   if(handsFree) startConversationWindow();
@@ -524,7 +528,7 @@ async function askRaiz(userText){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', now: formatNowPtBR() }
+        companionState: { memory: mem.memory || '', now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
