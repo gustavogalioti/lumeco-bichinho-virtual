@@ -48,7 +48,9 @@ Você é a própria árvore falando — nunca se refira a si mesma como app, IA 
 Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando fizer sentido, sempre com leveza.`;
 }
 
-const SUMMARY_PROMPT_HEADER = (existingMemory) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz, escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome (se disse), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
+const SUMMARY_PROMPT_HEADER = (existingMemory) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz, escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome dela (se disse o próprio nome), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
+
+IMPORTANTE: se ela mencionar nome de outras pessoas (esposa, marido, namorado(a), filhos, amigos, colegas), registre claramente de quem é cada nome — por exemplo "o nome dela é Ana" vs "a esposa dela se chama Maria". NUNCA troque o nome da própria pessoa pelo nome de alguém que ela só mencionou.
 
 ${existingMemory ? `Isso é o que você já sabia sobre essa pessoa, de conversas anteriores:\n"${existingMemory}"\n\nIMPORTANTE: mantenha tudo isso que ainda for válido e só ACRESCENTE ou ATUALIZE com as novidades da conversa abaixo. Nunca esqueça um fato antigo (como o nome da pessoa) só porque ele não apareceu de novo nessa conversa.` : `Você ainda não tem nenhuma memória anterior sobre essa pessoa — escreva a partir do zero com o que aparecer abaixo.`}
 
@@ -65,8 +67,9 @@ function companionPrompt(companionState = {}) {
 
   return `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
 ${memoryLine}
+${memoryLine ? 'Atenção: se a memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
 ${nowLine}
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela contar algo importante e duradouro sobre a vida dela (não conversa fiada), use a ferramenta de anotar no diário além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -244,6 +247,23 @@ const GERENCIAR_COMPROMISSO_TOOL = {
   },
 };
 
+const ANOTAR_DIARIO_TOOL = {
+  type: "function",
+  function: {
+    name: "anotar_no_diario",
+    description:
+      "Registra silenciosamente no Diário do painel pessoal algo importante e duradouro que a pessoa contou (um fato sobre a vida dela, um sentimento marcante, uma conquista, uma preocupação). Use isso além de responder normalmente, não no lugar de responder — é uma ação de bastidor, a pessoa não vai ver confirmação disso na fala. Não use para perguntas triviais ou conversa fiada, só para coisas que valem a pena ficar registradas.",
+    parameters: {
+      type: "object",
+      properties: {
+        texto: { type: "string", description: "O fato ou sentimento a registrar, em 1 frase, em português." },
+        humor: { type: "string", enum: ["otimo", "bom", "neutro", "ruim", "pessimo"], description: "O humor associado ao que foi contado." },
+      },
+      required: ["texto"],
+    },
+  },
+};
+
 const PAINEL_API_URL = "https://painel-controle-pearl.vercel.app/api/jarbas";
 
 async function callPainelSnapshot(env) {
@@ -294,54 +314,62 @@ async function callTavily(env, query) {
   return text.trim().slice(0, 1200) || "A busca não encontrou nada relevante.";
 }
 
+async function runTool(env, call, canSearch, canPainel) {
+  const name = call.function.name;
+  let args = {};
+  try { args = JSON.parse(call.function.arguments); } catch {}
+
+  try {
+    if (name === "previsao_do_tempo") return await callWeather(args.cidade || "");
+    if (name === "buscar_na_web" && canSearch) return await callTavily(env, args.query || "");
+    if (name === "consultar_painel" && canPainel) return await callPainelSnapshot(env);
+    if (name === "gerenciar_tarefa" && canPainel) return await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto });
+    if (name === "gerenciar_conta" && canPainel) return await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome });
+    if (name === "gerenciar_compromisso" && canPainel) return await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora });
+    if (name === "anotar_no_diario" && canPainel) { await callPainelCommand(env, "anotar_diario", { texto: args.texto, humor: args.humor }); return "Anotado no diário (não fale sobre essa anotação, é de bastidor)."; }
+    return "Ferramenta indisponível.";
+  } catch (err) {
+    return `A consulta falhou: ${String(err.message || err)}`;
+  }
+}
+
 async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
   const tools = [WEATHER_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
-  if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
+  if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL);
 
   const first = await groqRequest(env, baseMessages, maxTokens, tools);
   const msg = first.choices?.[0]?.message;
 
   if (msg?.tool_calls?.length) {
-    const call = msg.tool_calls[0];
-    let args = {};
-    try { args = JSON.parse(call.function.arguments); } catch {}
-    const name = call.function.name;
-
-    let toolResult;
-    try {
-      if (name === "previsao_do_tempo") {
-        toolResult = await callWeather(args.cidade || "");
-      } else if (name === "buscar_na_web" && canSearch) {
-        toolResult = await callTavily(env, args.query || "");
-      } else if (name === "consultar_painel" && canPainel) {
-        toolResult = await callPainelSnapshot(env);
-      } else if (name === "gerenciar_tarefa" && canPainel) {
-        toolResult = await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto });
-      } else if (name === "gerenciar_conta" && canPainel) {
-        toolResult = await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome });
-      } else if (name === "gerenciar_compromisso" && canPainel) {
-        toolResult = await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora });
-      } else {
-        toolResult = "Ferramenta indisponível.";
-      }
-    } catch (err) {
-      toolResult = `A consulta falhou: ${String(err.message || err)}`;
+    const calls = msg.tool_calls.slice(0, 3); // até 3 ferramentas na mesma resposta
+    const toolMessages = [];
+    for (const call of calls) {
+      const result = await runTool(env, call, canSearch, canPainel);
+      toolMessages.push({ role: "tool", tool_call_id: call.id, content: result });
     }
 
     const followUp = [
       ...baseMessages,
       { role: "assistant", content: msg.content || null, tool_calls: msg.tool_calls },
-      { role: "tool", tool_call_id: call.id, content: toolResult },
+      ...toolMessages,
     ];
-    const second = await groqRequest(env, followUp, maxTokens);
-    return second.choices?.[0]?.message?.content?.trim() || "...";
+    const second = await groqRequest(env, followUp, Math.max(maxTokens, 400));
+    const secondContent = second.choices?.[0]?.message?.content?.trim();
+    if (secondContent) return secondContent;
+
+    // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
+    const retry = await groqRequest(env, [
+      ...followUp,
+      { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
+    ], Math.max(maxTokens, 400));
+    return retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?";
   }
 
-  return msg?.content?.trim() || "...";
+  return msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?";
 }
 
 export default {
@@ -404,7 +432,7 @@ export default {
       if (mode === "companion") {
         let parsed;
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 300);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 450);
           const clean = raw.replace(/```json|```/g, "").trim();
           try {
             parsed = JSON.parse(clean);
