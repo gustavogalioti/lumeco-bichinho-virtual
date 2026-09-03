@@ -402,14 +402,19 @@ export default {
         return json({ reply });
       }
       if (mode === "companion") {
-        const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 300);
-        const clean = raw.replace(/```json|```/g, "").trim();
         let parsed;
         try {
-          parsed = JSON.parse(clean);
-          if (!parsed.reply) throw new Error("no_reply_field");
-        } catch {
-          parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 300);
+          const clean = raw.replace(/```json|```/g, "").trim();
+          try {
+            parsed = JSON.parse(clean);
+            if (!parsed.reply) throw new Error("no_reply_field");
+          } catch {
+            parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+          }
+        } catch (err) {
+          // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
+          parsed = { emotion: "neutro", reply: "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
         }
         if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
           parsed.emotion = "neutro";

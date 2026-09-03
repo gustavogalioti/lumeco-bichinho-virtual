@@ -507,15 +507,17 @@ function todayISO(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-async function askRaiz(userText){
-  if(handsFree) startConversationWindow();
+async function askRaiz(userText, isRetry){
+  if(!isRetry && handsFree) startConversationWindow();
   setEmotion('pensando');
   hint.textContent = 'pensando...';
-  history.push({role:'user', content:userText});
-  mem.msgCount = (mem.msgCount||0) + 1;
-  if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
-  mem.history = history;
-  saveMemoryState();
+  if(!isRetry){
+    history.push({role:'user', content:userText});
+    mem.msgCount = (mem.msgCount||0) + 1;
+    if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+    mem.history = history;
+    saveMemoryState();
+  }
 
   const workerUrl = localStorage.getItem('raiz_worker_url');
 
@@ -551,10 +553,18 @@ async function askRaiz(userText){
       updateMemory(workerUrl);
     }
   }catch(err){
+    console.error('Jarbas askRaiz falhou:', err);
+    if(!isRetry){
+      // uma tentativa silenciosa de novo antes de desistir (ex: falha de rede momentânea)
+      return askRaiz(userText, true);
+    }
     setEmotion('neutro');
-    setCaption('jarbas', 'Hmm, não consegui pensar agora. Tenta de novo?');
+    const msg = (!navigator.onLine)
+      ? 'Parece que você está sem internet agora.'
+      : 'Não consegui falar com o servidor. Tenta de novo em instantes.';
+    setCaption('jarbas', msg);
     hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
-    await speak('Hmm, não consegui pensar agora.');
+    await speak(msg);
     setEmotion('neutro');
   }
   resumeHandsFreeListening();
