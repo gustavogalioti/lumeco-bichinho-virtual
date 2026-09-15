@@ -469,6 +469,31 @@ function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
 }
 
+// Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto no perfil,
+// sem passar pelo modelo — rápido e 100% confiável (não depende do resumo automático).
+const LEARN_TRIGGER = /^\s*(aprenda|aprende|guarda|guarde|anota|anote|lembra|lembre)(?:\s+que)?[,:]?\s+/i;
+function handleLearnCommand(text){
+  const match = text.match(LEARN_TRIGGER);
+  if(!match) return false;
+  const fact = text.slice(match[0].length).trim();
+  if(!fact) return false;
+
+  if(handsFree) startConversationWindow();
+  mem.profile = (mem.profile ? mem.profile.trim() + '\n' : '') + fact;
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) pushMemoryToServer(workerUrl);
+
+  setCaption('jarbas', `Anotado: "${fact}"`);
+  setEmotion('confirmado');
+  speak(`Anotado: ${fact}`).then(()=>{
+    setEmotion('neutro');
+    hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+    resumeHandsFreeListening();
+  });
+  return true;
+}
+
 // lógica original e simples: pega a primeira voz em português que o navegador tiver.
 // De propósito sem "caçar" a melhor voz — isso é o que muda de aparelho pra aparelho
 // e gera inconsistência. Usada como PLANO B, se a voz unificada abaixo falhar.
@@ -501,8 +526,9 @@ function speakBrowser(text){
 // Mesma voz em qualquer aparelho. Protocolo não-oficial: se falhar por qualquer
 // motivo, cai automaticamente pra voz do navegador (speakBrowser) nessa mesma fala,
 // sem travar o app e sem precisar mexer em nada.
-const EDGE_VOICE_OFF_KEY = 'raiz_edge_voice_off';
-function edgeVoiceEnabled(){ return localStorage.getItem(EDGE_VOICE_OFF_KEY) !== '1'; }
+// Desligada por padrão até confirmarmos que é 100% estável — ligue no botão "voz: padrão do aparelho".
+const EDGE_VOICE_ON_KEY = 'raiz_edge_voice_on';
+function edgeVoiceEnabled(){ return localStorage.getItem(EDGE_VOICE_ON_KEY) === '1'; }
 
 function playBase64Audio(b64){
   return new Promise((resolve, reject)=>{
@@ -519,15 +545,22 @@ function playBase64Audio(b64){
 async function speakEdge(text){
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(!workerUrl) throw new Error('no_worker');
-  const resp = await fetch(workerUrl, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ mode:'tts', text })
-  });
-  if(!resp.ok) throw new Error('tts_http_' + resp.status);
-  const data = await resp.json();
-  if(!data || !data.audio_b64) throw new Error('tts_empty');
-  await playBase64Audio(data.audio_b64);
+  const controller = new AbortController();
+  const t = setTimeout(()=>controller.abort(), 6000); // não deixa travar a conversa esperando
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'tts', text }),
+      signal: controller.signal
+    });
+    if(!resp.ok) throw new Error('tts_http_' + resp.status);
+    const data = await resp.json();
+    if(!data || !data.audio_b64) throw new Error('tts_empty');
+    await playBase64Audio(data.audio_b64);
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 async function speak(text){
@@ -710,6 +743,7 @@ function initRecognition(){
     if(!handsFree){
       setCaption('você', text);
       recognition.stop();
+      if(handleLearnCommand(text)) return;
       askRaiz(text);
       return;
     }
@@ -720,6 +754,7 @@ function initRecognition(){
       awaitingCommand = false;
       recognition.stop();
       setCaption('você', text);
+      if(handleLearnCommand(text)) return;
       askRaiz(text);
       return;
     }
@@ -730,6 +765,7 @@ function initRecognition(){
       if(rest.length > 2){
         recognition.stop();
         setCaption('você', rest);
+        if(handleLearnCommand(rest)) return;
         askRaiz(rest);
       } else {
         awaitingCommand = true;
@@ -855,6 +891,7 @@ async function finishTapRecording(blob, mimeType){
       return;
     }
     setCaption('você', text);
+    if(handleLearnCommand(text)) return;
     askRaiz(text);
   }catch(err){
     setEmotion('neutro');
@@ -983,10 +1020,10 @@ document.getElementById('profileSaveBtn').addEventListener('click', async ()=>{
 
 const voiceModeBtn = document.getElementById('voiceModeBtn');
 function updateVoiceModeBtn(){
-  voiceModeBtn.textContent = edgeVoiceEnabled() ? 'voz: unificada' : 'voz: padrão do aparelho';
+  voiceModeBtn.textContent = edgeVoiceEnabled() ? 'voz: unificada (experimental)' : 'voz: padrão do aparelho';
 }
 voiceModeBtn.addEventListener('click', ()=>{
-  localStorage.setItem(EDGE_VOICE_OFF_KEY, edgeVoiceEnabled() ? '1' : '0');
+  localStorage.setItem(EDGE_VOICE_ON_KEY, edgeVoiceEnabled() ? '0' : '1');
   updateVoiceModeBtn();
 });
 updateVoiceModeBtn();

@@ -157,7 +157,7 @@ async function synthesizeEdgeTts(text) {
 
   await Promise.race([
     donePromise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("edge_tts_timeout")), 12000)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("edge_tts_timeout")), 8000)),
   ]);
 
   try { ws.close(); } catch {}
@@ -486,7 +486,16 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
   const msg = first.choices?.[0]?.message;
 
   if (msg?.tool_calls?.length) {
-    const calls = msg.tool_calls.slice(0, 3); // até 3 ferramentas na mesma resposta
+    // remove chamadas repetidas (mesma ferramenta + mesmos argumentos) — evita
+    // duplicar ações como "anotar no diário" quando o modelo devolve a mesma
+    // tool_call duas vezes na mesma resposta.
+    const seen = new Set();
+    const calls = msg.tool_calls.filter(c => {
+      const sig = c.function.name + "|" + c.function.arguments;
+      if (seen.has(sig)) return false;
+      seen.add(sig);
+      return true;
+    }).slice(0, 3);
     const toolMessages = [];
     for (const call of calls) {
       const result = await runTool(env, call, canSearch, canPainel);
