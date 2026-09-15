@@ -8,6 +8,8 @@
  *   { mode: "summary",      messages: [...] }
  *   { mode: "memory_load",  key: "..." }
  *   { mode: "memory_save",  key: "...", data: {...} }
+ *   { mode: "transcribe",   audio_b64: "...", mime: "audio/webm" }
+ *   { mode: "tts",          text: "..." }
  *
  * memory_load / memory_save exigem `key` (uma senha simples que só você
  * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
@@ -33,6 +35,140 @@ function json(obj, status = 200) {
     status,
     headers: { "Content-Type": "application/json", ...corsHeaders() },
   });
+}
+
+// ---------- Transcrição de áudio via Groq (Whisper) ----------
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function transcribeWithGroq(env, audioB64, mime) {
+  const bytes = base64ToBytes(audioB64);
+  const ext = mime.includes("mp4") ? "mp4" : mime.includes("ogg") ? "ogg" : "webm";
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: mime }), `audio.${ext}`);
+  form.append("model", "whisper-large-v3-turbo");
+  form.append("language", "pt");
+  form.append("response_format", "json");
+
+  const r = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
+    body: form,
+  });
+  if (!r.ok) throw new Error("groq_transcribe_http_" + r.status);
+  const data = await r.json();
+  return (data.text || "").trim();
+}
+
+// ---------- Voz unificada: vozes neurais da Microsoft Edge (protocolo não-oficial) ----------
+// Se isso quebrar um dia (a Microsoft muda o protocolo de vez em quando), o app já cai
+// sozinho pra voz nativa do navegador — não depende de reverter nada aqui às pressas.
+const EDGE_TRUSTED_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const EDGE_GEC_VERSION = "1-143.0.3650.75";
+const EDGE_VOICE = "pt-BR-AntonioNeural";
+const WIN_EPOCH_SECONDS = 11644473600n;
+
+async function sha256HexUpper(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+async function edgeSecMsGec() {
+  let ticks = BigInt(Math.floor(Date.now() / 1000)) + WIN_EPOCH_SECONDS;
+  ticks -= ticks % 300n; // arredonda pra janela de 5 min
+  const filetimeTicks = ticks * 10000000n;
+  return await sha256HexUpper(filetimeTicks.toString() + EDGE_TRUSTED_TOKEN);
+}
+
+function randHex(numBytes) {
+  const arr = new Uint8Array(numBytes);
+  crypto.getRandomValues(arr);
+  return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function xmlEscape(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function synthesizeEdgeTts(text) {
+  const gec = await edgeSecMsGec();
+  const connId = randHex(16);
+  const url =
+    `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` +
+    `?TrustedClientToken=${EDGE_TRUSTED_TOKEN}&Sec-MS-GEC=${gec}&Sec-MS-GEC-Version=${EDGE_GEC_VERSION}&ConnectionId=${connId}`;
+
+  const upgradeResp = await fetch(url, { headers: { Upgrade: "websocket" } });
+  const ws = upgradeResp.webSocket;
+  if (!ws) throw new Error("edge_tts_no_websocket");
+  ws.accept();
+
+  const audioChunks = [];
+  let settled = false;
+
+  const donePromise = new Promise((resolve, reject) => {
+    ws.addEventListener("message", (event) => {
+      const data = event.data;
+      if (typeof data === "string") {
+        if (data.includes("Path:turn.end")) {
+          settled = true;
+          resolve();
+        }
+      } else {
+        const buf = new Uint8Array(data);
+        const headerLen = (buf[0] << 8) | buf[1];
+        audioChunks.push(buf.slice(2 + headerLen));
+      }
+    });
+    ws.addEventListener("close", () => { if (!settled) reject(new Error("edge_tts_closed_early")); });
+    ws.addEventListener("error", () => { if (!settled) reject(new Error("edge_tts_ws_error")); });
+  });
+
+  const now = new Date().toUTCString();
+  const speechConfig =
+    `X-Timestamp:${now}\r\n` +
+    `Content-Type:application/json; charset=utf-8\r\n` +
+    `Path:speech.config\r\n\r\n` +
+    `{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}`;
+
+  const reqId = randHex(16);
+  const ssml =
+    `X-RequestId:${reqId}\r\n` +
+    `Content-Type:application/ssml+xml\r\n` +
+    `X-Timestamp:${now}\r\n` +
+    `Path:ssml\r\n\r\n` +
+    `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
+    `<voice name='${EDGE_VOICE}'><prosody rate='+2%' pitch='+0Hz'>${xmlEscape(text)}</prosody></voice></speak>`;
+
+  ws.send(speechConfig);
+  ws.send(ssml);
+
+  await Promise.race([
+    donePromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("edge_tts_timeout")), 12000)),
+  ]);
+
+  try { ws.close(); } catch {}
+
+  if (audioChunks.length === 0) throw new Error("edge_tts_no_audio");
+  const total = audioChunks.reduce((s, c) => s + c.length, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const c of audioChunks) { merged.set(c, offset); offset += c.length; }
+
+  return bytesToBase64(merged);
 }
 
 function chatSystemPrompt(petState) {
@@ -415,6 +551,28 @@ export default {
       const data = body.data || {};
       await env.COMPANION_KV.put(storageKey, JSON.stringify(data));
       return json({ ok: true });
+    }
+
+    // ---- transcrição de áudio (Groq Whisper) — usado no modo "toque para falar" ----
+    if (mode === "transcribe") {
+      try {
+        if (!body.audio_b64) return json({ error: "audio_required" }, 400);
+        const text = await transcribeWithGroq(env, body.audio_b64, body.mime || "audio/webm");
+        return json({ text });
+      } catch (err) {
+        return json({ error: "transcribe_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+
+    // ---- voz unificada (Microsoft Edge neural, não-oficial) — com fallback automático no app ----
+    if (mode === "tts") {
+      try {
+        if (!body.text) return json({ error: "text_required" }, 400);
+        const audio_b64 = await synthesizeEdgeTts(body.text);
+        return json({ audio_b64 });
+      } catch (err) {
+        return json({ error: "tts_failed", detail: String(err.message || err) }, 502);
+      }
     }
 
     const { messages = [], petState = {}, companionState = {} } = body;

@@ -125,6 +125,7 @@
   <button id="handsFreeBtn" type="button" style="background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); font-size:12px; border-radius:20px; padding:6px 14px; cursor:pointer; margin-top:8px;">🎙️ mãos livres: desligado</button>
   <button id="resetMemBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:6px;">esquecer conversas e recomeçar</button>
   <button id="editProfileBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:4px;">editar o que ele sabe sobre mim</button>
+  <button id="voiceModeBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:4px;">voz: unificada</button>
 </div>
 
 <div class="setup hidden" id="profileEl">
@@ -470,14 +471,14 @@ function setCaption(who, text){
 
 // lógica original e simples: pega a primeira voz em português que o navegador tiver.
 // De propósito sem "caçar" a melhor voz — isso é o que muda de aparelho pra aparelho
-// e gera inconsistência. Aqui a regra é sempre a mesma em qualquer dispositivo.
+// e gera inconsistência. Usada como PLANO B, se a voz unificada abaixo falhar.
 function pickPtVoice(){
   const voices = speechSynthesis.getVoices();
   return voices.find(v=>v.lang && v.lang.toLowerCase().startsWith('pt')) || voices[0];
 }
 if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged = ()=>{}; }
 
-function speak(text){
+function speakBrowser(text){
   return new Promise(resolve=>{
     if(!('speechSynthesis' in window)){ resolve(); return; }
     const utter = new SpeechSynthesisUtterance(text);
@@ -494,6 +495,52 @@ function speak(text){
     utter.onerror = ()=>{ state.targetTalk = 0; resolve(); };
     speechSynthesis.speak(utter);
   });
+}
+
+// ---------- Voz unificada (Microsoft Edge neural, via Worker) ----------
+// Mesma voz em qualquer aparelho. Protocolo não-oficial: se falhar por qualquer
+// motivo, cai automaticamente pra voz do navegador (speakBrowser) nessa mesma fala,
+// sem travar o app e sem precisar mexer em nada.
+const EDGE_VOICE_OFF_KEY = 'raiz_edge_voice_off';
+function edgeVoiceEnabled(){ return localStorage.getItem(EDGE_VOICE_OFF_KEY) !== '1'; }
+
+function playBase64Audio(b64){
+  return new Promise((resolve, reject)=>{
+    const audio = new Audio('data:audio/mpeg;base64,' + b64);
+    let pulseTimer = null;
+    const cleanup = ()=>{ if(pulseTimer) clearInterval(pulseTimer); state.targetTalk = 0; };
+    audio.onplay = ()=>{ pulseTimer = setInterval(()=>{ state.targetTalk = 0.35 + Math.random()*0.45; }, 110); };
+    audio.onended = ()=>{ cleanup(); resolve(); };
+    audio.onerror = ()=>{ cleanup(); reject(new Error('audio_playback_failed')); };
+    audio.play().catch(err=>{ cleanup(); reject(err); });
+  });
+}
+
+async function speakEdge(text){
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(!workerUrl) throw new Error('no_worker');
+  const resp = await fetch(workerUrl, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ mode:'tts', text })
+  });
+  if(!resp.ok) throw new Error('tts_http_' + resp.status);
+  const data = await resp.json();
+  if(!data || !data.audio_b64) throw new Error('tts_empty');
+  await playBase64Audio(data.audio_b64);
+}
+
+async function speak(text){
+  if(edgeVoiceEnabled()){
+    try{
+      await speakEdge(text);
+      return;
+    }catch(err){
+      console.warn('Voz unificada falhou, caindo pro plano B (voz do navegador):', err);
+      // segue pro plano B automaticamente, sem interromper a conversa
+    }
+  }
+  await speakBrowser(text);
 }
 
 async function updateMemory(workerUrl){
@@ -700,13 +747,133 @@ function initRecognition(){
   };
 }
 
-micBtn.addEventListener('click', ()=>{
-  if(!recognition) return;
-  if(listening){ recognition.stop(); return; }
-  awaitingCommand = false;
-  try{ recognition.start(); }catch(e){
-    hint.textContent = 'toque de novo em 1s';
+/* ---------- Gravação + transcrição via Groq (Whisper) no modo "toque para falar" ----------
+   Troca o reconhecimento nativo do navegador (lento e inconsistente no Android) por
+   gravar o áudio e mandar pro mesmo Worker que já responde as perguntas — mais rápido
+   e igual em qualquer aparelho. O modo "mãos livres" continua usando o reconhecimento
+   nativo (ele precisa ficar ouvindo direto a palavra "jarbas", que é outro problema). */
+let mediaRecorder = null;
+let audioChunks = [];
+let silenceCheckRAF = null;
+let recordAudioCtx = null;
+
+function blobToBase64(blob){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onloadend = ()=> resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function startTapRecording(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    audioChunks = [];
+    const mimeType = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+    mediaRecorder.ondataavailable = (e)=>{ if(e.data && e.data.size>0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = ()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      const blob = new Blob(audioChunks, { type: mimeType });
+      finishTapRecording(blob, mimeType);
+    };
+    mediaRecorder.start();
+
+    listening = true;
+    micBtn.classList.add('on');
+    setEmotion('neutro');
+    hint.textContent = 'ouvindo...';
+
+    const startedAt = Date.now();
+    recordAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = recordAudioCtx.createMediaStreamSource(stream);
+    const analyser = recordAudioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    let silenceStart = null;
+    const SILENCE_RMS = 8, SILENCE_MS = 1200, MIN_MS = 600, MAX_MS = 15000;
+
+    const check = ()=>{
+      if(!mediaRecorder || mediaRecorder.state !== 'recording') return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for(let i=0;i<data.length;i++){ const v = data[i]-128; sum += v*v; }
+      const rms = Math.sqrt(sum/data.length);
+      const elapsed = Date.now() - startedAt;
+
+      if(rms < SILENCE_RMS){
+        if(silenceStart === null) silenceStart = Date.now();
+        else if(elapsed > MIN_MS && Date.now() - silenceStart > SILENCE_MS){
+          stopTapRecording();
+          return;
+        }
+      } else {
+        silenceStart = null;
+      }
+      if(elapsed > MAX_MS){ stopTapRecording(); return; }
+      silenceCheckRAF = requestAnimationFrame(check);
+    };
+    silenceCheckRAF = requestAnimationFrame(check);
+  }catch(err){
+    hint.textContent = 'sem acesso ao microfone';
   }
+}
+
+function stopTapRecording(){
+  if(silenceCheckRAF){ cancelAnimationFrame(silenceCheckRAF); silenceCheckRAF = null; }
+  if(recordAudioCtx){ try{ recordAudioCtx.close(); }catch(e){} recordAudioCtx = null; }
+  listening = false;
+  micBtn.classList.remove('on');
+  if(mediaRecorder && mediaRecorder.state === 'recording'){
+    mediaRecorder.stop();
+  }
+}
+
+async function finishTapRecording(blob, mimeType){
+  if(blob.size < 500){ // silêncio total, nada gravado de fato
+    hint.textContent = 'toque para falar';
+    return;
+  }
+  hint.textContent = 'transcrevendo...';
+  setEmotion('pensando');
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  try{
+    const base64 = await blobToBase64(blob);
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'transcribe', audio_b64: base64, mime: mimeType })
+    });
+    const data = await resp.json();
+    const text = (data && data.text || '').trim();
+    setEmotion('neutro');
+    if(!text){
+      hint.textContent = 'não peguei, toque de novo';
+      return;
+    }
+    setCaption('você', text);
+    askRaiz(text);
+  }catch(err){
+    setEmotion('neutro');
+    hint.textContent = 'falha na transcrição, toque de novo';
+  }
+}
+
+micBtn.addEventListener('click', ()=>{
+  if(handsFree){
+    if(!recognition) return;
+    if(listening){ recognition.stop(); return; }
+    awaitingCommand = false;
+    try{ recognition.start(); }catch(e){
+      hint.textContent = 'toque de novo em 1s';
+    }
+    return;
+  }
+  if(listening){ stopTapRecording(); return; }
+  startTapRecording();
 });
 
 const handsFreeBtn = document.getElementById('handsFreeBtn');
@@ -813,6 +980,16 @@ document.getElementById('profileSaveBtn').addEventListener('click', async ()=>{
   profileEl.classList.add('hidden');
   setCaption('jarbas', 'Anotado, vou lembrar disso.');
 });
+
+const voiceModeBtn = document.getElementById('voiceModeBtn');
+function updateVoiceModeBtn(){
+  voiceModeBtn.textContent = edgeVoiceEnabled() ? 'voz: unificada' : 'voz: padrão do aparelho';
+}
+voiceModeBtn.addEventListener('click', ()=>{
+  localStorage.setItem(EDGE_VOICE_OFF_KEY, edgeVoiceEnabled() ? '1' : '0');
+  updateVoiceModeBtn();
+});
+updateVoiceModeBtn();
 
 resize();
 
