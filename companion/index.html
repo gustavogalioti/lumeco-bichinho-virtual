@@ -812,10 +812,11 @@ async function startTapRecording(){
       ? 'audio/webm;codecs=opus' : 'audio/webm';
     mediaRecorder = new MediaRecorder(stream, { mimeType });
     mediaRecorder.ondataavailable = (e)=>{ if(e.data && e.data.size>0) audioChunks.push(e.data); };
+    let spokeAtLeastOnce = false;
     mediaRecorder.onstop = ()=>{
       stream.getTracks().forEach(t=>t.stop());
       const blob = new Blob(audioChunks, { type: mimeType });
-      finishTapRecording(blob, mimeType, recordMaxRms);
+      finishTapRecording(blob, mimeType, spokeAtLeastOnce);
     };
     mediaRecorder.start();
 
@@ -832,8 +833,17 @@ async function startTapRecording(){
     analyser.fftSize = 512;
     source.connect(analyser);
     const data = new Uint8Array(analyser.frequencyBinCount);
+
+    // Calibra o limiar de acordo com o ruído de fundo de CADA aparelho/microfone,
+    // em vez de um número fixo (microfones variam muito de sensibilidade entre celulares).
+    const CALIBRATION_MS = 350;
+    let noiseSamples = [];
+    let noiseFloor = null;
+    let speechThreshold = null;
+    let silenceThreshold = null;
+
     let silenceStart = null;
-    const SILENCE_RMS = 8, SILENCE_MS = 1200, MIN_MS = 900, MAX_MS = 15000;
+    const SILENCE_MS = 1200, MAX_MS = 15000;
 
     const check = ()=>{
       if(!mediaRecorder || mediaRecorder.state !== 'recording') return;
@@ -844,15 +854,34 @@ async function startTapRecording(){
       if(rms > recordMaxRms) recordMaxRms = rms;
       const elapsed = Date.now() - startedAt;
 
-      if(rms < SILENCE_RMS){
-        if(silenceStart === null) silenceStart = Date.now();
-        else if(elapsed > MIN_MS && Date.now() - silenceStart > SILENCE_MS){
-          stopTapRecording();
-          return;
+      if(noiseFloor === null){
+        // fase de calibração: só escuta o ruído de fundo, não decide nada ainda
+        noiseSamples.push(rms);
+        if(elapsed >= CALIBRATION_MS){
+          noiseFloor = noiseSamples.reduce((a,b)=>a+b,0) / noiseSamples.length;
+          speechThreshold = noiseFloor + 5;
+          silenceThreshold = noiseFloor + 2.5;
         }
-      } else {
-        silenceStart = null;
+        silenceCheckRAF = requestAnimationFrame(check);
+        return;
       }
+
+      if(rms > speechThreshold) spokeAtLeastOnce = true;
+
+      // só começa a contar "silêncio pra encerrar" depois que a pessoa já falou alguma coisa —
+      // assim, demorar pra começar a falar nunca cancela a gravação sozinho.
+      if(spokeAtLeastOnce){
+        if(rms < silenceThreshold){
+          if(silenceStart === null) silenceStart = Date.now();
+          else if(Date.now() - silenceStart > SILENCE_MS){
+            stopTapRecording();
+            return;
+          }
+        } else {
+          silenceStart = null;
+        }
+      }
+
       if(elapsed > MAX_MS){ stopTapRecording(); return; }
       silenceCheckRAF = requestAnimationFrame(check);
     };
@@ -872,11 +901,10 @@ function stopTapRecording(){
   }
 }
 
-async function finishTapRecording(blob, mimeType, maxRms){
-  // Sem volume de voz de verdade detectado (silêncio/ruído de fundo) — não manda pro Whisper,
-  // porque com áudio fraco/vazio ele às vezes "inventa" uma frase do nada.
-  const SPEECH_RMS_MIN = 14;
-  if(blob.size < 500 || (typeof maxRms === 'number' && maxRms < SPEECH_RMS_MIN)){
+async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
+  // Nunca detectou volume de voz de verdade (silêncio/ruído de fundo só) — não manda pro
+  // Whisper, porque com áudio vazio ele às vezes "inventa" uma frase do nada.
+  if(blob.size < 500 || !spokeAtLeastOnce){
     hint.textContent = 'não peguei, toque de novo';
     return;
   }
