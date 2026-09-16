@@ -792,6 +792,7 @@ let mediaRecorder = null;
 let audioChunks = [];
 let silenceCheckRAF = null;
 let recordAudioCtx = null;
+let recordMaxRms = 0;
 
 function blobToBase64(blob){
   return new Promise((resolve, reject)=>{
@@ -806,6 +807,7 @@ async function startTapRecording(){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
     audioChunks = [];
+    recordMaxRms = 0;
     const mimeType = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
       ? 'audio/webm;codecs=opus' : 'audio/webm';
     mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -813,7 +815,7 @@ async function startTapRecording(){
     mediaRecorder.onstop = ()=>{
       stream.getTracks().forEach(t=>t.stop());
       const blob = new Blob(audioChunks, { type: mimeType });
-      finishTapRecording(blob, mimeType);
+      finishTapRecording(blob, mimeType, recordMaxRms);
     };
     mediaRecorder.start();
 
@@ -824,13 +826,14 @@ async function startTapRecording(){
 
     const startedAt = Date.now();
     recordAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(recordAudioCtx.state === 'suspended'){ recordAudioCtx.resume().catch(()=>{}); } // Chrome Android às vezes inicia suspenso
     const source = recordAudioCtx.createMediaStreamSource(stream);
     const analyser = recordAudioCtx.createAnalyser();
     analyser.fftSize = 512;
     source.connect(analyser);
     const data = new Uint8Array(analyser.frequencyBinCount);
     let silenceStart = null;
-    const SILENCE_RMS = 8, SILENCE_MS = 1200, MIN_MS = 600, MAX_MS = 15000;
+    const SILENCE_RMS = 8, SILENCE_MS = 1200, MIN_MS = 900, MAX_MS = 15000;
 
     const check = ()=>{
       if(!mediaRecorder || mediaRecorder.state !== 'recording') return;
@@ -838,6 +841,7 @@ async function startTapRecording(){
       let sum = 0;
       for(let i=0;i<data.length;i++){ const v = data[i]-128; sum += v*v; }
       const rms = Math.sqrt(sum/data.length);
+      if(rms > recordMaxRms) recordMaxRms = rms;
       const elapsed = Date.now() - startedAt;
 
       if(rms < SILENCE_RMS){
@@ -868,9 +872,12 @@ function stopTapRecording(){
   }
 }
 
-async function finishTapRecording(blob, mimeType){
-  if(blob.size < 500){ // silêncio total, nada gravado de fato
-    hint.textContent = 'toque para falar';
+async function finishTapRecording(blob, mimeType, maxRms){
+  // Sem volume de voz de verdade detectado (silêncio/ruído de fundo) — não manda pro Whisper,
+  // porque com áudio fraco/vazio ele às vezes "inventa" uma frase do nada.
+  const SPEECH_RMS_MIN = 14;
+  if(blob.size < 500 || (typeof maxRms === 'number' && maxRms < SPEECH_RMS_MIN)){
+    hint.textContent = 'não peguei, toque de novo';
     return;
   }
   hint.textContent = 'transcrevendo...';
