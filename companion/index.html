@@ -159,6 +159,11 @@
         <p id="locationStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">ainda não configurada</p>
         <button id="locationBtn" type="button" class="btn-secondary" style="margin-top:0;">permitir localização</button>
       </div>
+      <div style="margin:4px 0 16px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <label>Notificações</label>
+        <p id="pushStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">desativadas</p>
+        <button id="pushBtn" type="button" class="btn-secondary" style="margin-top:0;">ativar notificações</button>
+      </div>
     </div>
 
     <div id="routinesTab" class="hidden">
@@ -784,6 +789,87 @@ function updateLocation(){
 }
 locationBtn.addEventListener('click', updateLocation);
 
+/* ---------- Notificações push (Frente 5) ----------
+   Também só ativa com ação explícita da pessoa (botão), nunca sozinho.
+   Registra o service worker, pede permissão, assina o push com a chave
+   pública VAPID do Worker, e manda a subscription pro Worker guardar. */
+const pushBtn = document.getElementById('pushBtn');
+const pushStatus = document.getElementById('pushStatus');
+
+function pushSupported(){
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+function updatePushStatus(){
+  if(!pushSupported()){
+    pushStatus.textContent = 'seu navegador não suporta notificações push';
+    pushBtn.disabled = true;
+    return;
+  }
+  if(Notification.permission === 'denied'){
+    pushStatus.textContent = 'permissão negada nas configurações do navegador';
+    pushBtn.textContent = 'ativar notificações';
+  } else if(Notification.permission === 'granted'){
+    pushStatus.textContent = 'ativadas';
+    pushBtn.textContent = 'reativar notificações';
+  } else {
+    pushStatus.textContent = 'desativadas';
+    pushBtn.textContent = 'ativar notificações';
+  }
+}
+
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for(let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function enablePush(){
+  if(!pushSupported()){
+    pushStatus.textContent = 'seu navegador não suporta notificações push';
+    return;
+  }
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  const syncKey = getSyncKey();
+  if(!workerUrl || !syncKey){
+    pushStatus.textContent = 'configure o Worker e a senha de sincronização primeiro';
+    return;
+  }
+  try{
+    pushStatus.textContent = 'ativando...';
+    const reg = await navigator.serviceWorker.register('sw.js');
+    const permission = await Notification.requestPermission();
+    if(permission !== 'granted'){
+      updatePushStatus();
+      return;
+    }
+    const keyResp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'vapid_public_key' })
+    });
+    const keyData = await keyResp.json();
+    if(!keyData || !keyData.publicKey) throw new Error('worker_sem_chave_vapid');
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(keyData.publicKey),
+    });
+    await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'save_push_subscription', key: syncKey, subscription: subscription.toJSON() })
+    });
+    updatePushStatus();
+  }catch(err){
+    console.error('Falha ao ativar notificações:', err);
+    pushStatus.textContent = 'não consegui ativar agora, tenta de novo';
+  }
+}
+pushBtn.addEventListener('click', enablePush);
+
 async function askRaiz(userText, isRetry){
   if(!isRetry && handsFree) startConversationWindow();
   setEmotion('pensando');
@@ -1382,6 +1468,7 @@ editProfileBtn.addEventListener('click', ()=>{
   ensureKnowledge();
   for(const cat in knowledgeFields) knowledgeFields[cat].value = mem.knowledge[cat] || '';
   updateLocationStatus();
+  updatePushStatus();
   showConfigTab('knowledge');
   profileEl.classList.remove('hidden');
 });

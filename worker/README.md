@@ -34,3 +34,30 @@ O site (GitHub Pages) nunca vê a chave — só fala com este Worker.
 
 O arquivo `index.js` restringe quem pode chamar o Worker (`ALLOWED_ORIGIN`).
 Se o site mudar de endereço, atualize essa constante e rode `wrangler deploy` de novo.
+
+## Notificações push (opcional)
+
+Pra ativar os avisos proativos (compromisso chegando, conta vencendo, tarefa
+parada), precisa gerar um par de chaves VAPID e configurar 3 secrets. Isso é
+feito uma vez só, local, e a chave privada nunca passa pelo Git:
+
+```
+cd worker
+node generate-vapid-keys.js
+```
+
+O script imprime `VAPID_PUBLIC_KEY` e `VAPID_PRIVATE_KEY`. Cole cada um em:
+
+```
+wrangler secret put VAPID_PUBLIC_KEY
+wrangler secret put VAPID_PRIVATE_KEY
+wrangler secret put VAPID_SUBJECT
+```
+
+`VAPID_SUBJECT` é um contato seu, no formato `mailto:seuemail@exemplo.com`
+(alguns serviços de push usam isso pra te avisar se algo der errado).
+
+O `wrangler.toml` já tem um Cron Trigger (`[triggers]`) rodando a cada 15
+minutos — depois do primeiro `wrangler deploy` com os secrets configurados,
+ele já começa a rodar sozinho. Sem os 3 secrets, o cron roda mas não faz
+nada (falha silenciosa, sem gastar chamada à Groq).

@@ -5,3 +5,8 @@ compatibility_date = "2026-01-01"
 [[kv_namespaces]]
 binding = "COMPANION_KV"
 id = "c6c00da3e3504c30bf56156452611f50"
+
+# Notificações push (Frente 5): roda scheduled() a cada 15 min pra decidir
+# se há algo pra avisar (compromisso, conta, tarefa) e disparar o push.
+[triggers]
+crons = ["*/15 * * * *"]

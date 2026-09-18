@@ -14,14 +14,21 @@
  *   { mode: "migrate_knowledge", profile: "..." }
  *   { mode: "reverse_geocode",  lat: 0, lon: 0 }
  *   { mode: "routine",          ingredients: [...], links: [...], companionState: {...} }
+ *   { mode: "vapid_public_key" }
+ *   { mode: "save_push_subscription", key: "...", subscription: {...} }
  *
- * memory_load / memory_save exigem `key` (uma senha simples que só você
- * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
- * para guardar a memória do companheiro sincronizada entre aparelhos.
+ * memory_load / memory_save / save_push_subscription exigem `key` (uma senha
+ * simples que só você conhece) batendo com o secret SYNC_KEY, e usam o KV
+ * binding COMPANION_KV pra guardar dado sincronizado entre aparelhos.
  *
  * Se o secret TAVILY_API_KEY estiver configurado, o modo "companion" ganha
  * acesso a uma ferramenta de busca na web (Tavily) — o próprio modelo decide
  * quando precisa pesquisar algo atual antes de responder.
+ *
+ * Notificações push (Frente 5) exigem os secrets VAPID_PUBLIC_KEY,
+ * VAPID_PRIVATE_KEY e VAPID_SUBJECT (gerados com generate-vapid-keys.js) e
+ * o Cron Trigger em [triggers] no wrangler.toml, que chama scheduled() a
+ * cada 15 min pra decidir se há algo pra avisar e disparar o push.
  */
 
 const ALLOWED_ORIGIN = "https://gustavogalioti.github.io";
@@ -721,6 +728,184 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   return msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?";
 }
 
+// ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
+// Implementação manual via crypto.subtle (Cloudflare Worker não roda a lib "web-push" do npm).
+function base64UrlToBytes(b64url) {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+  return base64ToBytes(b64 + pad);
+}
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function concatBytes(...arrays) {
+  const total = arrays.reduce((s, a) => s + a.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const a of arrays) { out.set(a, offset); offset += a.length; }
+  return out;
+}
+
+async function importVapidPrivateKey(env) {
+  const pub = base64UrlToBytes(env.VAPID_PUBLIC_KEY); // 65 bytes: 0x04 || X(32) || Y(32)
+  const jwk = {
+    kty: "EC",
+    crv: "P-256",
+    x: bytesToBase64Url(pub.slice(1, 33)),
+    y: bytesToBase64Url(pub.slice(33, 65)),
+    d: env.VAPID_PRIVATE_KEY,
+    ext: true,
+  };
+  return crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+}
+
+async function generateVapidAuthHeader(env, endpoint) {
+  const audience = new URL(endpoint).origin;
+  const header = { alg: "ES256", typ: "JWT" };
+  const payload = {
+    aud: audience,
+    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
+    sub: env.VAPID_SUBJECT || "mailto:contato@example.com",
+  };
+  const enc = new TextEncoder();
+  const unsigned =
+    bytesToBase64Url(enc.encode(JSON.stringify(header))) + "." + bytesToBase64Url(enc.encode(JSON.stringify(payload)));
+  const key = await importVapidPrivateKey(env);
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(unsigned));
+  const jwt = `${unsigned}.${bytesToBase64Url(new Uint8Array(sig))}`;
+  return `vapid t=${jwt}, k=${env.VAPID_PUBLIC_KEY}`;
+}
+
+async function encryptWebPushPayload(subscription, payloadObj) {
+  const uaPublic = base64UrlToBytes(subscription.keys.p256dh); // 65 bytes
+  const authSecret = base64UrlToBytes(subscription.keys.auth); // 16 bytes
+
+  const serverKeyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const asPublicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeyPair.publicKey));
+
+  const uaPublicKey = await crypto.subtle.importKey("raw", uaPublic, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const sharedSecret = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "ECDH", public: uaPublicKey }, serverKeyPair.privateKey, 256)
+  );
+
+  const enc = new TextEncoder();
+  const authInfo = concatBytes(enc.encode("WebPush: info\0"), uaPublic, asPublicRaw);
+  const sharedSecretKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveBits"]);
+  const ikm = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: authSecret, info: authInfo }, sharedSecretKey, 256)
+  );
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const ikmKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  const cek = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("Content-Encoding: aes128gcm\0") },
+      ikmKey,
+      128
+    )
+  );
+  const nonce = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("Content-Encoding: nonce\0") },
+      ikmKey,
+      96
+    )
+  );
+
+  const padded = concatBytes(enc.encode(JSON.stringify(payloadObj)), new Uint8Array([2])); // delimitador de fim de registro
+  const aesKey = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aesKey, padded));
+
+  const rs = new Uint8Array(4);
+  new DataView(rs.buffer).setUint32(0, 4096, false);
+  const idlen = new Uint8Array([asPublicRaw.length]);
+
+  return concatBytes(salt, rs, idlen, asPublicRaw, encrypted);
+}
+
+async function sendWebPush(env, subscription, payloadObj, ttlSeconds = 60) {
+  const body = await encryptWebPushPayload(subscription, payloadObj);
+  const authHeader = await generateVapidAuthHeader(env, subscription.endpoint);
+  const res = await fetch(subscription.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Encoding": "aes128gcm",
+      TTL: String(ttlSeconds),
+      Authorization: authHeader,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`push_send_failed_${res.status}: ${detail.slice(0, 200)}`);
+  }
+}
+
+const PUSH_SUBSCRIPTION_KEY = "push:subscription";
+const PUSH_NOTIFY_STATE_KEY = "push:notify_state";
+const PUSH_DEDUPE_MS = 3 * 60 * 60 * 1000; // não repete o mesmo aviso por 3h
+
+const NOTIFICATION_DECISION_PROMPT = `Você é o sistema de avisos proativos do Jarbas, um companheiro de voz. Você recebe abaixo o snapshot atual da agenda, tarefas e contas da pessoa. Decida se HÁ ALGO que mereça um aviso AGORA (um compromisso começando em breve, uma conta vencendo hoje ou já vencida, uma tarefa importante parada há muito tempo). Seja conservador — só avise algo que realmente faça sentido avisar proativamente agora, não liste tudo que existe.
+
+Se não houver nada que mereça aviso agora, responda exatamente: {"notify":false}
+
+Se houver algo, responda em JSON puro, numa única linha, sem markdown, exatamente neste formato:
+{"notify":true,"signature":"identificador curto e estável do que está sendo avisado","title":"título curto pra notificação","body":"texto curto e natural, no máximo 1 frase, como o Jarbas falaria"}
+
+Nunca invente informação que não esteja no snapshot abaixo.`;
+
+async function decideNotification(env) {
+  let snapshot;
+  try {
+    snapshot = await callPainelSnapshot(env);
+  } catch {
+    return null;
+  }
+
+  const raw = await callGroq(env, NOTIFICATION_DECISION_PROMPT, [{ role: "user", content: snapshot }], 250);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+  } catch {
+    return null;
+  }
+  if (!parsed || !parsed.notify || !parsed.signature || !parsed.title || !parsed.body) return null;
+
+  const previousRaw = await env.COMPANION_KV.get(PUSH_NOTIFY_STATE_KEY);
+  const previous = previousRaw ? JSON.parse(previousRaw) : { lastSignature: "", notifiedAt: 0 };
+  if (previous.lastSignature === parsed.signature && Date.now() - previous.notifiedAt < PUSH_DEDUPE_MS) {
+    return null;
+  }
+
+  await env.COMPANION_KV.put(PUSH_NOTIFY_STATE_KEY, JSON.stringify({ lastSignature: parsed.signature, notifiedAt: Date.now() }));
+  return { title: parsed.title, body: parsed.body };
+}
+
+async function runScheduledPush(env) {
+  if (!env.COMPANION_KV || !env.PAINEL_API_KEY || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
+  const subRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
+  if (!subRaw) return;
+  let subscription;
+  try {
+    subscription = JSON.parse(subRaw);
+  } catch {
+    return;
+  }
+
+  const notification = await decideNotification(env);
+  if (!notification) return;
+
+  try {
+    await sendWebPush(env, subscription, notification);
+  } catch (err) {
+    console.error("push_send_failed", err);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -758,6 +943,19 @@ export default {
       // memory_save
       const data = body.data || {};
       await env.COMPANION_KV.put(storageKey, JSON.stringify(data));
+      return json({ ok: true });
+    }
+
+    // ---- notificações push: chave pública (não sensível) e subscription (protegida) ----
+    if (mode === "vapid_public_key") {
+      if (!env.VAPID_PUBLIC_KEY) return json({ error: "vapid_not_configured" }, 500);
+      return json({ publicKey: env.VAPID_PUBLIC_KEY });
+    }
+    if (mode === "save_push_subscription") {
+      if (!env.COMPANION_KV) return json({ error: "kv_not_configured" }, 500);
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!body.subscription || !body.subscription.endpoint) return json({ error: "subscription_required" }, 400);
+      await env.COMPANION_KV.put(PUSH_SUBSCRIPTION_KEY, JSON.stringify(body.subscription));
       return json({ ok: true });
     }
 
@@ -877,6 +1075,12 @@ export default {
     } catch (err) {
       return json({ error: "upstream_error", detail: String(err.message || err) }, 502);
     }
+  },
+
+  // Cron Trigger nativo do Cloudflare (ver [triggers] no wrangler.toml) — roda a cada
+  // 15 min, consulta o painel e dispara notificação push se houver algo pra avisar.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runScheduledPush(env));
   },
 };
 // deploy automatico testado em 2026-08-19T18:56:14Z
