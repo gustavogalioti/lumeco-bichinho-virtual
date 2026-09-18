@@ -692,17 +692,31 @@ async function speak(text){
 
 async function updateMemory(workerUrl){
   try{
+    ensureKnowledge();
     const resp = await fetch(workerUrl, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ mode:'summary', messages: history.slice(-16), existingMemory: mem.memory || '' })
+      body: JSON.stringify({
+        mode:'summary',
+        messages: history.slice(-16),
+        existingMemory: mem.memory || '',
+        existingSobreJarbas: mem.knowledge.sobre_jarbas || ''
+      })
     });
     if(!resp.ok) return;
     const data = await resp.json();
+    let changed = false;
     if(data && data.reply){
       mem.memory = data.reply;
       history = history.slice(-HISTORY_KEEP_AFTER_SUMMARY);
       mem.history = history;
+      changed = true;
+    }
+    if(data && typeof data.sobre_jarbas === 'string' && data.sobre_jarbas){
+      mem.knowledge.sobre_jarbas = data.sobre_jarbas;
+      changed = true;
+    }
+    if(changed){
       saveMemoryState();
       pushMemoryToServer(workerUrl);
     }
