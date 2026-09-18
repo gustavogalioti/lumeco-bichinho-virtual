@@ -13,6 +13,7 @@
  *   { mode: "classify_fact",    fact: "...", knowledge: {...} }
  *   { mode: "migrate_knowledge", profile: "..." }
  *   { mode: "reverse_geocode",  lat: 0, lon: 0 }
+ *   { mode: "routine",          ingredients: [...], links: [...], companionState: {...} }
  *
  * memory_load / memory_save exigem `key` (uma senha simples que só você
  * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
@@ -545,6 +546,96 @@ async function callTavily(env, query) {
   return text.trim().slice(0, 1200) || "A busca não encontrou nada relevante.";
 }
 
+// ---------- Rotinas: junta vários ingredientes numa fala só (Frente 3) ----------
+function stripHtmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchLinkExcerpt(url) {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (JarbasCompanion routine fetch)" } });
+    if (!res.ok) return `Conteúdo de ${url}: não consegui acessar (erro ${res.status}).`;
+    const html = await res.text();
+    const text = stripHtmlToText(html).slice(0, 1500);
+    return `Conteúdo de ${url}:\n${text || "(página sem texto legível)"}`;
+  } catch (err) {
+    return `Conteúdo de ${url}: não consegui acessar (${String(err.message || err)}).`;
+  }
+}
+
+async function collectRoutineIngredients(env, ingredients, links, companionState) {
+  const canSearch = !!env.TAVILY_API_KEY;
+  const canPainel = !!env.PAINEL_API_KEY;
+  const list = Array.isArray(ingredients) ? ingredients : [];
+  const parts = [];
+
+  if (list.includes("clima")) {
+    const cidade = companionState?.location?.cidade || "";
+    if (cidade) {
+      try { parts.push(`Clima:\n${await callWeather(cidade)}`); }
+      catch (err) { parts.push(`Clima: não consegui consultar agora (${String(err.message || err)}).`); }
+    } else {
+      parts.push("Clima: localização da pessoa não configurada, não foi possível consultar.");
+    }
+  }
+
+  if (list.includes("noticias")) {
+    if (canSearch) {
+      try { parts.push(`Notícias do mundo:\n${await callTavily(env, "principais notícias do mundo hoje")}`); }
+      catch (err) { parts.push(`Notícias: não consegui buscar agora (${String(err.message || err)}).`); }
+    } else {
+      parts.push("Notícias: busca não configurada.");
+    }
+  }
+
+  if (list.includes("agenda") || list.includes("tarefas") || list.includes("contas")) {
+    if (canPainel) {
+      try { parts.push(`Painel pessoal (agenda, tarefas e contas):\n${await callPainelSnapshot(env)}`); }
+      catch (err) { parts.push(`Painel pessoal: não consegui consultar agora (${String(err.message || err)}).`); }
+    } else {
+      parts.push("Painel pessoal: integração não configurada.");
+    }
+  }
+
+  if (Array.isArray(links) && links.length) {
+    for (const url of links.slice(0, 5)) {
+      parts.push(await fetchLinkExcerpt(url));
+    }
+  }
+
+  return parts.join("\n\n");
+}
+
+const ROUTINE_SUMMARY_PROMPT = `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso. Você vai receber informações brutas reunidas de várias fontes (clima, notícias, agenda, tarefas, contas, conteúdo de links) pra uma rotina que a pessoa pediu com uma palavra-gatilho (ex: "bom dia"). Junte tudo isso numa fala só, corrida e natural, como se estivesse contando pra ela num fôlego só — nunca uma lista seca de tópicos, nunca mencione as fontes técnicas (não diga "segundo o painel" ou "a busca retornou"). Se alguma fonte disser que falhou ou não está configurada, simplesmente não mencione essa parte, sem se desculpar por isso.
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta.
+Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto da fala"}
+Nunca deixe o JSON incompleto.`;
+
+async function runRoutine(env, ingredients, links, companionState) {
+  const raw = await collectRoutineIngredients(env, ingredients, links, companionState || {});
+  const content = raw || "Nenhuma informação disponível pra essa rotina agora.";
+  const result = await callGroq(env, ROUTINE_SUMMARY_PROMPT, [{ role: "user", content }], 450);
+  const clean = result.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+    if (!parsed.reply) throw new Error("no_reply_field");
+  } catch {
+    parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+  }
+  if (!["neutro", "feliz", "pensando", "surpreso", "focado", "confirmado"].includes(parsed.emotion)) {
+    parsed.emotion = "neutro";
+  }
+  return parsed;
+}
+
 async function runTool(env, call, canSearch, canPainel, companionState = {}) {
   const name = call.function.name;
   let args = {};
@@ -686,6 +777,16 @@ export default {
         return json({ cidade });
       } catch (err) {
         return json({ error: "reverse_geocode_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+
+    // ---- rotinas: junta clima/notícias/agenda/tarefas/contas/links numa fala só ----
+    if (mode === "routine") {
+      try {
+        const parsed = await runRoutine(env, body.ingredients, body.links, body.companionState || {});
+        return json(parsed);
+      } catch (err) {
+        return json({ emotion: "neutro", reply: "Ih, tive um problema pra montar essa rotina agora. Pode tentar de novo?" });
       }
     }
 

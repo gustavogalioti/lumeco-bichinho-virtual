@@ -99,6 +99,12 @@
     background:transparent; border:1px solid rgba(255,255,255,0.2); color:var(--muted); margin-top:8px;
   }
   .setup-card label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
+  .hidden{ display:none !important; }
+  .setup-card .tab-btn{ flex:1; width:auto; padding:10px; border-radius:10px; border:1px solid rgba(0,224,255,0.2); background:transparent; color:var(--muted); font-family:'Manrope'; font-weight:700; font-size:13px; cursor:pointer; margin-top:0; }
+  .setup-card .tab-btn.active{ background:rgba(0,224,255,0.12); color:var(--text); border-color:rgba(0,224,255,0.4); }
+  .routine-card{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.08); }
+  .setup-card .routine-del{ width:auto; padding:6px 12px; margin-top:0; font-size:12px; }
+  .routine-check{ display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); }
 </style>
 </head>
 <body>
@@ -131,22 +137,52 @@
 <div class="setup hidden" id="profileEl">
   <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
     <h2>O que o Jarbas sabe sobre você</h2>
-    <p>Escreva aqui direto, por categoria. Isso tem prioridade sobre o que ele "aprende" sozinho nas conversas, e sincroniza entre seus aparelhos.</p>
-    <label for="knowledgeIdentidade">Identidade</label>
-    <textarea id="knowledgeIdentidade" rows="3" placeholder="Nome, data de nascimento, onde mora..."></textarea>
-    <label for="knowledgePessoas">Pessoas</label>
-    <textarea id="knowledgePessoas" rows="3" placeholder="Família, noiva, amigos — quem é quem..."></textarea>
-    <label for="knowledgeRotina">Rotina &amp; Preferências</label>
-    <textarea id="knowledgeRotina" rows="3" placeholder="Hábitos, preferências, o que evitar..."></textarea>
-    <label for="knowledgeTrabalho">Trabalho</label>
-    <textarea id="knowledgeTrabalho" rows="3" placeholder="Profissão, projetos, contexto profissional..."></textarea>
-    <label for="knowledgeOutros">Outros</label>
-    <textarea id="knowledgeOutros" rows="3" placeholder="Qualquer outra coisa que valha lembrar..."></textarea>
-    <div style="margin:4px 0 16px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
-      <label>Localização</label>
-      <p id="locationStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">ainda não configurada</p>
-      <button id="locationBtn" type="button" class="btn-secondary" style="margin-top:0;">permitir localização</button>
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      <button id="tabKnowledgeBtn" type="button" class="tab-btn active">Conhecimento</button>
+      <button id="tabRoutinesBtn" type="button" class="tab-btn">Rotinas de voz</button>
     </div>
+
+    <div id="knowledgeTab">
+      <p>Escreva aqui direto, por categoria. Isso tem prioridade sobre o que ele "aprende" sozinho nas conversas, e sincroniza entre seus aparelhos.</p>
+      <label for="knowledgeIdentidade">Identidade</label>
+      <textarea id="knowledgeIdentidade" rows="3" placeholder="Nome, data de nascimento, onde mora..."></textarea>
+      <label for="knowledgePessoas">Pessoas</label>
+      <textarea id="knowledgePessoas" rows="3" placeholder="Família, noiva, amigos — quem é quem..."></textarea>
+      <label for="knowledgeRotina">Rotina &amp; Preferências</label>
+      <textarea id="knowledgeRotina" rows="3" placeholder="Hábitos, preferências, o que evitar..."></textarea>
+      <label for="knowledgeTrabalho">Trabalho</label>
+      <textarea id="knowledgeTrabalho" rows="3" placeholder="Profissão, projetos, contexto profissional..."></textarea>
+      <label for="knowledgeOutros">Outros</label>
+      <textarea id="knowledgeOutros" rows="3" placeholder="Qualquer outra coisa que valha lembrar..."></textarea>
+      <div style="margin:4px 0 16px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <label>Localização</label>
+        <p id="locationStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">ainda não configurada</p>
+        <button id="locationBtn" type="button" class="btn-secondary" style="margin-top:0;">permitir localização</button>
+      </div>
+    </div>
+
+    <div id="routinesTab" class="hidden">
+      <p style="color:var(--muted); font-size:13px; margin:0 0 12px;">Diga o gatilho no começo da fala e o Jarbas responde juntando as fontes escolhidas numa fala só (ex: "bom dia" → clima + notícias + agenda).</p>
+      <div id="routinesList"></div>
+      <button id="routineAddToggleBtn" type="button" class="btn-secondary" style="margin-top:14px;">+ Nova rotina</button>
+      <div id="routineForm" class="hidden" style="margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.08);">
+        <label for="routineTrigger">Gatilho (palavra ou frase)</label>
+        <input type="text" id="routineTrigger" placeholder="Ex: bom dia">
+        <label>Ingredientes</label>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+          <label class="routine-check"><input type="checkbox" value="clima" class="routineIngredient"> Clima</label>
+          <label class="routine-check"><input type="checkbox" value="noticias" class="routineIngredient"> Notícias</label>
+          <label class="routine-check"><input type="checkbox" value="agenda" class="routineIngredient"> Agenda</label>
+          <label class="routine-check"><input type="checkbox" value="tarefas" class="routineIngredient"> Tarefas</label>
+          <label class="routine-check"><input type="checkbox" value="contas" class="routineIngredient"> Contas</label>
+        </div>
+        <label for="routineLinks">Links pra verificar (opcional, um por linha)</label>
+        <textarea id="routineLinks" rows="3" placeholder="https://..."></textarea>
+        <button id="routineSaveBtn" type="button">Salvar rotina</button>
+        <button id="routineCancelBtn" type="button" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+
     <button id="profileSaveBtn">Salvar</button>
     <button id="profileCancelBtn" class="btn-secondary">Cancelar</button>
   </div>
@@ -438,7 +474,7 @@ function loadMemoryState(){
     const raw = localStorage.getItem(MEMORY_KEY);
     if(raw) return JSON.parse(raw);
   }catch(e){}
-  return { history:[], memory:'', knowledge:null, location:null, msgCount:0 };
+  return { history:[], memory:'', knowledge:null, location:null, routines:[], msgCount:0 };
 }
 
 const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
@@ -797,6 +833,70 @@ async function askRaiz(userText, isRetry){
   resumeHandsFreeListening();
 }
 
+/* ---------- Rotinas (Frente 3) ----------
+   Gatilhos definidos pela pessoa (mem.routines) são comparados (contains,
+   sem acento/case) com a fala transcrita ANTES do fluxo normal do askRaiz.
+   Se bater, o Worker roda os ingredientes escolhidos internamente e devolve
+   uma fala só, natural, no mesmo formato {emotion, reply} de sempre. */
+function ensureRoutines(){
+  if(!Array.isArray(mem.routines)) mem.routines = [];
+}
+
+function normalizeForMatch(s){
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .trim();
+}
+
+function findMatchingRoutine(text){
+  ensureRoutines();
+  if(!mem.routines.length) return null;
+  const norm = normalizeForMatch(text);
+  return mem.routines.find(r => r.trigger && norm.includes(normalizeForMatch(r.trigger))) || null;
+}
+
+async function runRoutine(routine){
+  setEmotion('pensando');
+  hint.textContent = 'pensando...';
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  try{
+    if(!workerUrl) throw new Error('worker_not_configured');
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        mode:'routine',
+        ingredients: routine.ingredients || [],
+        links: routine.links || [],
+        companionState: { location: mem.location || null, now: formatNowPtBR(), hojeISO: todayISO() }
+      })
+    });
+    if(!resp.ok) throw new Error('worker_error_' + resp.status);
+    const parsed = await resp.json();
+    if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
+    setEmotion(parsed.emotion || 'neutro');
+    setCaption('jarbas', parsed.reply);
+    hint.textContent = 'falando...';
+    await speak(parsed.reply);
+  }catch(err){
+    console.error('Rotina falhou:', err);
+    setCaption('jarbas', 'Não consegui montar sua rotina agora. Tenta de novo em instantes.');
+    await speak('Não consegui montar sua rotina agora. Tenta de novo em instantes.');
+  }
+  setEmotion('neutro');
+  hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+  resumeHandsFreeListening();
+}
+
+function checkRoutineTrigger(text){
+  const routine = findMatchingRoutine(text);
+  if(!routine) return false;
+  if(handsFree) startConversationWindow();
+  runRoutine(routine);
+  return true;
+}
+
 /* ---------- Ativação por voz ("modo mãos livres") ---------- */
 const HANDS_FREE_KEY = 'raiz_hands_free';
 const WAKE_WORD = 'jarbas';
@@ -872,6 +972,7 @@ function initRecognition(){
       setCaption('você', text);
       recognition.stop();
       if(handleLearnCommand(text)) return;
+      if(checkRoutineTrigger(text)) return;
       askRaiz(text);
       return;
     }
@@ -883,6 +984,7 @@ function initRecognition(){
       recognition.stop();
       setCaption('você', text);
       if(handleLearnCommand(text)) return;
+      if(checkRoutineTrigger(text)) return;
       askRaiz(text);
       return;
     }
@@ -894,6 +996,7 @@ function initRecognition(){
         recognition.stop();
         setCaption('você', rest);
         if(handleLearnCommand(rest)) return;
+        if(checkRoutineTrigger(rest)) return;
         askRaiz(rest);
       } else {
         awaitingCommand = true;
@@ -1055,6 +1158,7 @@ async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
     }
     setCaption('você', text);
     if(handleLearnCommand(text)) return;
+    if(checkRoutineTrigger(text)) return;
     askRaiz(text);
   }catch(err){
     setEmotion('neutro');
@@ -1154,7 +1258,7 @@ startBtn.addEventListener('click', async ()=>{
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
   if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
-  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, msgCount:0 };
+  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, routines: mem.routines || [], msgCount:0 };
   history = [];
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
@@ -1172,10 +1276,99 @@ const knowledgeFields = {
   trabalho: document.getElementById('knowledgeTrabalho'),
   outros: document.getElementById('knowledgeOutros'),
 };
+/* ---------- Abas Conhecimento / Rotinas de voz na tela de config ---------- */
+const tabKnowledgeBtn = document.getElementById('tabKnowledgeBtn');
+const tabRoutinesBtn = document.getElementById('tabRoutinesBtn');
+const knowledgeTabEl = document.getElementById('knowledgeTab');
+const routinesTabEl = document.getElementById('routinesTab');
+function showConfigTab(which){
+  const isKnowledge = which === 'knowledge';
+  knowledgeTabEl.classList.toggle('hidden', !isKnowledge);
+  routinesTabEl.classList.toggle('hidden', isKnowledge);
+  tabKnowledgeBtn.classList.toggle('active', isKnowledge);
+  tabRoutinesBtn.classList.toggle('active', !isKnowledge);
+  if(!isKnowledge) renderRoutinesList();
+}
+tabKnowledgeBtn.addEventListener('click', ()=>showConfigTab('knowledge'));
+tabRoutinesBtn.addEventListener('click', ()=>showConfigTab('routines'));
+
+/* ---------- Gerenciar rotinas de voz (lista, adicionar, apagar) ---------- */
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+const INGREDIENT_LABELS = { clima:'clima', noticias:'notícias', agenda:'agenda', tarefas:'tarefas', contas:'contas' };
+const routinesListEl = document.getElementById('routinesList');
+function renderRoutinesList(){
+  ensureRoutines();
+  if(!mem.routines.length){
+    routinesListEl.innerHTML = '<p style="color:var(--muted); font-size:13px;">Nenhuma rotina ainda.</p>';
+    return;
+  }
+  routinesListEl.innerHTML = mem.routines.map(r => {
+    const ingredientsText = (r.ingredients || []).map(i => INGREDIENT_LABELS[i] || i).join(', ');
+    const linksText = r.links && r.links.length ? ` + ${r.links.length} link(s)` : '';
+    return `<div class="routine-card">
+      <div>
+        <div style="font-weight:600; font-size:14px;">"${escapeHtml(r.trigger)}"</div>
+        <div style="color:var(--muted); font-size:12px;">${escapeHtml(ingredientsText)}${escapeHtml(linksText)}</div>
+      </div>
+      <button type="button" class="btn-secondary routine-del" data-del="${escapeHtml(r.id)}">Apagar</button>
+    </div>`;
+  }).join('');
+  routinesListEl.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-del');
+      if(!confirm('Apagar essa rotina?')) return;
+      mem.routines = mem.routines.filter(r => r.id !== id);
+      saveMemoryState();
+      const workerUrl = localStorage.getItem('raiz_worker_url');
+      if(workerUrl) await pushMemoryToServer(workerUrl);
+      renderRoutinesList();
+    });
+  });
+}
+
+function routineId(){
+  return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+}
+
+const routineAddToggleBtn = document.getElementById('routineAddToggleBtn');
+const routineForm = document.getElementById('routineForm');
+const routineTriggerInput = document.getElementById('routineTrigger');
+const routineLinksInput = document.getElementById('routineLinks');
+routineAddToggleBtn.addEventListener('click', ()=>{
+  const willShow = routineForm.classList.contains('hidden');
+  routineForm.classList.toggle('hidden');
+  if(willShow){
+    routineTriggerInput.value = '';
+    routineLinksInput.value = '';
+    document.querySelectorAll('.routineIngredient').forEach(cb => cb.checked = false);
+  }
+});
+document.getElementById('routineCancelBtn').addEventListener('click', ()=>{
+  routineForm.classList.add('hidden');
+});
+document.getElementById('routineSaveBtn').addEventListener('click', async ()=>{
+  const trigger = routineTriggerInput.value.trim();
+  if(!trigger){ alert('Escreva o gatilho da rotina.'); return; }
+  const ingredients = Array.from(document.querySelectorAll('.routineIngredient:checked')).map(cb => cb.value);
+  if(!ingredients.length){ alert('Escolha pelo menos um ingrediente.'); return; }
+  const links = routineLinksInput.value.split('\n').map(l => l.trim()).filter(Boolean);
+  ensureRoutines();
+  mem.routines.push({ id: routineId(), trigger, ingredients, links });
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) await pushMemoryToServer(workerUrl);
+  routineForm.classList.add('hidden');
+  renderRoutinesList();
+});
+
 editProfileBtn.addEventListener('click', ()=>{
   ensureKnowledge();
   for(const cat in knowledgeFields) knowledgeFields[cat].value = mem.knowledge[cat] || '';
   updateLocationStatus();
+  showConfigTab('knowledge');
   profileEl.classList.remove('hidden');
 });
 document.getElementById('profileCancelBtn').addEventListener('click', ()=>{
@@ -1225,6 +1418,7 @@ async function resyncMemoryOnFocus(){
     if(data && data.memory && data.memory !== mem.memory){ mem.memory = data.memory; changed = true; }
     if(data && data.knowledge && JSON.stringify(data.knowledge) !== JSON.stringify(mem.knowledge)){ mem.knowledge = data.knowledge; changed = true; }
     if(data && data.location && JSON.stringify(data.location) !== JSON.stringify(mem.location)){ mem.location = data.location; changed = true; }
+    if(data && Array.isArray(data.routines) && JSON.stringify(data.routines) !== JSON.stringify(mem.routines)){ mem.routines = data.routines; changed = true; }
     if(changed) saveMemoryState();
   }catch(e){}
 }
