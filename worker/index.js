@@ -3,13 +3,16 @@
  * e conversa com o modelo em nome do site estático no GitHub Pages.
  *
  * Rotas: só existe uma, POST /, com body:
- *   { mode: "chat",         messages: [...], petState: {...} }
- *   { mode: "companion",    messages: [...], companionState: {...} }
- *   { mode: "summary",      messages: [...] }
- *   { mode: "memory_load",  key: "..." }
- *   { mode: "memory_save",  key: "...", data: {...} }
- *   { mode: "transcribe",   audio_b64: "...", mime: "audio/webm" }
- *   { mode: "tts",          text: "..." }
+ *   { mode: "chat",             messages: [...], petState: {...} }
+ *   { mode: "companion",        messages: [...], companionState: {...} }
+ *   { mode: "summary",          messages: [...] }
+ *   { mode: "memory_load",      key: "..." }
+ *   { mode: "memory_save",      key: "...", data: {...} }
+ *   { mode: "transcribe",       audio_b64: "...", mime: "audio/webm" }
+ *   { mode: "tts",              text: "..." }
+ *   { mode: "classify_fact",    fact: "...", knowledge: {...} }
+ *   { mode: "migrate_knowledge", profile: "..." }
+ *   { mode: "reverse_geocode",  lat: 0, lon: 0 }
  *
  * memory_load / memory_save exigem `key` (uma senha simples que só você
  * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
@@ -226,12 +229,17 @@ function companionPrompt(companionState = {}) {
     ? `Informação real e atual (use para responder perguntas sobre data/hora — nunca diga que não sabe): agora é ${companionState.now}${companionState.hojeISO ? `, hoje é ${companionState.hojeISO} no formato AAAA-MM-DD` : ''}.`
     : '';
 
+  const locationLine = companionState.location?.cidade
+    ? `Localização atual da pessoa (use como padrão em perguntas de clima quando ela não especificar outra cidade): ${companionState.location.cidade}.`
+    : '';
+
   return `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
 ${profileLine}
 ${memoryLine}
 ${(memoryLine || profileLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
 ${nowLine}
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela contar algo importante e duradouro sobre a vida dela (não conversa fiada), use a ferramenta de anotar no diário além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+${locationLine}
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela contar algo importante e duradouro sobre a vida dela (não conversa fiada), use a ferramenta de anotar no diário além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -348,13 +356,13 @@ const WEATHER_TOOL = {
   function: {
     name: "previsao_do_tempo",
     description:
-      "Retorna a previsão do tempo atual e de amanhã para uma cidade. Use sempre que a pergunta for sobre clima, temperatura, chuva ou previsão do tempo. Se a pessoa não disser a cidade e não tiver dito antes na conversa, pergunte qual cidade antes de usar a ferramenta.",
+      "Retorna a previsão do tempo atual e de amanhã para uma cidade. Use sempre que a pergunta for sobre clima, temperatura, chuva ou previsão do tempo. Se a pessoa não especificar a cidade, deixe o parâmetro vazio em vez de perguntar — o sistema usa a localização atual dela automaticamente quando disponível.",
     parameters: {
       type: "object",
       properties: {
-        cidade: { type: "string", description: "Nome da cidade, e opcionalmente estado/país, ex: 'Jundiaí, SP'" },
+        cidade: { type: "string", description: "Nome da cidade, e opcionalmente estado/país, ex: 'Jundiaí, SP'. Deixe vazio se a pessoa não especificou nenhuma cidade." },
       },
-      required: ["cidade"],
+      required: [],
     },
   },
 };
@@ -396,6 +404,18 @@ async function callWeather(cidade) {
     text += ` Amanhã: mínima ${d.temperature_2m_min[1]}°C, máxima ${d.temperature_2m_max[1]}°C, ${d.precipitation_probability_max[1]}% de chance de chuva.`;
   }
   return text;
+}
+
+// ---------- Geolocalização: reverse geocode via Nominatim (OpenStreetMap) ----------
+async function reverseGeocode(lat, lon) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": "JarbasCompanion/1.0 (https://gustavogalioti.github.io/lumeco-bichinho-virtual/companion/)" },
+  });
+  if (!res.ok) throw new Error("reverse_geocode_error_" + res.status);
+  const data = await res.json();
+  const addr = data.address || {};
+  return addr.city || addr.town || addr.village || addr.municipality || addr.county || data.display_name || "";
 }
 
 const CONSULTAR_PAINEL_TOOL = {
@@ -525,13 +545,17 @@ async function callTavily(env, query) {
   return text.trim().slice(0, 1200) || "A busca não encontrou nada relevante.";
 }
 
-async function runTool(env, call, canSearch, canPainel) {
+async function runTool(env, call, canSearch, canPainel, companionState = {}) {
   const name = call.function.name;
   let args = {};
   try { args = JSON.parse(call.function.arguments); } catch {}
 
   try {
-    if (name === "previsao_do_tempo") return await callWeather(args.cidade || "");
+    if (name === "previsao_do_tempo") {
+      const cidade = args.cidade || companionState.location?.cidade || "";
+      if (!cidade) return "Não sei a cidade da pessoa ainda — peça pra ela informar a cidade, ou avise que ela pode ativar a localização nas configurações.";
+      return await callWeather(cidade);
+    }
     if (name === "buscar_na_web" && canSearch) return await callTavily(env, args.query || "");
     if (name === "consultar_painel" && canPainel) return await callPainelSnapshot(env);
     if (name === "gerenciar_tarefa" && canPainel) return await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto });
@@ -544,7 +568,7 @@ async function runTool(env, call, canSearch, canPainel) {
   }
 }
 
-async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
+async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
@@ -568,7 +592,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
     }).slice(0, 3);
     const toolMessages = [];
     for (const call of calls) {
-      const result = await runTool(env, call, canSearch, canPainel);
+      const result = await runTool(env, call, canSearch, canPainel, companionState);
       toolMessages.push({ role: "tool", tool_call_id: call.id, content: result });
     }
 
@@ -652,6 +676,19 @@ export default {
       }
     }
 
+    // ---- geolocalização (reverse geocode) ----
+    if (mode === "reverse_geocode") {
+      try {
+        if (typeof body.lat !== "number" || typeof body.lon !== "number") {
+          return json({ error: "lat_lon_required" }, 400);
+        }
+        const cidade = await reverseGeocode(body.lat, body.lon);
+        return json({ cidade });
+      } catch (err) {
+        return json({ error: "reverse_geocode_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+
     // ---- transcrição de áudio (Groq Whisper) — usado no modo "toque para falar" ----
     if (mode === "transcribe") {
       try {
@@ -694,7 +731,7 @@ export default {
       if (mode === "companion") {
         let parsed;
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 450);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 450, companionState);
           const clean = raw.replace(/```json|```/g, "").trim();
           try {
             parsed = JSON.parse(clean);

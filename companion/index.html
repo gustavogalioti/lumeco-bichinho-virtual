@@ -142,6 +142,11 @@
     <textarea id="knowledgeTrabalho" rows="3" placeholder="Profissão, projetos, contexto profissional..."></textarea>
     <label for="knowledgeOutros">Outros</label>
     <textarea id="knowledgeOutros" rows="3" placeholder="Qualquer outra coisa que valha lembrar..."></textarea>
+    <div style="margin:4px 0 16px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+      <label>Localização</label>
+      <p id="locationStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">ainda não configurada</p>
+      <button id="locationBtn" type="button" class="btn-secondary" style="margin-top:0;">permitir localização</button>
+    </div>
     <button id="profileSaveBtn">Salvar</button>
     <button id="profileCancelBtn" class="btn-secondary">Cancelar</button>
   </div>
@@ -433,7 +438,7 @@ function loadMemoryState(){
     const raw = localStorage.getItem(MEMORY_KEY);
     if(raw) return JSON.parse(raw);
   }catch(e){}
-  return { history:[], memory:'', knowledge:null, msgCount:0 };
+  return { history:[], memory:'', knowledge:null, location:null, msgCount:0 };
 }
 
 const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
@@ -679,6 +684,56 @@ function todayISO(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+/* ---------- Geolocalização (Frente 2) ----------
+   Só pede localização quando a pessoa clica no botão explícito na tela de
+   conhecimento/config — nunca sozinho. Guarda lat/lon/cidade em mem.location,
+   sincronizado como o resto da memória. Botão serve tanto pra permitir a
+   primeira vez quanto pra atualizar manualmente depois. */
+const locationBtn = document.getElementById('locationBtn');
+const locationStatus = document.getElementById('locationStatus');
+
+function updateLocationStatus(){
+  if(mem.location && mem.location.cidade){
+    const when = mem.location.updatedAt ? new Date(mem.location.updatedAt).toLocaleString('pt-BR') : '';
+    locationStatus.textContent = `${mem.location.cidade}${when ? ' — atualizado em ' + when : ''}`;
+    locationBtn.textContent = 'atualizar localização';
+  } else {
+    locationStatus.textContent = 'ainda não configurada';
+    locationBtn.textContent = 'permitir localização';
+  }
+}
+
+function updateLocation(){
+  if(!('geolocation' in navigator)){
+    locationStatus.textContent = 'seu navegador não suporta localização';
+    return;
+  }
+  locationStatus.textContent = 'obtendo localização...';
+  navigator.geolocation.getCurrentPosition(async (pos)=>{
+    const lat = pos.coords.latitude, lon = pos.coords.longitude;
+    locationStatus.textContent = 'identificando cidade...';
+    const workerUrl = localStorage.getItem('raiz_worker_url');
+    let cidade = '';
+    try{
+      const resp = await fetch(workerUrl, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ mode:'reverse_geocode', lat, lon })
+      });
+      const data = await resp.json();
+      cidade = (data && data.cidade) || '';
+    }catch(e){}
+    mem.location = { lat, lon, cidade, updatedAt: Date.now() };
+    saveMemoryState();
+    if(workerUrl) pushMemoryToServer(workerUrl);
+    updateLocationStatus();
+  }, (err)=>{
+    const reasons = { 1:'permissão de localização negada', 2:'localização indisponível', 3:'tempo esgotado pra obter localização' };
+    locationStatus.textContent = reasons[err.code] || 'não consegui obter a localização';
+  }, { enableHighAccuracy:false, timeout:10000, maximumAge:0 });
+}
+locationBtn.addEventListener('click', updateLocation);
+
 async function askRaiz(userText, isRetry){
   if(!isRetry && handsFree) startConversationWindow();
   setEmotion('pensando');
@@ -702,7 +757,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -1099,7 +1154,7 @@ startBtn.addEventListener('click', async ()=>{
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
   if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
-  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), msgCount:0 };
+  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, msgCount:0 };
   history = [];
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
@@ -1120,6 +1175,7 @@ const knowledgeFields = {
 editProfileBtn.addEventListener('click', ()=>{
   ensureKnowledge();
   for(const cat in knowledgeFields) knowledgeFields[cat].value = mem.knowledge[cat] || '';
+  updateLocationStatus();
   profileEl.classList.remove('hidden');
 });
 document.getElementById('profileCancelBtn').addEventListener('click', ()=>{
@@ -1168,6 +1224,7 @@ async function resyncMemoryOnFocus(){
     let changed = false;
     if(data && data.memory && data.memory !== mem.memory){ mem.memory = data.memory; changed = true; }
     if(data && data.knowledge && JSON.stringify(data.knowledge) !== JSON.stringify(mem.knowledge)){ mem.knowledge = data.knowledge; changed = true; }
+    if(data && data.location && JSON.stringify(data.location) !== JSON.stringify(mem.location)){ mem.location = data.location; changed = true; }
     if(changed) saveMemoryState();
   }catch(e){}
 }
