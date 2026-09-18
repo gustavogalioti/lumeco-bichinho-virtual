@@ -192,14 +192,35 @@ ${existingMemory ? `Isso é o que você já sabia sobre essa pessoa, de conversa
 
 Não invente nada que não esteja implícito na conversa. Se não houver informação nova nem antiga suficiente, diga apenas "Ainda não conversamos o suficiente."`;
 
+const KNOWLEDGE_CATEGORIES = ["identidade", "pessoas", "rotina", "trabalho", "outros"];
+
+const KNOWLEDGE_LABELS = {
+  identidade: "Identidade",
+  pessoas: "Pessoas importantes",
+  rotina: "Rotina e preferências",
+  trabalho: "Trabalho",
+  outros: "Outras informações",
+};
+
+function knowledgeToText(knowledge) {
+  if (!knowledge) return "";
+  return Object.entries(KNOWLEDGE_LABELS)
+    .map(([key, label]) => (knowledge[key] ? `${label}: ${knowledge[key]}` : null))
+    .filter(Boolean)
+    .join("\n");
+}
+
 function companionPrompt(companionState = {}) {
-  const profileLine = companionState.profile
-    ? `Perfil que a PRÓPRIA pessoa escreveu sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo: "${companionState.profile}"`
-    : '';
+  const knowledgeText = knowledgeToText(companionState.knowledge);
+  const profileLine = knowledgeText
+    ? `Base de conhecimento escrita pela PRÓPRIA pessoa sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo:\n${knowledgeText}`
+    : (companionState.profile
+        ? `Perfil que a PRÓPRIA pessoa escreveu sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo: "${companionState.profile}"`
+        : '');
 
   const memoryLine = companionState.memory
-    ? `O que você aprendeu sobre a pessoa em conversas anteriores (menos confiável que o perfil acima, se houver conflito o perfil vence): ${companionState.memory}`
-    : (companionState.profile ? '' : `Você ainda está conhecendo essa pessoa — preste atenção no que ela conta, para lembrar depois.`);
+    ? `O que você aprendeu sobre a pessoa em conversas anteriores (menos confiável que a base de conhecimento acima, se houver conflito ela vence): ${companionState.memory}`
+    : (profileLine ? '' : `Você ainda está conhecendo essa pessoa — preste atenção no que ela conta, para lembrar depois.`);
 
   const nowLine = companionState.now
     ? `Informação real e atual (use para responder perguntas sobre data/hora — nunca diga que não sabe): agora é ${companionState.now}${companionState.hojeISO ? `, hoje é ${companionState.hojeISO} no formato AAAA-MM-DD` : ''}.`
@@ -255,6 +276,55 @@ async function groqRequest(env, messages, maxTokens, tools) {
 async function callGroq(env, systemPrompt, messages, maxTokens) {
   const data = await groqRequest(env, [{ role: "system", content: systemPrompt }, ...messages], maxTokens);
   return data.choices?.[0]?.message?.content?.trim() || "...";
+}
+
+// ---------- Base de conhecimento estruturada (categorias fixas) ----------
+function classifyFactSystemPrompt(knowledge = {}) {
+  return `Você organiza uma base de conhecimento sobre uma pessoa, dividida em categorias fixas.
+
+Categorias e o que já existe em cada uma:
+- identidade (nome, data de nascimento, onde mora): "${knowledge.identidade || ""}"
+- pessoas (família, noiva, amigos — quem é quem): "${knowledge.pessoas || ""}"
+- rotina (hábitos, preferências, o que evitar): "${knowledge.rotina || ""}"
+- trabalho (profissão, projetos, contexto profissional): "${knowledge.trabalho || ""}"
+- outros (catch-all, tudo que não se encaixa nas outras): "${knowledge.outros || ""}"
+
+Você vai receber um fato novo sobre essa pessoa. Escolha a categoria certa pra ele e devolva o texto ATUALIZADO dessa categoria, mesclando o fato novo com o que já existia nela — nunca reescreva do zero, nunca perca informação antiga. Se a categoria estava vazia, o texto atualizado é só o fato novo.
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"category":"identidade|pessoas|rotina|trabalho|outros","updated_text":"..."}`;
+}
+
+async function classifyFact(env, fact, knowledge) {
+  const raw = await callGroq(env, classifyFactSystemPrompt(knowledge), [{ role: "user", content: fact }], 300);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(clean);
+  if (!KNOWLEDGE_CATEGORIES.includes(parsed.category) || typeof parsed.updated_text !== "string") {
+    throw new Error("classify_invalid_result");
+  }
+  return parsed;
+}
+
+function migrateKnowledgeSystemPrompt() {
+  return `Você organiza uma base de conhecimento sobre uma pessoa, dividida em categorias fixas: identidade (nome, data de nascimento, onde mora), pessoas (família, noiva, amigos — quem é quem), rotina (hábitos, preferências, o que evitar), trabalho (profissão, projetos, contexto profissional), outros (tudo que não se encaixa nas outras).
+
+Você vai receber um texto livre com tudo que essa pessoa escreveu sobre si mesma até hoje. Distribua o conteúdo entre essas categorias, sem inventar nada e sem perder nenhuma informação — cada trecho relevante do texto original deve aparecer em alguma categoria.
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"identidade":"...","pessoas":"...","rotina":"...","trabalho":"...","outros":"..."}
+Use string vazia "" nas categorias que não tiverem nada correspondente.`;
+}
+
+async function migrateKnowledge(env, profileText) {
+  const raw = await callGroq(env, migrateKnowledgeSystemPrompt(), [{ role: "user", content: profileText }], 500);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(clean);
+  const knowledge = {};
+  for (const cat of KNOWLEDGE_CATEGORIES) {
+    knowledge[cat] = typeof parsed[cat] === "string" ? parsed[cat] : "";
+  }
+  knowledge.sobre_jarbas = "";
+  return knowledge;
 }
 
 const SEARCH_TOOL = {
@@ -560,6 +630,26 @@ export default {
       const data = body.data || {};
       await env.COMPANION_KV.put(storageKey, JSON.stringify(data));
       return json({ ok: true });
+    }
+
+    // ---- base de conhecimento estruturada ----
+    if (mode === "classify_fact") {
+      try {
+        if (!body.fact) return json({ error: "fact_required" }, 400);
+        const result = await classifyFact(env, body.fact, body.knowledge || {});
+        return json(result);
+      } catch (err) {
+        return json({ error: "classify_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+    if (mode === "migrate_knowledge") {
+      try {
+        if (!body.profile) return json({ error: "profile_required" }, 400);
+        const knowledge = await migrateKnowledge(env, body.profile);
+        return json({ knowledge });
+      } catch (err) {
+        return json({ error: "migrate_failed", detail: String(err.message || err) }, 502);
+      }
     }
 
     // ---- transcrição de áudio (Groq Whisper) — usado no modo "toque para falar" ----

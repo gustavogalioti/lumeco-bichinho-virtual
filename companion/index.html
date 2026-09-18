@@ -129,10 +129,19 @@
 </div>
 
 <div class="setup hidden" id="profileEl">
-  <div class="setup-card">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
     <h2>O que o Jarbas sabe sobre você</h2>
-    <p>Escreva aqui direto — seu nome, gostos, rotina, o que quiser. Isso tem prioridade sobre o que ele "aprende" sozinho nas conversas, e sincroniza entre seus aparelhos.</p>
-    <textarea id="profileText" rows="8" placeholder="Ex: Meu nome é Gustavo. Trabalho com investimentos. Minha noiva se chama Gabriela. Moro em..."></textarea>
+    <p>Escreva aqui direto, por categoria. Isso tem prioridade sobre o que ele "aprende" sozinho nas conversas, e sincroniza entre seus aparelhos.</p>
+    <label for="knowledgeIdentidade">Identidade</label>
+    <textarea id="knowledgeIdentidade" rows="3" placeholder="Nome, data de nascimento, onde mora..."></textarea>
+    <label for="knowledgePessoas">Pessoas</label>
+    <textarea id="knowledgePessoas" rows="3" placeholder="Família, noiva, amigos — quem é quem..."></textarea>
+    <label for="knowledgeRotina">Rotina &amp; Preferências</label>
+    <textarea id="knowledgeRotina" rows="3" placeholder="Hábitos, preferências, o que evitar..."></textarea>
+    <label for="knowledgeTrabalho">Trabalho</label>
+    <textarea id="knowledgeTrabalho" rows="3" placeholder="Profissão, projetos, contexto profissional..."></textarea>
+    <label for="knowledgeOutros">Outros</label>
+    <textarea id="knowledgeOutros" rows="3" placeholder="Qualquer outra coisa que valha lembrar..."></textarea>
     <button id="profileSaveBtn">Salvar</button>
     <button id="profileCancelBtn" class="btn-secondary">Cancelar</button>
   </div>
@@ -424,7 +433,44 @@ function loadMemoryState(){
     const raw = localStorage.getItem(MEMORY_KEY);
     if(raw) return JSON.parse(raw);
   }catch(e){}
-  return { history:[], memory:'', profile:'', msgCount:0 };
+  return { history:[], memory:'', knowledge:null, msgCount:0 };
+}
+
+const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
+function emptyKnowledge(){
+  return { identidade:'', pessoas:'', rotina:'', trabalho:'', sobre_jarbas:'', outros:'' };
+}
+function ensureKnowledge(){
+  mem.knowledge = { ...emptyKnowledge(), ...(mem.knowledge || {}) };
+}
+
+// Migração única: se existir o antigo mem.profile (textarea livre) e ainda não existir
+// mem.knowledge, manda pro Worker classificar o texto antigo nas categorias novas.
+// Se a classificação falhar por qualquer motivo, o texto inteiro cai em "outros" —
+// nunca se perde, só fica temporariamente sem categorização fina.
+async function migrateProfileToKnowledge(workerUrl){
+  if(mem.knowledge || !mem.profile || !mem.profile.trim()){
+    ensureKnowledge();
+    return;
+  }
+  const oldProfile = mem.profile;
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'migrate_knowledge', profile: oldProfile })
+    });
+    if(!resp.ok) throw new Error('migrate_http_' + resp.status);
+    const data = await resp.json();
+    if(!data || !data.knowledge) throw new Error('migrate_empty');
+    mem.knowledge = { ...emptyKnowledge(), ...data.knowledge };
+  }catch(e){
+    console.warn('Migração de conhecimento falhou, guardando tudo em "outros":', e);
+    mem.knowledge = { ...emptyKnowledge(), outros: oldProfile };
+  }
+  delete mem.profile;
+  saveMemoryState();
+  await pushMemoryToServer(workerUrl);
 }
 function saveMemoryState(){
   try{ localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); }catch(e){}
@@ -469,8 +515,9 @@ function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
 }
 
-// Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto no perfil,
-// sem passar pelo modelo — rápido e 100% confiável (não depende do resumo automático).
+// Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto na base de
+// conhecimento (categoria "outros"), sem passar pelo modelo — rápido e 100% confiável
+// (não depende do resumo automático nem da classificação assíncrona abaixo).
 const LEARN_TRIGGER = /^\s*(aprenda|aprende|guarda|guarde|anota|anote|lembra|lembre)(?:\s+que)?[,:]?\s+/i;
 function handleLearnCommand(text){
   const match = text.match(LEARN_TRIGGER);
@@ -479,7 +526,8 @@ function handleLearnCommand(text){
   if(!fact) return false;
 
   if(handsFree) startConversationWindow();
-  mem.profile = (mem.profile ? mem.profile.trim() + '\n' : '') + fact;
+  ensureKnowledge();
+  mem.knowledge.outros = (mem.knowledge.outros ? mem.knowledge.outros.trim() + '\n' : '') + fact;
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) pushMemoryToServer(workerUrl);
@@ -491,7 +539,32 @@ function handleLearnCommand(text){
     hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
     resumeHandsFreeListening();
   });
+
+  if(workerUrl) reclassifyFact(workerUrl, fact);
   return true;
+}
+
+// Em paralelo, depois de já ter salvo o fato em "outros" (garantido acima), pede ao
+// Worker pra decidir a categoria certa e mover o fato pra lá. Se falhar ou demorar,
+// o fato continua salvo em "outros" — só fica sem categoria fina até reclassificar depois.
+async function reclassifyFact(workerUrl, fact){
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'classify_fact', fact, knowledge: mem.knowledge })
+    });
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(!data || !KNOWLEDGE_CATEGORIES.includes(data.category) || typeof data.updated_text !== 'string') return;
+    if(data.category !== 'outros'){
+      mem.knowledge.outros = (mem.knowledge.outros || '')
+        .split('\n').filter(line => line.trim() !== fact.trim()).join('\n');
+    }
+    mem.knowledge[data.category] = data.updated_text;
+    saveMemoryState();
+    pushMemoryToServer(workerUrl);
+  }catch(e){}
 }
 
 // lógica original e simples: pega a primeira voz em português que o navegador tiver.
@@ -629,7 +702,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', profile: mem.profile || '', now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -1011,6 +1084,7 @@ startBtn.addEventListener('click', async ()=>{
     await navigator.mediaDevices.getUserMedia({audio:true});
     hint.textContent = 'sincronizando memória...';
     await syncMemoryFromServer(url);
+    await migrateProfileToKnowledge(url);
     hint.textContent = 'toque para falar';
     initRecognition();
     updateHandsFreeBtn();
@@ -1024,8 +1098,8 @@ startBtn.addEventListener('click', async ()=>{
 
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
-  if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe no que você escreveu no perfil). Continuar?')) return;
-  mem = { history:[], memory:'', profile: mem.profile || '', msgCount:0 };
+  if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
+  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), msgCount:0 };
   history = [];
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
@@ -1036,16 +1110,24 @@ resetMemBtn.addEventListener('click', async ()=>{
 
 const editProfileBtn = document.getElementById('editProfileBtn');
 const profileEl = document.getElementById('profileEl');
-const profileText = document.getElementById('profileText');
+const knowledgeFields = {
+  identidade: document.getElementById('knowledgeIdentidade'),
+  pessoas: document.getElementById('knowledgePessoas'),
+  rotina: document.getElementById('knowledgeRotina'),
+  trabalho: document.getElementById('knowledgeTrabalho'),
+  outros: document.getElementById('knowledgeOutros'),
+};
 editProfileBtn.addEventListener('click', ()=>{
-  profileText.value = mem.profile || '';
+  ensureKnowledge();
+  for(const cat in knowledgeFields) knowledgeFields[cat].value = mem.knowledge[cat] || '';
   profileEl.classList.remove('hidden');
 });
 document.getElementById('profileCancelBtn').addEventListener('click', ()=>{
   profileEl.classList.add('hidden');
 });
 document.getElementById('profileSaveBtn').addEventListener('click', async ()=>{
-  mem.profile = profileText.value.trim();
+  ensureKnowledge();
+  for(const cat in knowledgeFields) mem.knowledge[cat] = knowledgeFields[cat].value.trim();
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) await pushMemoryToServer(workerUrl);
@@ -1085,7 +1167,7 @@ async function resyncMemoryOnFocus(){
     // não sobrescreve o histórico local pra não perder mensagens ainda não sincronizadas
     let changed = false;
     if(data && data.memory && data.memory !== mem.memory){ mem.memory = data.memory; changed = true; }
-    if(data && typeof data.profile === 'string' && data.profile !== mem.profile){ mem.profile = data.profile; changed = true; }
+    if(data && data.knowledge && JSON.stringify(data.knowledge) !== JSON.stringify(mem.knowledge)){ mem.knowledge = data.knowledge; changed = true; }
     if(changed) saveMemoryState();
   }catch(e){}
 }
