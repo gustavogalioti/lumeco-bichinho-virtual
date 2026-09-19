@@ -564,7 +564,7 @@ function setCaption(who, text){
 // Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto na base de
 // conhecimento (categoria "outros"), sem passar pelo modelo — rápido e 100% confiável
 // (não depende do resumo automático nem da classificação assíncrona abaixo).
-const LEARN_TRIGGER = /^\s*(aprenda|aprende|guarda|guarde|anota|anote|lembra|lembre)(?:\s+que)?[,:]?\s+/i;
+const LEARN_TRIGGER = /^\s*(?:aprenda|aprende|guarda|guarde|anota|anote|lembra|lembre|adicione|adiciona|acrescente|acrescenta|atualize|atualiza)(?:\s+(?:(?:no|ao|do|em)\s+)?seu\s+conhecimento)?(?:\s+que)?[,:]?\s+/i;
 function handleLearnCommand(text){
   const match = text.match(LEARN_TRIGGER);
   if(!match) return false;
