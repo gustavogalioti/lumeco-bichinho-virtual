@@ -99,6 +99,12 @@
     background:transparent; border:1px solid rgba(255,255,255,0.2); color:var(--muted); margin-top:8px;
   }
   .setup-card label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
+  .hidden{ display:none !important; }
+  .setup-card .tab-btn{ flex:1; width:auto; padding:10px; border-radius:10px; border:1px solid rgba(0,224,255,0.2); background:transparent; color:var(--muted); font-family:'Manrope'; font-weight:700; font-size:13px; cursor:pointer; margin-top:0; }
+  .setup-card .tab-btn.active{ background:rgba(0,224,255,0.12); color:var(--text); border-color:rgba(0,224,255,0.4); }
+  .routine-card{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.08); }
+  .setup-card .routine-del{ width:auto; padding:6px 12px; margin-top:0; font-size:12px; }
+  .routine-check{ display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); }
 </style>
 </head>
 <body>
@@ -129,10 +135,59 @@
 </div>
 
 <div class="setup hidden" id="profileEl">
-  <div class="setup-card">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
     <h2>O que o Jarbas sabe sobre você</h2>
-    <p>Escreva aqui direto — seu nome, gostos, rotina, o que quiser. Isso tem prioridade sobre o que ele "aprende" sozinho nas conversas, e sincroniza entre seus aparelhos.</p>
-    <textarea id="profileText" rows="8" placeholder="Ex: Meu nome é Gustavo. Trabalho com investimentos. Minha noiva se chama Gabriela. Moro em..."></textarea>
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      <button id="tabKnowledgeBtn" type="button" class="tab-btn active">Conhecimento</button>
+      <button id="tabRoutinesBtn" type="button" class="tab-btn">Rotinas de voz</button>
+    </div>
+
+    <div id="knowledgeTab">
+      <p>Escreva aqui direto, por categoria. Isso tem prioridade sobre o que ele "aprende" sozinho nas conversas, e sincroniza entre seus aparelhos.</p>
+      <label for="knowledgeIdentidade">Identidade</label>
+      <textarea id="knowledgeIdentidade" rows="3" placeholder="Nome, data de nascimento, onde mora..."></textarea>
+      <label for="knowledgePessoas">Pessoas</label>
+      <textarea id="knowledgePessoas" rows="3" placeholder="Família, noiva, amigos — quem é quem..."></textarea>
+      <label for="knowledgeRotina">Rotina &amp; Preferências</label>
+      <textarea id="knowledgeRotina" rows="3" placeholder="Hábitos, preferências, o que evitar..."></textarea>
+      <label for="knowledgeTrabalho">Trabalho</label>
+      <textarea id="knowledgeTrabalho" rows="3" placeholder="Profissão, projetos, contexto profissional..."></textarea>
+      <label for="knowledgeOutros">Outros</label>
+      <textarea id="knowledgeOutros" rows="3" placeholder="Qualquer outra coisa que valha lembrar..."></textarea>
+      <div style="margin:4px 0 16px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <label>Localização</label>
+        <p id="locationStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">ainda não configurada</p>
+        <button id="locationBtn" type="button" class="btn-secondary" style="margin-top:0;">permitir localização</button>
+      </div>
+      <div style="margin:4px 0 16px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <label>Notificações</label>
+        <p id="pushStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">desativadas</p>
+        <button id="pushBtn" type="button" class="btn-secondary" style="margin-top:0;">ativar notificações</button>
+      </div>
+    </div>
+
+    <div id="routinesTab" class="hidden">
+      <p style="color:var(--muted); font-size:13px; margin:0 0 12px;">Diga o gatilho no começo da fala e o Jarbas responde juntando as fontes escolhidas numa fala só (ex: "bom dia" → clima + notícias + agenda).</p>
+      <div id="routinesList"></div>
+      <button id="routineAddToggleBtn" type="button" class="btn-secondary" style="margin-top:14px;">+ Nova rotina</button>
+      <div id="routineForm" class="hidden" style="margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.08);">
+        <label for="routineTrigger">Gatilho (palavra ou frase)</label>
+        <input type="text" id="routineTrigger" placeholder="Ex: bom dia">
+        <label>Ingredientes</label>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+          <label class="routine-check"><input type="checkbox" value="clima" class="routineIngredient"> Clima</label>
+          <label class="routine-check"><input type="checkbox" value="noticias" class="routineIngredient"> Notícias</label>
+          <label class="routine-check"><input type="checkbox" value="agenda" class="routineIngredient"> Agenda</label>
+          <label class="routine-check"><input type="checkbox" value="tarefas" class="routineIngredient"> Tarefas</label>
+          <label class="routine-check"><input type="checkbox" value="contas" class="routineIngredient"> Contas</label>
+        </div>
+        <label for="routineLinks">Links pra verificar (opcional, um por linha)</label>
+        <textarea id="routineLinks" rows="3" placeholder="https://..."></textarea>
+        <button id="routineSaveBtn" type="button">Salvar rotina</button>
+        <button id="routineCancelBtn" type="button" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+
     <button id="profileSaveBtn">Salvar</button>
     <button id="profileCancelBtn" class="btn-secondary">Cancelar</button>
   </div>
@@ -424,7 +479,44 @@ function loadMemoryState(){
     const raw = localStorage.getItem(MEMORY_KEY);
     if(raw) return JSON.parse(raw);
   }catch(e){}
-  return { history:[], memory:'', profile:'', msgCount:0 };
+  return { history:[], memory:'', knowledge:null, location:null, routines:[], msgCount:0 };
+}
+
+const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
+function emptyKnowledge(){
+  return { identidade:'', pessoas:'', rotina:'', trabalho:'', sobre_jarbas:'', outros:'' };
+}
+function ensureKnowledge(){
+  mem.knowledge = { ...emptyKnowledge(), ...(mem.knowledge || {}) };
+}
+
+// Migração única: se existir o antigo mem.profile (textarea livre) e ainda não existir
+// mem.knowledge, manda pro Worker classificar o texto antigo nas categorias novas.
+// Se a classificação falhar por qualquer motivo, o texto inteiro cai em "outros" —
+// nunca se perde, só fica temporariamente sem categorização fina.
+async function migrateProfileToKnowledge(workerUrl){
+  if(mem.knowledge || !mem.profile || !mem.profile.trim()){
+    ensureKnowledge();
+    return;
+  }
+  const oldProfile = mem.profile;
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'migrate_knowledge', profile: oldProfile })
+    });
+    if(!resp.ok) throw new Error('migrate_http_' + resp.status);
+    const data = await resp.json();
+    if(!data || !data.knowledge) throw new Error('migrate_empty');
+    mem.knowledge = { ...emptyKnowledge(), ...data.knowledge };
+  }catch(e){
+    console.warn('Migração de conhecimento falhou, guardando tudo em "outros":', e);
+    mem.knowledge = { ...emptyKnowledge(), outros: oldProfile };
+  }
+  delete mem.profile;
+  saveMemoryState();
+  await pushMemoryToServer(workerUrl);
 }
 function saveMemoryState(){
   try{ localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); }catch(e){}
@@ -469,8 +561,9 @@ function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
 }
 
-// Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto no perfil,
-// sem passar pelo modelo — rápido e 100% confiável (não depende do resumo automático).
+// Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto na base de
+// conhecimento (categoria "outros"), sem passar pelo modelo — rápido e 100% confiável
+// (não depende do resumo automático nem da classificação assíncrona abaixo).
 const LEARN_TRIGGER = /^\s*(aprenda|aprende|guarda|guarde|anota|anote|lembra|lembre)(?:\s+que)?[,:]?\s+/i;
 function handleLearnCommand(text){
   const match = text.match(LEARN_TRIGGER);
@@ -479,7 +572,8 @@ function handleLearnCommand(text){
   if(!fact) return false;
 
   if(handsFree) startConversationWindow();
-  mem.profile = (mem.profile ? mem.profile.trim() + '\n' : '') + fact;
+  ensureKnowledge();
+  mem.knowledge.outros = (mem.knowledge.outros ? mem.knowledge.outros.trim() + '\n' : '') + fact;
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) pushMemoryToServer(workerUrl);
@@ -491,7 +585,32 @@ function handleLearnCommand(text){
     hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
     resumeHandsFreeListening();
   });
+
+  if(workerUrl) reclassifyFact(workerUrl, fact);
   return true;
+}
+
+// Em paralelo, depois de já ter salvo o fato em "outros" (garantido acima), pede ao
+// Worker pra decidir a categoria certa e mover o fato pra lá. Se falhar ou demorar,
+// o fato continua salvo em "outros" — só fica sem categoria fina até reclassificar depois.
+async function reclassifyFact(workerUrl, fact){
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'classify_fact', fact, knowledge: mem.knowledge })
+    });
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(!data || !KNOWLEDGE_CATEGORIES.includes(data.category) || typeof data.updated_text !== 'string') return;
+    if(data.category !== 'outros'){
+      mem.knowledge.outros = (mem.knowledge.outros || '')
+        .split('\n').filter(line => line.trim() !== fact.trim()).join('\n');
+    }
+    mem.knowledge[data.category] = data.updated_text;
+    saveMemoryState();
+    pushMemoryToServer(workerUrl);
+  }catch(e){}
 }
 
 // lógica original e simples: pega a primeira voz em português que o navegador tiver.
@@ -578,17 +697,31 @@ async function speak(text){
 
 async function updateMemory(workerUrl){
   try{
+    ensureKnowledge();
     const resp = await fetch(workerUrl, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ mode:'summary', messages: history.slice(-16), existingMemory: mem.memory || '' })
+      body: JSON.stringify({
+        mode:'summary',
+        messages: history.slice(-16),
+        existingMemory: mem.memory || '',
+        existingSobreJarbas: mem.knowledge.sobre_jarbas || ''
+      })
     });
     if(!resp.ok) return;
     const data = await resp.json();
+    let changed = false;
     if(data && data.reply){
       mem.memory = data.reply;
       history = history.slice(-HISTORY_KEEP_AFTER_SUMMARY);
       mem.history = history;
+      changed = true;
+    }
+    if(data && typeof data.sobre_jarbas === 'string' && data.sobre_jarbas){
+      mem.knowledge.sobre_jarbas = data.sobre_jarbas;
+      changed = true;
+    }
+    if(changed){
       saveMemoryState();
       pushMemoryToServer(workerUrl);
     }
@@ -605,6 +738,137 @@ function todayISO(){
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
+
+/* ---------- Geolocalização (Frente 2) ----------
+   Só pede localização quando a pessoa clica no botão explícito na tela de
+   conhecimento/config — nunca sozinho. Guarda lat/lon/cidade em mem.location,
+   sincronizado como o resto da memória. Botão serve tanto pra permitir a
+   primeira vez quanto pra atualizar manualmente depois. */
+const locationBtn = document.getElementById('locationBtn');
+const locationStatus = document.getElementById('locationStatus');
+
+function updateLocationStatus(){
+  if(mem.location && mem.location.cidade){
+    const when = mem.location.updatedAt ? new Date(mem.location.updatedAt).toLocaleString('pt-BR') : '';
+    locationStatus.textContent = `${mem.location.cidade}${when ? ' — atualizado em ' + when : ''}`;
+    locationBtn.textContent = 'atualizar localização';
+  } else {
+    locationStatus.textContent = 'ainda não configurada';
+    locationBtn.textContent = 'permitir localização';
+  }
+}
+
+function updateLocation(){
+  if(!('geolocation' in navigator)){
+    locationStatus.textContent = 'seu navegador não suporta localização';
+    return;
+  }
+  locationStatus.textContent = 'obtendo localização...';
+  navigator.geolocation.getCurrentPosition(async (pos)=>{
+    const lat = pos.coords.latitude, lon = pos.coords.longitude;
+    locationStatus.textContent = 'identificando cidade...';
+    const workerUrl = localStorage.getItem('raiz_worker_url');
+    let cidade = '';
+    try{
+      const resp = await fetch(workerUrl, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ mode:'reverse_geocode', lat, lon })
+      });
+      const data = await resp.json();
+      cidade = (data && data.cidade) || '';
+    }catch(e){}
+    mem.location = { lat, lon, cidade, updatedAt: Date.now() };
+    saveMemoryState();
+    if(workerUrl) pushMemoryToServer(workerUrl);
+    updateLocationStatus();
+  }, (err)=>{
+    const reasons = { 1:'permissão de localização negada', 2:'localização indisponível', 3:'tempo esgotado pra obter localização' };
+    locationStatus.textContent = reasons[err.code] || 'não consegui obter a localização';
+  }, { enableHighAccuracy:false, timeout:10000, maximumAge:0 });
+}
+locationBtn.addEventListener('click', updateLocation);
+
+/* ---------- Notificações push (Frente 5) ----------
+   Também só ativa com ação explícita da pessoa (botão), nunca sozinho.
+   Registra o service worker, pede permissão, assina o push com a chave
+   pública VAPID do Worker, e manda a subscription pro Worker guardar. */
+const pushBtn = document.getElementById('pushBtn');
+const pushStatus = document.getElementById('pushStatus');
+
+function pushSupported(){
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+function updatePushStatus(){
+  if(!pushSupported()){
+    pushStatus.textContent = 'seu navegador não suporta notificações push';
+    pushBtn.disabled = true;
+    return;
+  }
+  if(Notification.permission === 'denied'){
+    pushStatus.textContent = 'permissão negada nas configurações do navegador';
+    pushBtn.textContent = 'ativar notificações';
+  } else if(Notification.permission === 'granted'){
+    pushStatus.textContent = 'ativadas';
+    pushBtn.textContent = 'reativar notificações';
+  } else {
+    pushStatus.textContent = 'desativadas';
+    pushBtn.textContent = 'ativar notificações';
+  }
+}
+
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for(let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function enablePush(){
+  if(!pushSupported()){
+    pushStatus.textContent = 'seu navegador não suporta notificações push';
+    return;
+  }
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  const syncKey = getSyncKey();
+  if(!workerUrl || !syncKey){
+    pushStatus.textContent = 'configure o Worker e a senha de sincronização primeiro';
+    return;
+  }
+  try{
+    pushStatus.textContent = 'ativando...';
+    const reg = await navigator.serviceWorker.register('sw.js');
+    const permission = await Notification.requestPermission();
+    if(permission !== 'granted'){
+      updatePushStatus();
+      return;
+    }
+    const keyResp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'vapid_public_key' })
+    });
+    const keyData = await keyResp.json();
+    if(!keyData || !keyData.publicKey) throw new Error('worker_sem_chave_vapid');
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(keyData.publicKey),
+    });
+    await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'save_push_subscription', key: syncKey, subscription: subscription.toJSON() })
+    });
+    updatePushStatus();
+  }catch(err){
+    console.error('Falha ao ativar notificações:', err);
+    pushStatus.textContent = 'não consegui ativar agora, tenta de novo';
+  }
+}
+pushBtn.addEventListener('click', enablePush);
 
 async function askRaiz(userText, isRetry){
   if(!isRetry && handsFree) startConversationWindow();
@@ -629,7 +893,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', profile: mem.profile || '', now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -667,6 +931,70 @@ async function askRaiz(userText, isRetry){
     setEmotion('neutro');
   }
   resumeHandsFreeListening();
+}
+
+/* ---------- Rotinas (Frente 3) ----------
+   Gatilhos definidos pela pessoa (mem.routines) são comparados (contains,
+   sem acento/case) com a fala transcrita ANTES do fluxo normal do askRaiz.
+   Se bater, o Worker roda os ingredientes escolhidos internamente e devolve
+   uma fala só, natural, no mesmo formato {emotion, reply} de sempre. */
+function ensureRoutines(){
+  if(!Array.isArray(mem.routines)) mem.routines = [];
+}
+
+function normalizeForMatch(s){
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .trim();
+}
+
+function findMatchingRoutine(text){
+  ensureRoutines();
+  if(!mem.routines.length) return null;
+  const norm = normalizeForMatch(text);
+  return mem.routines.find(r => r.trigger && norm.includes(normalizeForMatch(r.trigger))) || null;
+}
+
+async function runRoutine(routine){
+  setEmotion('pensando');
+  hint.textContent = 'pensando...';
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  try{
+    if(!workerUrl) throw new Error('worker_not_configured');
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        mode:'routine',
+        ingredients: routine.ingredients || [],
+        links: routine.links || [],
+        companionState: { location: mem.location || null, now: formatNowPtBR(), hojeISO: todayISO() }
+      })
+    });
+    if(!resp.ok) throw new Error('worker_error_' + resp.status);
+    const parsed = await resp.json();
+    if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
+    setEmotion(parsed.emotion || 'neutro');
+    setCaption('jarbas', parsed.reply);
+    hint.textContent = 'falando...';
+    await speak(parsed.reply);
+  }catch(err){
+    console.error('Rotina falhou:', err);
+    setCaption('jarbas', 'Não consegui montar sua rotina agora. Tenta de novo em instantes.');
+    await speak('Não consegui montar sua rotina agora. Tenta de novo em instantes.');
+  }
+  setEmotion('neutro');
+  hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+  resumeHandsFreeListening();
+}
+
+function checkRoutineTrigger(text){
+  const routine = findMatchingRoutine(text);
+  if(!routine) return false;
+  if(handsFree) startConversationWindow();
+  runRoutine(routine);
+  return true;
 }
 
 /* ---------- Ativação por voz ("modo mãos livres") ---------- */
@@ -744,6 +1072,7 @@ function initRecognition(){
       setCaption('você', text);
       recognition.stop();
       if(handleLearnCommand(text)) return;
+      if(checkRoutineTrigger(text)) return;
       askRaiz(text);
       return;
     }
@@ -755,6 +1084,7 @@ function initRecognition(){
       recognition.stop();
       setCaption('você', text);
       if(handleLearnCommand(text)) return;
+      if(checkRoutineTrigger(text)) return;
       askRaiz(text);
       return;
     }
@@ -766,6 +1096,7 @@ function initRecognition(){
         recognition.stop();
         setCaption('você', rest);
         if(handleLearnCommand(rest)) return;
+        if(checkRoutineTrigger(rest)) return;
         askRaiz(rest);
       } else {
         awaitingCommand = true;
@@ -927,6 +1258,7 @@ async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
     }
     setCaption('você', text);
     if(handleLearnCommand(text)) return;
+    if(checkRoutineTrigger(text)) return;
     askRaiz(text);
   }catch(err){
     setEmotion('neutro');
@@ -1011,6 +1343,7 @@ startBtn.addEventListener('click', async ()=>{
     await navigator.mediaDevices.getUserMedia({audio:true});
     hint.textContent = 'sincronizando memória...';
     await syncMemoryFromServer(url);
+    await migrateProfileToKnowledge(url);
     hint.textContent = 'toque para falar';
     initRecognition();
     updateHandsFreeBtn();
@@ -1024,8 +1357,8 @@ startBtn.addEventListener('click', async ()=>{
 
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
-  if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe no que você escreveu no perfil). Continuar?')) return;
-  mem = { history:[], memory:'', profile: mem.profile || '', msgCount:0 };
+  if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
+  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, routines: mem.routines || [], msgCount:0 };
   history = [];
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
@@ -1036,16 +1369,115 @@ resetMemBtn.addEventListener('click', async ()=>{
 
 const editProfileBtn = document.getElementById('editProfileBtn');
 const profileEl = document.getElementById('profileEl');
-const profileText = document.getElementById('profileText');
+const knowledgeFields = {
+  identidade: document.getElementById('knowledgeIdentidade'),
+  pessoas: document.getElementById('knowledgePessoas'),
+  rotina: document.getElementById('knowledgeRotina'),
+  trabalho: document.getElementById('knowledgeTrabalho'),
+  outros: document.getElementById('knowledgeOutros'),
+};
+/* ---------- Abas Conhecimento / Rotinas de voz na tela de config ---------- */
+const tabKnowledgeBtn = document.getElementById('tabKnowledgeBtn');
+const tabRoutinesBtn = document.getElementById('tabRoutinesBtn');
+const knowledgeTabEl = document.getElementById('knowledgeTab');
+const routinesTabEl = document.getElementById('routinesTab');
+function showConfigTab(which){
+  const isKnowledge = which === 'knowledge';
+  knowledgeTabEl.classList.toggle('hidden', !isKnowledge);
+  routinesTabEl.classList.toggle('hidden', isKnowledge);
+  tabKnowledgeBtn.classList.toggle('active', isKnowledge);
+  tabRoutinesBtn.classList.toggle('active', !isKnowledge);
+  if(!isKnowledge) renderRoutinesList();
+}
+tabKnowledgeBtn.addEventListener('click', ()=>showConfigTab('knowledge'));
+tabRoutinesBtn.addEventListener('click', ()=>showConfigTab('routines'));
+
+/* ---------- Gerenciar rotinas de voz (lista, adicionar, apagar) ---------- */
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+const INGREDIENT_LABELS = { clima:'clima', noticias:'notícias', agenda:'agenda', tarefas:'tarefas', contas:'contas' };
+const routinesListEl = document.getElementById('routinesList');
+function renderRoutinesList(){
+  ensureRoutines();
+  if(!mem.routines.length){
+    routinesListEl.innerHTML = '<p style="color:var(--muted); font-size:13px;">Nenhuma rotina ainda.</p>';
+    return;
+  }
+  routinesListEl.innerHTML = mem.routines.map(r => {
+    const ingredientsText = (r.ingredients || []).map(i => INGREDIENT_LABELS[i] || i).join(', ');
+    const linksText = r.links && r.links.length ? ` + ${r.links.length} link(s)` : '';
+    return `<div class="routine-card">
+      <div>
+        <div style="font-weight:600; font-size:14px;">"${escapeHtml(r.trigger)}"</div>
+        <div style="color:var(--muted); font-size:12px;">${escapeHtml(ingredientsText)}${escapeHtml(linksText)}</div>
+      </div>
+      <button type="button" class="btn-secondary routine-del" data-del="${escapeHtml(r.id)}">Apagar</button>
+    </div>`;
+  }).join('');
+  routinesListEl.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-del');
+      if(!confirm('Apagar essa rotina?')) return;
+      mem.routines = mem.routines.filter(r => r.id !== id);
+      saveMemoryState();
+      const workerUrl = localStorage.getItem('raiz_worker_url');
+      if(workerUrl) await pushMemoryToServer(workerUrl);
+      renderRoutinesList();
+    });
+  });
+}
+
+function routineId(){
+  return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+}
+
+const routineAddToggleBtn = document.getElementById('routineAddToggleBtn');
+const routineForm = document.getElementById('routineForm');
+const routineTriggerInput = document.getElementById('routineTrigger');
+const routineLinksInput = document.getElementById('routineLinks');
+routineAddToggleBtn.addEventListener('click', ()=>{
+  const willShow = routineForm.classList.contains('hidden');
+  routineForm.classList.toggle('hidden');
+  if(willShow){
+    routineTriggerInput.value = '';
+    routineLinksInput.value = '';
+    document.querySelectorAll('.routineIngredient').forEach(cb => cb.checked = false);
+  }
+});
+document.getElementById('routineCancelBtn').addEventListener('click', ()=>{
+  routineForm.classList.add('hidden');
+});
+document.getElementById('routineSaveBtn').addEventListener('click', async ()=>{
+  const trigger = routineTriggerInput.value.trim();
+  if(!trigger){ alert('Escreva o gatilho da rotina.'); return; }
+  const ingredients = Array.from(document.querySelectorAll('.routineIngredient:checked')).map(cb => cb.value);
+  if(!ingredients.length){ alert('Escolha pelo menos um ingrediente.'); return; }
+  const links = routineLinksInput.value.split('\n').map(l => l.trim()).filter(Boolean);
+  ensureRoutines();
+  mem.routines.push({ id: routineId(), trigger, ingredients, links });
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) await pushMemoryToServer(workerUrl);
+  routineForm.classList.add('hidden');
+  renderRoutinesList();
+});
+
 editProfileBtn.addEventListener('click', ()=>{
-  profileText.value = mem.profile || '';
+  ensureKnowledge();
+  for(const cat in knowledgeFields) knowledgeFields[cat].value = mem.knowledge[cat] || '';
+  updateLocationStatus();
+  updatePushStatus();
+  showConfigTab('knowledge');
   profileEl.classList.remove('hidden');
 });
 document.getElementById('profileCancelBtn').addEventListener('click', ()=>{
   profileEl.classList.add('hidden');
 });
 document.getElementById('profileSaveBtn').addEventListener('click', async ()=>{
-  mem.profile = profileText.value.trim();
+  ensureKnowledge();
+  for(const cat in knowledgeFields) mem.knowledge[cat] = knowledgeFields[cat].value.trim();
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) await pushMemoryToServer(workerUrl);
@@ -1085,7 +1517,9 @@ async function resyncMemoryOnFocus(){
     // não sobrescreve o histórico local pra não perder mensagens ainda não sincronizadas
     let changed = false;
     if(data && data.memory && data.memory !== mem.memory){ mem.memory = data.memory; changed = true; }
-    if(data && typeof data.profile === 'string' && data.profile !== mem.profile){ mem.profile = data.profile; changed = true; }
+    if(data && data.knowledge && JSON.stringify(data.knowledge) !== JSON.stringify(mem.knowledge)){ mem.knowledge = data.knowledge; changed = true; }
+    if(data && data.location && JSON.stringify(data.location) !== JSON.stringify(mem.location)){ mem.location = data.location; changed = true; }
+    if(data && Array.isArray(data.routines) && JSON.stringify(data.routines) !== JSON.stringify(mem.routines)){ mem.routines = data.routines; changed = true; }
     if(changed) saveMemoryState();
   }catch(e){}
 }

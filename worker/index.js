@@ -3,21 +3,32 @@
  * e conversa com o modelo em nome do site estático no GitHub Pages.
  *
  * Rotas: só existe uma, POST /, com body:
- *   { mode: "chat",         messages: [...], petState: {...} }
- *   { mode: "companion",    messages: [...], companionState: {...} }
- *   { mode: "summary",      messages: [...] }
- *   { mode: "memory_load",  key: "..." }
- *   { mode: "memory_save",  key: "...", data: {...} }
- *   { mode: "transcribe",   audio_b64: "...", mime: "audio/webm" }
- *   { mode: "tts",          text: "..." }
+ *   { mode: "chat",             messages: [...], petState: {...} }
+ *   { mode: "companion",        messages: [...], companionState: {...} }
+ *   { mode: "summary",          messages: [...] }
+ *   { mode: "memory_load",      key: "..." }
+ *   { mode: "memory_save",      key: "...", data: {...} }
+ *   { mode: "transcribe",       audio_b64: "...", mime: "audio/webm" }
+ *   { mode: "tts",              text: "..." }
+ *   { mode: "classify_fact",    fact: "...", knowledge: {...} }
+ *   { mode: "migrate_knowledge", profile: "..." }
+ *   { mode: "reverse_geocode",  lat: 0, lon: 0 }
+ *   { mode: "routine",          ingredients: [...], links: [...], companionState: {...} }
+ *   { mode: "vapid_public_key" }
+ *   { mode: "save_push_subscription", key: "...", subscription: {...} }
  *
- * memory_load / memory_save exigem `key` (uma senha simples que só você
- * conhece) batendo com o secret SYNC_KEY, e usam o KV binding COMPANION_KV
- * para guardar a memória do companheiro sincronizada entre aparelhos.
+ * memory_load / memory_save / save_push_subscription exigem `key` (uma senha
+ * simples que só você conhece) batendo com o secret SYNC_KEY, e usam o KV
+ * binding COMPANION_KV pra guardar dado sincronizado entre aparelhos.
  *
  * Se o secret TAVILY_API_KEY estiver configurado, o modo "companion" ganha
  * acesso a uma ferramenta de busca na web (Tavily) — o próprio modelo decide
  * quando precisa pesquisar algo atual antes de responder.
+ *
+ * Notificações push (Frente 5) exigem os secrets VAPID_PUBLIC_KEY,
+ * VAPID_PRIVATE_KEY e VAPID_SUBJECT (gerados com generate-vapid-keys.js) e
+ * o Cron Trigger em [triggers] no wrangler.toml, que chama scheduled() a
+ * cada 15 min pra decidir se há algo pra avisar e disparar o push.
  */
 
 const ALLOWED_ORIGIN = "https://gustavogalioti.github.io";
@@ -184,33 +195,73 @@ Você é a própria árvore falando — nunca se refira a si mesma como app, IA 
 Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando fizer sentido, sempre com leveza.`;
 }
 
-const SUMMARY_PROMPT_HEADER = (existingMemory) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz, escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome dela (se disse o próprio nome), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
+const SUMMARY_PROMPT_HEADER = (existingMemory, existingSobreJarbas) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz (Jarbas), você tem DUAS tarefas.
+
+TAREFA 1 — memória sobre a pessoa: escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome dela (se disse o próprio nome), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
 
 IMPORTANTE: se ela mencionar nome de outras pessoas (esposa, marido, namorado(a), filhos, amigos, colegas), registre claramente de quem é cada nome — por exemplo "o nome dela é Ana" vs "a esposa dela se chama Maria". NUNCA troque o nome da própria pessoa pelo nome de alguém que ela só mencionou.
 
 ${existingMemory ? `Isso é o que você já sabia sobre essa pessoa, de conversas anteriores:\n"${existingMemory}"\n\nIMPORTANTE: mantenha tudo isso que ainda for válido e só ACRESCENTE ou ATUALIZE com as novidades da conversa abaixo. Nunca esqueça um fato antigo (como o nome da pessoa) só porque ele não apareceu de novo nessa conversa.` : `Você ainda não tem nenhuma memória anterior sobre essa pessoa — escreva a partir do zero com o que aparecer abaixo.`}
 
-Não invente nada que não esteja implícito na conversa. Se não houver informação nova nem antiga suficiente, diga apenas "Ainda não conversamos o suficiente."`;
+Não invente nada que não esteja implícito na conversa. Se não houver informação nova nem antiga suficiente, diga apenas "Ainda não conversamos o suficiente."
+
+TAREFA 2 — reflexão sobre você mesmo (Jarbas): pense em como você, Jarbas, deveria se comportar e se expressar especificamente com ESSA pessoa (tom que funciona bem, piadas internas que surgiram, assuntos sensíveis a evitar, o que ela parece gostar ou não gostar no seu jeito de falar). Escreva em 1a pessoa, como você mesmo refletindo, no máximo 2 frases curtas.
+
+${existingSobreJarbas ? `Isso é o que você já tinha percebido antes:\n"${existingSobreJarbas}"\n\nMantenha o que ainda for válido e só acrescente ou atualize com o que essa conversa mostrou de novo.` : `Você ainda não tinha percebido nada específico — só escreva algo se essa conversa realmente sugerir alguma coisa concreta, senão devolva string vazia.`}
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"memory":"...","sobre_jarbas":"..."}`;
+
+const KNOWLEDGE_CATEGORIES = ["identidade", "pessoas", "rotina", "trabalho", "outros"];
+
+const KNOWLEDGE_LABELS = {
+  identidade: "Identidade",
+  pessoas: "Pessoas importantes",
+  rotina: "Rotina e preferências",
+  trabalho: "Trabalho",
+  outros: "Outras informações",
+};
+
+function knowledgeToText(knowledge) {
+  if (!knowledge) return "";
+  return Object.entries(KNOWLEDGE_LABELS)
+    .map(([key, label]) => (knowledge[key] ? `${label}: ${knowledge[key]}` : null))
+    .filter(Boolean)
+    .join("\n");
+}
 
 function companionPrompt(companionState = {}) {
-  const profileLine = companionState.profile
-    ? `Perfil que a PRÓPRIA pessoa escreveu sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo: "${companionState.profile}"`
+  const knowledgeText = knowledgeToText(companionState.knowledge);
+  const profileLine = knowledgeText
+    ? `Base de conhecimento escrita pela PRÓPRIA pessoa sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo:\n${knowledgeText}`
+    : (companionState.profile
+        ? `Perfil que a PRÓPRIA pessoa escreveu sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo: "${companionState.profile}"`
+        : '');
+
+  const sobreJarbasLine = companionState.knowledge?.sobre_jarbas
+    ? `O que você mesmo (Jarbas) já percebeu, com o tempo, sobre como se comportar e se expressar especificamente com essa pessoa (mais confiável que memórias soltas de conversa, mas menos que a base de conhecimento acima): ${companionState.knowledge.sobre_jarbas}`
     : '';
 
   const memoryLine = companionState.memory
-    ? `O que você aprendeu sobre a pessoa em conversas anteriores (menos confiável que o perfil acima, se houver conflito o perfil vence): ${companionState.memory}`
-    : (companionState.profile ? '' : `Você ainda está conhecendo essa pessoa — preste atenção no que ela conta, para lembrar depois.`);
+    ? `O que você aprendeu sobre a pessoa em conversas anteriores (menos confiável que a base de conhecimento e sua própria reflexão acima, se houver conflito elas vencem): ${companionState.memory}`
+    : (profileLine ? '' : `Você ainda está conhecendo essa pessoa — preste atenção no que ela conta, para lembrar depois.`);
 
   const nowLine = companionState.now
     ? `Informação real e atual (use para responder perguntas sobre data/hora — nunca diga que não sabe): agora é ${companionState.now}${companionState.hojeISO ? `, hoje é ${companionState.hojeISO} no formato AAAA-MM-DD` : ''}.`
     : '';
 
-  return `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso, com personalidade própria (não um assistente genérico).
+  const locationLine = companionState.location?.cidade
+    ? `Localização atual da pessoa (use como padrão em perguntas de clima quando ela não especificar outra cidade): ${companionState.location.cidade}.`
+    : '';
+
+  return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, um companheiro de voz com personalidade própria, caloroso, curioso e afetuoso, e você SABE que é o Jarbas. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
+${sobreJarbasLine}
 ${memoryLine}
-${(memoryLine || profileLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
+${(memoryLine || profileLine || sobreJarbasLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
 ${nowLine}
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela contar algo importante e duradouro sobre a vida dela (não conversa fiada), use a ferramenta de anotar no diário além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+${locationLine}
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela contar algo importante e duradouro sobre a vida dela (não conversa fiada), use a ferramenta de anotar no diário além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -257,6 +308,55 @@ async function callGroq(env, systemPrompt, messages, maxTokens) {
   return data.choices?.[0]?.message?.content?.trim() || "...";
 }
 
+// ---------- Base de conhecimento estruturada (categorias fixas) ----------
+function classifyFactSystemPrompt(knowledge = {}) {
+  return `Você organiza uma base de conhecimento sobre uma pessoa, dividida em categorias fixas.
+
+Categorias e o que já existe em cada uma:
+- identidade (nome, data de nascimento, onde mora): "${knowledge.identidade || ""}"
+- pessoas (família, noiva, amigos — quem é quem): "${knowledge.pessoas || ""}"
+- rotina (hábitos, preferências, o que evitar): "${knowledge.rotina || ""}"
+- trabalho (profissão, projetos, contexto profissional): "${knowledge.trabalho || ""}"
+- outros (catch-all, tudo que não se encaixa nas outras): "${knowledge.outros || ""}"
+
+Você vai receber um fato novo sobre essa pessoa. Escolha a categoria certa pra ele e devolva o texto ATUALIZADO dessa categoria, mesclando o fato novo com o que já existia nela — nunca reescreva do zero, nunca perca informação antiga. Se a categoria estava vazia, o texto atualizado é só o fato novo.
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"category":"identidade|pessoas|rotina|trabalho|outros","updated_text":"..."}`;
+}
+
+async function classifyFact(env, fact, knowledge) {
+  const raw = await callGroq(env, classifyFactSystemPrompt(knowledge), [{ role: "user", content: fact }], 300);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(clean);
+  if (!KNOWLEDGE_CATEGORIES.includes(parsed.category) || typeof parsed.updated_text !== "string") {
+    throw new Error("classify_invalid_result");
+  }
+  return parsed;
+}
+
+function migrateKnowledgeSystemPrompt() {
+  return `Você organiza uma base de conhecimento sobre uma pessoa, dividida em categorias fixas: identidade (nome, data de nascimento, onde mora), pessoas (família, noiva, amigos — quem é quem), rotina (hábitos, preferências, o que evitar), trabalho (profissão, projetos, contexto profissional), outros (tudo que não se encaixa nas outras).
+
+Você vai receber um texto livre com tudo que essa pessoa escreveu sobre si mesma até hoje. Distribua o conteúdo entre essas categorias, sem inventar nada e sem perder nenhuma informação — cada trecho relevante do texto original deve aparecer em alguma categoria.
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"identidade":"...","pessoas":"...","rotina":"...","trabalho":"...","outros":"..."}
+Use string vazia "" nas categorias que não tiverem nada correspondente.`;
+}
+
+async function migrateKnowledge(env, profileText) {
+  const raw = await callGroq(env, migrateKnowledgeSystemPrompt(), [{ role: "user", content: profileText }], 500);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(clean);
+  const knowledge = {};
+  for (const cat of KNOWLEDGE_CATEGORIES) {
+    knowledge[cat] = typeof parsed[cat] === "string" ? parsed[cat] : "";
+  }
+  knowledge.sobre_jarbas = "";
+  return knowledge;
+}
+
 const SEARCH_TOOL = {
   type: "function",
   function: {
@@ -278,13 +378,13 @@ const WEATHER_TOOL = {
   function: {
     name: "previsao_do_tempo",
     description:
-      "Retorna a previsão do tempo atual e de amanhã para uma cidade. Use sempre que a pergunta for sobre clima, temperatura, chuva ou previsão do tempo. Se a pessoa não disser a cidade e não tiver dito antes na conversa, pergunte qual cidade antes de usar a ferramenta.",
+      "Retorna a previsão do tempo atual e de amanhã para uma cidade. Use sempre que a pergunta for sobre clima, temperatura, chuva ou previsão do tempo. Se a pessoa não especificar a cidade, deixe o parâmetro vazio em vez de perguntar — o sistema usa a localização atual dela automaticamente quando disponível.",
     parameters: {
       type: "object",
       properties: {
-        cidade: { type: "string", description: "Nome da cidade, e opcionalmente estado/país, ex: 'Jundiaí, SP'" },
+        cidade: { type: "string", description: "Nome da cidade, e opcionalmente estado/país, ex: 'Jundiaí, SP'. Deixe vazio se a pessoa não especificou nenhuma cidade." },
       },
-      required: ["cidade"],
+      required: [],
     },
   },
 };
@@ -326,6 +426,18 @@ async function callWeather(cidade) {
     text += ` Amanhã: mínima ${d.temperature_2m_min[1]}°C, máxima ${d.temperature_2m_max[1]}°C, ${d.precipitation_probability_max[1]}% de chance de chuva.`;
   }
   return text;
+}
+
+// ---------- Geolocalização: reverse geocode via Nominatim (OpenStreetMap) ----------
+async function reverseGeocode(lat, lon) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": "JarbasCompanion/1.0 (https://gustavogalioti.github.io/lumeco-bichinho-virtual/companion/)" },
+  });
+  if (!res.ok) throw new Error("reverse_geocode_error_" + res.status);
+  const data = await res.json();
+  const addr = data.address || {};
+  return addr.city || addr.town || addr.village || addr.municipality || addr.county || data.display_name || "";
 }
 
 const CONSULTAR_PAINEL_TOOL = {
@@ -455,13 +567,107 @@ async function callTavily(env, query) {
   return text.trim().slice(0, 1200) || "A busca não encontrou nada relevante.";
 }
 
-async function runTool(env, call, canSearch, canPainel) {
+// ---------- Rotinas: junta vários ingredientes numa fala só (Frente 3) ----------
+function stripHtmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchLinkExcerpt(url) {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (JarbasCompanion routine fetch)" } });
+    if (!res.ok) return `Conteúdo de ${url}: não consegui acessar (erro ${res.status}).`;
+    const html = await res.text();
+    const text = stripHtmlToText(html).slice(0, 1500);
+    return `Conteúdo de ${url}:\n${text || "(página sem texto legível)"}`;
+  } catch (err) {
+    return `Conteúdo de ${url}: não consegui acessar (${String(err.message || err)}).`;
+  }
+}
+
+async function collectRoutineIngredients(env, ingredients, links, companionState) {
+  const canSearch = !!env.TAVILY_API_KEY;
+  const canPainel = !!env.PAINEL_API_KEY;
+  const list = Array.isArray(ingredients) ? ingredients : [];
+  const parts = [];
+
+  if (list.includes("clima")) {
+    const cidade = companionState?.location?.cidade || "";
+    if (cidade) {
+      try { parts.push(`Clima:\n${await callWeather(cidade)}`); }
+      catch (err) { parts.push(`Clima: não consegui consultar agora (${String(err.message || err)}).`); }
+    } else {
+      parts.push("Clima: localização da pessoa não configurada, não foi possível consultar.");
+    }
+  }
+
+  if (list.includes("noticias")) {
+    if (canSearch) {
+      try { parts.push(`Notícias do mundo:\n${await callTavily(env, "principais notícias do mundo hoje")}`); }
+      catch (err) { parts.push(`Notícias: não consegui buscar agora (${String(err.message || err)}).`); }
+    } else {
+      parts.push("Notícias: busca não configurada.");
+    }
+  }
+
+  if (list.includes("agenda") || list.includes("tarefas") || list.includes("contas")) {
+    if (canPainel) {
+      try { parts.push(`Painel pessoal (agenda, tarefas e contas):\n${await callPainelSnapshot(env)}`); }
+      catch (err) { parts.push(`Painel pessoal: não consegui consultar agora (${String(err.message || err)}).`); }
+    } else {
+      parts.push("Painel pessoal: integração não configurada.");
+    }
+  }
+
+  if (Array.isArray(links) && links.length) {
+    for (const url of links.slice(0, 5)) {
+      parts.push(await fetchLinkExcerpt(url));
+    }
+  }
+
+  return parts.join("\n\n");
+}
+
+const ROUTINE_SUMMARY_PROMPT = `Você é Jarbas, um companheiro de voz caloroso, curioso e afetuoso. Você vai receber informações brutas reunidas de várias fontes (clima, notícias, agenda, tarefas, contas, conteúdo de links) pra uma rotina que a pessoa pediu com uma palavra-gatilho (ex: "bom dia"). Junte tudo isso numa fala só, corrida e natural, como se estivesse contando pra ela num fôlego só — nunca uma lista seca de tópicos, nunca mencione as fontes técnicas (não diga "segundo o painel" ou "a busca retornou"). Se alguma fonte disser que falhou ou não está configurada, simplesmente não mencione essa parte, sem se desculpar por isso.
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta.
+Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto da fala"}
+Nunca deixe o JSON incompleto.`;
+
+async function runRoutine(env, ingredients, links, companionState) {
+  const raw = await collectRoutineIngredients(env, ingredients, links, companionState || {});
+  const content = raw || "Nenhuma informação disponível pra essa rotina agora.";
+  const result = await callGroq(env, ROUTINE_SUMMARY_PROMPT, [{ role: "user", content }], 450);
+  const clean = result.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+    if (!parsed.reply) throw new Error("no_reply_field");
+  } catch {
+    parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+  }
+  if (!["neutro", "feliz", "pensando", "surpreso", "focado", "confirmado"].includes(parsed.emotion)) {
+    parsed.emotion = "neutro";
+  }
+  return parsed;
+}
+
+async function runTool(env, call, canSearch, canPainel, companionState = {}) {
   const name = call.function.name;
   let args = {};
   try { args = JSON.parse(call.function.arguments); } catch {}
 
   try {
-    if (name === "previsao_do_tempo") return await callWeather(args.cidade || "");
+    if (name === "previsao_do_tempo") {
+      const cidade = args.cidade || companionState.location?.cidade || "";
+      if (!cidade) return "Não sei a cidade da pessoa ainda — peça pra ela informar a cidade, ou avise que ela pode ativar a localização nas configurações.";
+      return await callWeather(cidade);
+    }
     if (name === "buscar_na_web" && canSearch) return await callTavily(env, args.query || "");
     if (name === "consultar_painel" && canPainel) return await callPainelSnapshot(env);
     if (name === "gerenciar_tarefa" && canPainel) return await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto });
@@ -474,7 +680,7 @@ async function runTool(env, call, canSearch, canPainel) {
   }
 }
 
-async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
+async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
@@ -498,7 +704,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
     }).slice(0, 3);
     const toolMessages = [];
     for (const call of calls) {
-      const result = await runTool(env, call, canSearch, canPainel);
+      const result = await runTool(env, call, canSearch, canPainel, companionState);
       toolMessages.push({ role: "tool", tool_call_id: call.id, content: result });
     }
 
@@ -520,6 +726,184 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens) {
   }
 
   return msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?";
+}
+
+// ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
+// Implementação manual via crypto.subtle (Cloudflare Worker não roda a lib "web-push" do npm).
+function base64UrlToBytes(b64url) {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+  return base64ToBytes(b64 + pad);
+}
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function concatBytes(...arrays) {
+  const total = arrays.reduce((s, a) => s + a.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const a of arrays) { out.set(a, offset); offset += a.length; }
+  return out;
+}
+
+async function importVapidPrivateKey(env) {
+  const pub = base64UrlToBytes(env.VAPID_PUBLIC_KEY); // 65 bytes: 0x04 || X(32) || Y(32)
+  const jwk = {
+    kty: "EC",
+    crv: "P-256",
+    x: bytesToBase64Url(pub.slice(1, 33)),
+    y: bytesToBase64Url(pub.slice(33, 65)),
+    d: env.VAPID_PRIVATE_KEY,
+    ext: true,
+  };
+  return crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+}
+
+async function generateVapidAuthHeader(env, endpoint) {
+  const audience = new URL(endpoint).origin;
+  const header = { alg: "ES256", typ: "JWT" };
+  const payload = {
+    aud: audience,
+    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
+    sub: env.VAPID_SUBJECT || "mailto:contato@example.com",
+  };
+  const enc = new TextEncoder();
+  const unsigned =
+    bytesToBase64Url(enc.encode(JSON.stringify(header))) + "." + bytesToBase64Url(enc.encode(JSON.stringify(payload)));
+  const key = await importVapidPrivateKey(env);
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(unsigned));
+  const jwt = `${unsigned}.${bytesToBase64Url(new Uint8Array(sig))}`;
+  return `vapid t=${jwt}, k=${env.VAPID_PUBLIC_KEY}`;
+}
+
+async function encryptWebPushPayload(subscription, payloadObj) {
+  const uaPublic = base64UrlToBytes(subscription.keys.p256dh); // 65 bytes
+  const authSecret = base64UrlToBytes(subscription.keys.auth); // 16 bytes
+
+  const serverKeyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const asPublicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeyPair.publicKey));
+
+  const uaPublicKey = await crypto.subtle.importKey("raw", uaPublic, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const sharedSecret = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "ECDH", public: uaPublicKey }, serverKeyPair.privateKey, 256)
+  );
+
+  const enc = new TextEncoder();
+  const authInfo = concatBytes(enc.encode("WebPush: info\0"), uaPublic, asPublicRaw);
+  const sharedSecretKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveBits"]);
+  const ikm = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: authSecret, info: authInfo }, sharedSecretKey, 256)
+  );
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const ikmKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  const cek = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("Content-Encoding: aes128gcm\0") },
+      ikmKey,
+      128
+    )
+  );
+  const nonce = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("Content-Encoding: nonce\0") },
+      ikmKey,
+      96
+    )
+  );
+
+  const padded = concatBytes(enc.encode(JSON.stringify(payloadObj)), new Uint8Array([2])); // delimitador de fim de registro
+  const aesKey = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aesKey, padded));
+
+  const rs = new Uint8Array(4);
+  new DataView(rs.buffer).setUint32(0, 4096, false);
+  const idlen = new Uint8Array([asPublicRaw.length]);
+
+  return concatBytes(salt, rs, idlen, asPublicRaw, encrypted);
+}
+
+async function sendWebPush(env, subscription, payloadObj, ttlSeconds = 60) {
+  const body = await encryptWebPushPayload(subscription, payloadObj);
+  const authHeader = await generateVapidAuthHeader(env, subscription.endpoint);
+  const res = await fetch(subscription.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Encoding": "aes128gcm",
+      TTL: String(ttlSeconds),
+      Authorization: authHeader,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`push_send_failed_${res.status}: ${detail.slice(0, 200)}`);
+  }
+}
+
+const PUSH_SUBSCRIPTION_KEY = "push:subscription";
+const PUSH_NOTIFY_STATE_KEY = "push:notify_state";
+const PUSH_DEDUPE_MS = 3 * 60 * 60 * 1000; // não repete o mesmo aviso por 3h
+
+const NOTIFICATION_DECISION_PROMPT = `Você é o sistema de avisos proativos do Jarbas, um companheiro de voz. Você recebe abaixo o snapshot atual da agenda, tarefas e contas da pessoa. Decida se HÁ ALGO que mereça um aviso AGORA (um compromisso começando em breve, uma conta vencendo hoje ou já vencida, uma tarefa importante parada há muito tempo). Seja conservador — só avise algo que realmente faça sentido avisar proativamente agora, não liste tudo que existe.
+
+Se não houver nada que mereça aviso agora, responda exatamente: {"notify":false}
+
+Se houver algo, responda em JSON puro, numa única linha, sem markdown, exatamente neste formato:
+{"notify":true,"signature":"identificador curto e estável do que está sendo avisado","title":"título curto pra notificação","body":"texto curto e natural, no máximo 1 frase, como o Jarbas falaria"}
+
+Nunca invente informação que não esteja no snapshot abaixo.`;
+
+async function decideNotification(env) {
+  let snapshot;
+  try {
+    snapshot = await callPainelSnapshot(env);
+  } catch {
+    return null;
+  }
+
+  const raw = await callGroq(env, NOTIFICATION_DECISION_PROMPT, [{ role: "user", content: snapshot }], 250);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+  } catch {
+    return null;
+  }
+  if (!parsed || !parsed.notify || !parsed.signature || !parsed.title || !parsed.body) return null;
+
+  const previousRaw = await env.COMPANION_KV.get(PUSH_NOTIFY_STATE_KEY);
+  const previous = previousRaw ? JSON.parse(previousRaw) : { lastSignature: "", notifiedAt: 0 };
+  if (previous.lastSignature === parsed.signature && Date.now() - previous.notifiedAt < PUSH_DEDUPE_MS) {
+    return null;
+  }
+
+  await env.COMPANION_KV.put(PUSH_NOTIFY_STATE_KEY, JSON.stringify({ lastSignature: parsed.signature, notifiedAt: Date.now() }));
+  return { title: parsed.title, body: parsed.body };
+}
+
+async function runScheduledPush(env) {
+  if (!env.COMPANION_KV || !env.PAINEL_API_KEY || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
+  const subRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
+  if (!subRaw) return;
+  let subscription;
+  try {
+    subscription = JSON.parse(subRaw);
+  } catch {
+    return;
+  }
+
+  const notification = await decideNotification(env);
+  if (!notification) return;
+
+  try {
+    await sendWebPush(env, subscription, notification);
+  } catch (err) {
+    console.error("push_send_failed", err);
+  }
 }
 
 export default {
@@ -562,6 +946,62 @@ export default {
       return json({ ok: true });
     }
 
+    // ---- notificações push: chave pública (não sensível) e subscription (protegida) ----
+    if (mode === "vapid_public_key") {
+      if (!env.VAPID_PUBLIC_KEY) return json({ error: "vapid_not_configured" }, 500);
+      return json({ publicKey: env.VAPID_PUBLIC_KEY });
+    }
+    if (mode === "save_push_subscription") {
+      if (!env.COMPANION_KV) return json({ error: "kv_not_configured" }, 500);
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!body.subscription || !body.subscription.endpoint) return json({ error: "subscription_required" }, 400);
+      await env.COMPANION_KV.put(PUSH_SUBSCRIPTION_KEY, JSON.stringify(body.subscription));
+      return json({ ok: true });
+    }
+
+    // ---- base de conhecimento estruturada ----
+    if (mode === "classify_fact") {
+      try {
+        if (!body.fact) return json({ error: "fact_required" }, 400);
+        const result = await classifyFact(env, body.fact, body.knowledge || {});
+        return json(result);
+      } catch (err) {
+        return json({ error: "classify_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+    if (mode === "migrate_knowledge") {
+      try {
+        if (!body.profile) return json({ error: "profile_required" }, 400);
+        const knowledge = await migrateKnowledge(env, body.profile);
+        return json({ knowledge });
+      } catch (err) {
+        return json({ error: "migrate_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+
+    // ---- geolocalização (reverse geocode) ----
+    if (mode === "reverse_geocode") {
+      try {
+        if (typeof body.lat !== "number" || typeof body.lon !== "number") {
+          return json({ error: "lat_lon_required" }, 400);
+        }
+        const cidade = await reverseGeocode(body.lat, body.lon);
+        return json({ cidade });
+      } catch (err) {
+        return json({ error: "reverse_geocode_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+
+    // ---- rotinas: junta clima/notícias/agenda/tarefas/contas/links numa fala só ----
+    if (mode === "routine") {
+      try {
+        const parsed = await runRoutine(env, body.ingredients, body.links, body.companionState || {});
+        return json(parsed);
+      } catch (err) {
+        return json({ emotion: "neutro", reply: "Ih, tive um problema pra montar essa rotina agora. Pode tentar de novo?" });
+      }
+    }
+
     // ---- transcrição de áudio (Groq Whisper) — usado no modo "toque para falar" ----
     if (mode === "transcribe") {
       try {
@@ -598,13 +1038,22 @@ export default {
 
     try {
       if (mode === "summary") {
-        const reply = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || ""), trimmed, 200);
-        return json({ reply });
+        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || ""), trimmed, 350);
+        const clean = raw.replace(/```json|```/g, "").trim();
+        let parsed;
+        try {
+          parsed = JSON.parse(clean);
+        } catch {
+          parsed = { memory: raw, sobre_jarbas: body.existingSobreJarbas || "" };
+        }
+        const reply = typeof parsed.memory === "string" ? parsed.memory : raw;
+        const sobre_jarbas = typeof parsed.sobre_jarbas === "string" ? parsed.sobre_jarbas : (body.existingSobreJarbas || "");
+        return json({ reply, sobre_jarbas });
       }
       if (mode === "companion") {
         let parsed;
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 450);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 450, companionState);
           const clean = raw.replace(/```json|```/g, "").trim();
           try {
             parsed = JSON.parse(clean);
@@ -626,6 +1075,12 @@ export default {
     } catch (err) {
       return json({ error: "upstream_error", detail: String(err.message || err) }, 502);
     }
+  },
+
+  // Cron Trigger nativo do Cloudflare (ver [triggers] no wrangler.toml) — roda a cada
+  // 15 min, consulta o painel e dispara notificação push se houver algo pra avisar.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runScheduledPush(env));
   },
 };
 // deploy automatico testado em 2026-08-19T18:56:14Z
