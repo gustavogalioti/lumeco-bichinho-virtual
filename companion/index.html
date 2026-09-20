@@ -111,7 +111,10 @@
 
 <div class="top">
   <div class="brand">Jarbas</div>
-  <button id="fullscreenBtn" type="button" aria-label="Tela cheia" style="position:fixed; top:18px; right:18px; background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); border-radius:10px; width:38px; height:38px; cursor:pointer; font-size:16px;">⛶</button>
+  <div style="position:fixed; top:18px; right:18px; display:flex; gap:10px; z-index:5;">
+    <button id="settingsBtn" type="button" aria-label="Configurações" style="background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); border-radius:10px; width:38px; height:38px; cursor:pointer; font-size:16px;">⚙️</button>
+    <button id="fullscreenBtn" type="button" aria-label="Tela cheia" style="background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); border-radius:10px; width:38px; height:38px; cursor:pointer; font-size:16px;">⛶</button>
+  </div>
 </div>
 
 <div class="stage">
@@ -129,9 +132,16 @@
   </button>
   <div class="hint" id="hint">toque para falar</div>
   <button id="handsFreeBtn" type="button" style="background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); font-size:12px; border-radius:20px; padding:6px 14px; cursor:pointer; margin-top:8px;">🎙️ mãos livres: desligado</button>
-  <button id="resetMemBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:6px;">esquecer conversas e recomeçar</button>
-  <button id="editProfileBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:4px;">editar o que ele sabe sobre mim</button>
-  <button id="voiceModeBtn" type="button" style="background:transparent; border:none; color:var(--muted); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:4px;">voz: unificada</button>
+</div>
+
+<div class="setup hidden" id="settingsMenu">
+  <div class="setup-card">
+    <h2>Configurações</h2>
+    <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
+    <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
+    <button id="resetMemBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">esquecer conversas e recomeçar</button>
+    <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
+  </div>
 </div>
 
 <div class="setup hidden" id="profileEl">
@@ -1355,6 +1365,11 @@ startBtn.addEventListener('click', async ()=>{
   }
 });
 
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsMenu = document.getElementById('settingsMenu');
+settingsBtn.addEventListener('click', ()=>{ settingsMenu.classList.remove('hidden'); });
+document.getElementById('settingsCloseBtn').addEventListener('click', ()=>{ settingsMenu.classList.add('hidden'); });
+
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
   if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
@@ -1363,6 +1378,7 @@ resetMemBtn.addEventListener('click', async ()=>{
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) await pushMemoryToServer(workerUrl);
+  settingsMenu.classList.add('hidden');
   setCaption('jarbas', 'Prontinho, começamos do zero.');
   hint.textContent = 'toque para falar';
 });
@@ -1470,6 +1486,7 @@ editProfileBtn.addEventListener('click', ()=>{
   updateLocationStatus();
   updatePushStatus();
   showConfigTab('knowledge');
+  settingsMenu.classList.add('hidden');
   profileEl.classList.remove('hidden');
 });
 document.getElementById('profileCancelBtn').addEventListener('click', ()=>{
