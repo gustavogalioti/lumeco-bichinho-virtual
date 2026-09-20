@@ -489,7 +489,7 @@ function loadMemoryState(){
     const raw = localStorage.getItem(MEMORY_KEY);
     if(raw) return JSON.parse(raw);
   }catch(e){}
-  return { history:[], memory:'', knowledge:null, location:null, routines:[], msgCount:0 };
+  return { history:[], memory:'', knowledge:null, location:null, routines:[], timeline:[], msgCount:0 };
 }
 
 const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
@@ -885,7 +885,7 @@ async function askRaiz(userText, isRetry){
   setEmotion('pensando');
   hint.textContent = 'pensando...';
   if(!isRetry){
-    history.push({role:'user', content:userText});
+    history.push({role:'user', content:userText, at: new Date().toISOString()});
     mem.msgCount = (mem.msgCount||0) + 1;
     if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
     mem.history = history;
@@ -903,15 +903,20 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
     const parsed = await resp.json();
     if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
 
-    history.push({role:'assistant', content: parsed.reply});
+    history.push({role:'assistant', content: parsed.reply, at: new Date().toISOString()});
     mem.history = history;
+    if(parsed.save_memory){
+      if(!Array.isArray(mem.timeline)) mem.timeline = [];
+      mem.timeline.push({ id: Date.now(), text: parsed.save_memory, at: new Date().toISOString() });
+      mem.timeline = mem.timeline.slice(-80);
+    }
     saveMemoryState();
     pushMemoryToServer(workerUrl);
 
@@ -1373,7 +1378,7 @@ document.getElementById('settingsCloseBtn').addEventListener('click', ()=>{ sett
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
   if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
-  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, routines: mem.routines || [], msgCount:0 };
+  mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, routines: mem.routines || [], timeline: mem.timeline || [], msgCount:0 };
   history = [];
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');

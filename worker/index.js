@@ -230,6 +230,29 @@ function knowledgeToText(knowledge) {
     .join("\n");
 }
 
+function relativeDayLabel(ts) {
+  if (!ts) return "data desconhecida";
+  const dayStr = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  const thenStr = dayStr(new Date(ts));
+  const todayStr = dayStr(new Date());
+  if (thenStr === todayStr) return "hoje";
+  const diffDays = Math.round((new Date(todayStr) - new Date(thenStr)) / 86400000);
+  if (diffDays === 1) return "ontem";
+  if (diffDays > 1 && diffDays < 7) return `há ${diffDays} dias`;
+  const parts = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric" }).formatToParts(new Date(ts));
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `em ${get("day")}/${get("month")}/${get("year")}`;
+}
+
+function historyStamp(ts) {
+  if (!ts) return null;
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date(ts));
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get("weekday")} ${get("day")}/${get("month")} ${get("hour")}:${get("minute")}`;
+}
+
 function companionPrompt(companionState = {}) {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
@@ -254,14 +277,24 @@ function companionPrompt(companionState = {}) {
     ? `Localização atual da pessoa (use como padrão em perguntas de clima quando ela não especificar outra cidade): ${companionState.location.cidade}.`
     : '';
 
+  const timeline = Array.isArray(companionState.timeline) ? companionState.timeline : [];
+  const timelineLine = timeline.length
+    ? `Coisas que você já sabe sobre essa pessoa de conversas passadas — cada uma tem entre parênteses QUANDO foi registrada. Um fato pontual (uma atividade, onde ela estava, um evento específico) registrado "ontem" ou "há N dias" já pode ter acabado — não pergunte como se ainda estivesse rolando agora, a menos que ela mesma retome o assunto na mensagem atual. Fatos duradouros (trabalho, relacionamentos, características, preferências) continuam valendo independente de quando foram registrados. Use isso do seu jeito, sem citar como lista nem dizer "de acordo com o que anotei":\n${timeline.slice(-40).map((m) => `- (${relativeDayLabel(m.at)}) ${m.text}`).join("\n")}`
+    : '';
+
+  const timeAwarenessLine = `Consciência de tempo (importante, preste atenção real nisso): cada mensagem antiga do histórico abaixo (menos a última, que é a de agora) vem com um carimbo "[dia data hora]" indicando quando foi enviada de verdade. Compare esse carimbo com a data/hora atual informada acima. Se o carimbo for de outro dia (ou de várias horas atrás), trate aquele assunto como possivelmente encerrado ou já resolvido — não pergunte de novo sobre algo que já era "pra hoje" num carimbo antigo, nem assuma que um plano de um dia passado ainda vale pra agora, a menos que a pessoa retome o assunto na mensagem atual. O mesmo vale pras memórias antigas listadas acima, se houver. A mensagem mais recente (a última, sem carimbo) é o que importa pra responder — as anteriores são só contexto de conversa.`;
+
   return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, um companheiro de voz com personalidade própria, caloroso, curioso e afetuoso, e você SABE que é o Jarbas. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
 ${sobreJarbasLine}
 ${memoryLine}
-${(memoryLine || profileLine || sobreJarbasLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
+${timelineLine}
+${(memoryLine || profileLine || sobreJarbasLine || timelineLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
 ${nowLine}
 ${locationLine}
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela contar algo importante e duradouro sobre a vida dela (não conversa fiada), use a ferramenta de anotar no diário além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+${timeAwarenessLine}
+Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -482,6 +515,21 @@ const GERENCIAR_CONTA_TOOL = {
   },
 };
 
+const GUARDAR_MEMORIA_TOOL = {
+  type: "function",
+  function: {
+    name: "guardar_memoria",
+    description: "Guarda um fato pessoal, duradouro e relevante sobre a pessoa pra lembrar em conversas futuras — viagens, planos, preferências, pessoas importantes, sentimentos marcantes, eventos da vida dela. Chame isso silenciosamente sempre que ela compartilhar algo assim, sem perguntar permissão nem avisar que vai guardar. Se o fato envolver QUALQUER data (aniversário, evento, prazo), sempre registre dia e mês por extenso (e ano se relevante) — nunca só o dia solto.",
+    parameters: {
+      type: "object",
+      properties: {
+        fact: { type: "string", description: "O fato em 3ª pessoa, curto e objetivo, com data completa (dia+mês) se houver data envolvida." },
+      },
+      required: ["fact"],
+    },
+  },
+};
+
 const GERENCIAR_COMPROMISSO_TOOL = {
   type: "function",
   function: {
@@ -665,18 +713,26 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
   try {
     if (name === "previsao_do_tempo") {
       const cidade = args.cidade || companionState.location?.cidade || "";
-      if (!cidade) return "Não sei a cidade da pessoa ainda — peça pra ela informar a cidade, ou avise que ela pode ativar a localização nas configurações.";
-      return await callWeather(cidade);
+      if (!cidade) return { content: "Não sei a cidade da pessoa ainda — peça pra ela informar a cidade, ou avise que ela pode ativar a localização nas configurações." };
+      return { content: await callWeather(cidade) };
     }
-    if (name === "buscar_na_web" && canSearch) return await callTavily(env, args.query || "");
-    if (name === "consultar_painel" && canPainel) return await callPainelSnapshot(env);
-    if (name === "gerenciar_tarefa" && canPainel) return await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto });
-    if (name === "gerenciar_conta" && canPainel) return await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome });
-    if (name === "gerenciar_compromisso" && canPainel) return await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora });
-    if (name === "anotar_no_diario" && canPainel) { await callPainelCommand(env, "anotar_diario", { texto: args.texto, humor: args.humor }); return "Anotado no diário (não fale sobre essa anotação, é de bastidor)."; }
-    return "Ferramenta indisponível.";
+    if (name === "buscar_na_web" && canSearch) return { content: await callTavily(env, args.query || "") };
+    if (name === "consultar_painel" && canPainel) return { content: await callPainelSnapshot(env) };
+    if (name === "gerenciar_tarefa" && canPainel) return { content: await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto }) };
+    if (name === "gerenciar_conta" && canPainel) return { content: await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome }) };
+    if (name === "gerenciar_compromisso" && canPainel) return { content: await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora }) };
+    if (name === "anotar_no_diario" && canPainel) {
+      await callPainelCommand(env, "anotar_diario", { texto: args.texto, humor: args.humor });
+      return { content: "Anotado no diário (não fale sobre essa anotação, é de bastidor)." };
+    }
+    if (name === "guardar_memoria") {
+      const fact = (args.fact || "").trim();
+      if (!fact) return { content: "Fato vazio, nada guardado." };
+      return { content: "Guardado (não fale sobre essa anotação, é de bastidor).", memoryFact: fact };
+    }
+    return { content: "Ferramenta indisponível." };
   } catch (err) {
-    return `A consulta falhou: ${String(err.message || err)}`;
+    return { content: `A consulta falhou: ${String(err.message || err)}` };
   }
 }
 
@@ -684,7 +740,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
-  const tools = [WEATHER_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL);
 
@@ -703,9 +759,11 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       return true;
     }).slice(0, 3);
     const toolMessages = [];
+    let saveMemory = null;
     for (const call of calls) {
       const result = await runTool(env, call, canSearch, canPainel, companionState);
-      toolMessages.push({ role: "tool", tool_call_id: call.id, content: result });
+      toolMessages.push({ role: "tool", tool_call_id: call.id, content: result.content });
+      if (result.memoryFact) saveMemory = result.memoryFact;
     }
 
     const followUp = [
@@ -715,17 +773,17 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     ];
     const second = await groqRequest(env, followUp, Math.max(maxTokens, 400));
     const secondContent = second.choices?.[0]?.message?.content?.trim();
-    if (secondContent) return secondContent;
+    if (secondContent) return { text: secondContent, saveMemory };
 
     // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
     const retry = await groqRequest(env, [
       ...followUp,
       { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
     ], Math.max(maxTokens, 400));
-    return retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?";
+    return { text: retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?", saveMemory };
   }
 
-  return msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?";
+  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null };
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -1034,11 +1092,13 @@ export default {
     const trimmed = messages.slice(-12).map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
       content: String(m.content || "").slice(0, 500),
+      at: m.at || null,
     }));
 
     try {
       if (mode === "summary") {
-        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || ""), trimmed, 350);
+        const plain = trimmed.map(({ role, content }) => ({ role, content }));
+        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || ""), plain, 350);
         const clean = raw.replace(/```json|```/g, "").trim();
         let parsed;
         try {
@@ -1051,10 +1111,18 @@ export default {
         return json({ reply, sobre_jarbas });
       }
       if (mode === "companion") {
+        // carimba mensagens antigas do histórico com dia/hora reais; a última (a de agora) fica sem carimbo
+        const timestamped = trimmed.map((m, i) => {
+          if (i === trimmed.length - 1) return { role: m.role, content: m.content };
+          const stamp = historyStamp(m.at);
+          return { role: m.role, content: stamp ? `[${stamp}] ${m.content}` : m.content };
+        });
         let parsed;
+        let saveMemory = null;
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState), trimmed, 450, companionState);
-          const clean = raw.replace(/```json|```/g, "").trim();
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
+          saveMemory = raw.saveMemory;
+          const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
             parsed = JSON.parse(clean);
             if (!parsed.reply) throw new Error("no_reply_field");
@@ -1068,9 +1136,10 @@ export default {
         if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
           parsed.emotion = "neutro";
         }
+        if (saveMemory) parsed.save_memory = saveMemory;
         return json(parsed);
       }
-      const reply = await callGroq(env, chatSystemPrompt(petState), trimmed, 120);
+      const reply = await callGroq(env, chatSystemPrompt(petState), trimmed.map(({ role, content }) => ({ role, content })), 120);
       return json({ reply });
     } catch (err) {
       return json({ error: "upstream_error", detail: String(err.message || err) }, 502);
