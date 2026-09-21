@@ -1395,6 +1395,11 @@ async function completeStartup(url, syncKey){
     hint.textContent = 'sincronizando memória...';
     await syncMemoryFromServer(url);
     await migrateProfileToKnowledge(url);
+    if(mem.workerUrl !== url){
+      mem.workerUrl = url;
+      saveMemoryState();
+      pushMemoryToServer(url);
+    }
     hint.textContent = 'toque para falar';
     if(!recognition) initRecognition();
     updateHandsFreeBtn();
