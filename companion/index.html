@@ -139,6 +139,7 @@
     <h2>Configurações</h2>
     <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
+    <button id="connectionBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔌 Conexão</button>
     <button id="resetMemBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">esquecer conversas e recomeçar</button>
     <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
   </div>
@@ -204,7 +205,7 @@
 </div>
 
 
-<div class="setup" id="setup">
+<div class="setup hidden" id="setup">
   <div class="setup-card">
     <h2>Antes de começar</h2>
     <p>Este protótipo usa o microfone e a voz do seu navegador. Funciona melhor no Chrome.</p>
@@ -214,6 +215,7 @@
     <input type="password" id="syncKey" placeholder="uma senha só sua, qualquer uma">
     <p style="margin-top:-6px;">A mesma senha em qualquer aparelho traz a mesma memória do Jarbas. Fica salva neste navegador.</p>
     <button id="startBtn">Começar</button>
+    <button id="setupCancelBtn" type="button" class="btn-secondary hidden">Cancelar</button>
     <div class="err" id="setupErr">Seu navegador não suporta reconhecimento de voz. Tente pelo Chrome.</div>
   </div>
 </div>
@@ -1322,10 +1324,15 @@ fullscreenBtn.addEventListener('click', ()=>{
   }
 });
 
-/* ---------- Setup / permissão ---------- */
+/* ---------- Setup / permissão ----------
+   A tela "Antes de começar" só aparece sozinha na primeiríssima vez (sem
+   raiz_worker_url salvo). Depois disso o app inicia direto ao carregar, e o
+   acesso a essa tela passa a ser manual, via Configurações > 🔌 Conexão —
+   pra trocar a URL do Worker ou a senha de sincronização se precisar. */
 const setupEl = document.getElementById('setup');
 const startBtn = document.getElementById('startBtn');
 const setupErr = document.getElementById('setupErr');
+const setupCancelBtn = document.getElementById('setupCancelBtn');
 
 const workerInput = document.getElementById('workerUrl');
 const savedUrl = localStorage.getItem('raiz_worker_url');
@@ -1334,6 +1341,27 @@ if(savedUrl) workerInput.value = savedUrl;
 const syncKeyInput = document.getElementById('syncKey');
 const savedSyncKey = getSyncKey();
 if(savedSyncKey) syncKeyInput.value = savedSyncKey;
+
+async function completeStartup(url, syncKey){
+  try{
+    await navigator.mediaDevices.getUserMedia({audio:true});
+    hint.textContent = 'sincronizando memória...';
+    await syncMemoryFromServer(url);
+    await migrateProfileToKnowledge(url);
+    hint.textContent = 'toque para falar';
+    if(!recognition) initRecognition();
+    updateHandsFreeBtn();
+    resumeHandsFreeListening();
+    setupErr.style.display = 'none';
+    setupEl.classList.add('hidden');
+    return true;
+  }catch(e){
+    setupErr.textContent = 'Precisamos da permissão do microfone para continuar.';
+    setupErr.style.display = 'block';
+    setupEl.classList.remove('hidden');
+    return false;
+  }
+}
 
 startBtn.addEventListener('click', async ()=>{
   if(!SpeechRecognition){
@@ -1354,26 +1382,35 @@ startBtn.addEventListener('click', async ()=>{
   }
   localStorage.setItem('raiz_worker_url', url);
   localStorage.setItem(SYNC_KEY_STORAGE, syncKey);
-  try{
-    await navigator.mediaDevices.getUserMedia({audio:true});
-    hint.textContent = 'sincronizando memória...';
-    await syncMemoryFromServer(url);
-    await migrateProfileToKnowledge(url);
-    hint.textContent = 'toque para falar';
-    initRecognition();
-    updateHandsFreeBtn();
-    resumeHandsFreeListening();
-    setupEl.classList.add('hidden');
-  }catch(e){
-    setupErr.textContent = 'Precisamos da permissão do microfone para continuar.';
-    setupErr.style.display = 'block';
-  }
+  await completeStartup(url, syncKey);
 });
+
+setupCancelBtn.addEventListener('click', ()=>{
+  setupEl.classList.add('hidden');
+});
+
+// Primeira carga: se já tem URL/senha salvos (e o navegador suporta reconhecimento
+// de voz), inicia direto sem mostrar a tela. Senão, mostra a tela de configuração.
+if(savedUrl && savedSyncKey && SpeechRecognition){
+  completeStartup(savedUrl, savedSyncKey);
+} else {
+  if(!SpeechRecognition) setupErr.style.display = 'block';
+  setupEl.classList.remove('hidden');
+}
 
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsMenu = document.getElementById('settingsMenu');
 settingsBtn.addEventListener('click', ()=>{ settingsMenu.classList.remove('hidden'); });
 document.getElementById('settingsCloseBtn').addEventListener('click', ()=>{ settingsMenu.classList.add('hidden'); });
+
+document.getElementById('connectionBtn').addEventListener('click', ()=>{
+  settingsMenu.classList.add('hidden');
+  workerInput.value = localStorage.getItem('raiz_worker_url') || '';
+  syncKeyInput.value = getSyncKey();
+  setupErr.style.display = 'none';
+  setupCancelBtn.classList.remove('hidden');
+  setupEl.classList.remove('hidden');
+});
 
 const resetMemBtn = document.getElementById('resetMemBtn');
 resetMemBtn.addEventListener('click', async ()=>{
