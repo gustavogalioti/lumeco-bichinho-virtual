@@ -57,6 +57,15 @@
     padding:0 12px; margin-top:18px;
   }
   .caption .who{ color:var(--muted); font-size:12px; letter-spacing:0.08em; text-transform:uppercase; display:block; margin-bottom:4px; }
+  .history-panel{
+    z-index:2; width:100%; max-width:520px; max-height:96px; overflow-y:auto;
+    font-size:11px; line-height:1.6; color:var(--muted); opacity:0.6;
+    padding:0 18px; margin-top:6px; text-align:left; scrollbar-width:thin;
+  }
+  .history-panel:empty{ display:none; }
+  .history-panel .h-row{ white-space:pre-wrap; word-break:break-word; }
+  .history-panel .h-time{ opacity:0.75; margin-right:5px; }
+  .history-panel .h-who{ font-weight:600; margin-right:4px; }
   .controls{ z-index:2; display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; }
   .mic-btn{
     width:76px; height:76px; border-radius:50%; border:none; cursor:pointer;
@@ -125,6 +134,8 @@
   <span class="who">jarbas</span>
   toque no botão e comece a falar comigo.
 </div>
+
+<div class="history-panel" id="historyPanel"></div>
 
 <div class="controls">
   <button class="mic-btn" id="micBtn" aria-label="Falar">
@@ -543,6 +554,29 @@ async function migrateProfileToKnowledge(workerUrl){
 }
 function saveMemoryState(){
   try{ localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); }catch(e){}
+  renderHistoryPanel();
+}
+
+/* ---------- Histórico de conversa visível (Item 4, Evolução 2) ----------
+   Painel pequeno e discreto mostrando a conversa atual (hora + quem + texto),
+   direto do array `history` que já existe em memória — não é um dado novo,
+   nem persiste além do que `history` já persiste hoje. Re-renderiza sozinho
+   toda vez que o estado é salvo (saveMemoryState), sem precisar recarregar. */
+const historyPanel = document.getElementById('historyPanel');
+function formatHistoryTime(at){
+  if(!at) return '';
+  try{ return new Date(at).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }); }
+  catch(e){ return ''; }
+}
+function renderHistoryPanel(){
+  if(!historyPanel) return;
+  const items = (history || []).slice(-40);
+  historyPanel.innerHTML = items.map(m => {
+    const time = formatHistoryTime(m.at);
+    const who = m.role === 'assistant' ? 'jarbas' : 'você';
+    return `<div class="h-row"><span class="h-time">${time}</span><span class="h-who">${who}:</span>${escapeHtml(m.content)}</div>`;
+  }).join('');
+  historyPanel.scrollTop = historyPanel.scrollHeight;
 }
 function getSyncKey(){ return localStorage.getItem(SYNC_KEY_STORAGE) || ''; }
 
@@ -579,6 +613,7 @@ async function pushMemoryToServer(workerUrl){
 
 let mem = loadMemoryState();
 let history = mem.history || [];
+renderHistoryPanel();
 
 function setCaption(who, text){
   caption.innerHTML = `<span class="who">${who}</span>${text}`;
