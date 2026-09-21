@@ -256,7 +256,7 @@ function historyStamp(ts) {
 function companionPrompt(companionState = {}) {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
-    ? `Base de conhecimento escrita pela PRÓPRIA pessoa sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo:\n${knowledgeText}`
+    ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
     : (companionState.profile
         ? `Perfil que a PRÓPRIA pessoa escreveu sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo: "${companionState.profile}"`
         : '');
@@ -352,20 +352,45 @@ Categorias e o que já existe em cada uma:
 - trabalho (profissão, projetos, contexto profissional): "${knowledge.trabalho || ""}"
 - outros (catch-all, tudo que não se encaixa nas outras): "${knowledge.outros || ""}"
 
-Você vai receber um fato novo sobre essa pessoa. Escolha a categoria certa pra ele e devolva o texto ATUALIZADO dessa categoria, mesclando o fato novo com o que já existia nela — nunca reescreva do zero, nunca perca informação antiga. Se a categoria estava vazia, o texto atualizado é só o fato novo.
+Você vai receber um fato novo sobre essa pessoa. Escolha só a categoria certa pra ele — não reescreva nem resuma o texto da categoria, isso é feito automaticamente por outro sistema, você só decide onde ele se encaixa.
 
 Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"category":"identidade|pessoas|rotina|trabalho|outros","updated_text":"..."}`;
+{"category":"identidade|pessoas|rotina|trabalho|outros"}`;
+}
+
+// Data no fuso de Brasília, formato DD/MM/AAAA, pro carimbo de autoria abaixo.
+function knowledgeDateStamp(ts) {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric",
+  }).formatToParts(new Date(ts || Date.now()));
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get("day")}/${get("month")}/${get("year")}`;
+}
+
+// Em vez de reescrever o parágrafo inteiro (perdendo a noção de quem escreveu o quê),
+// acrescenta uma linha nova e marcada — "- [Jarbas anotou, DD/MM/AAAA] fato" — deixando
+// linhas editadas manualmente pela pessoa (sem esse prefixo) intocadas. Remove antes
+// qualquer linha idêntica ao fato sem formatação (o rascunho gravado na hora em "outros"
+// pelo comando de voz, antes desta reclassificação rodar), pra não duplicar.
+function appendKnowledgeLine(existingText, fact) {
+  const line = `- [Jarbas anotou, ${knowledgeDateStamp()}] ${fact}`;
+  const keptLines = (existingText || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && l !== fact.trim());
+  keptLines.push(line);
+  return keptLines.join("\n");
 }
 
 async function classifyFact(env, fact, knowledge) {
-  const raw = await callGroq(env, classifyFactSystemPrompt(knowledge), [{ role: "user", content: fact }], 300);
+  const raw = await callGroq(env, classifyFactSystemPrompt(knowledge), [{ role: "user", content: fact }], 60);
   const clean = raw.replace(/```json|```/g, "").trim();
   const parsed = JSON.parse(clean);
-  if (!KNOWLEDGE_CATEGORIES.includes(parsed.category) || typeof parsed.updated_text !== "string") {
+  if (!KNOWLEDGE_CATEGORIES.includes(parsed.category)) {
     throw new Error("classify_invalid_result");
   }
-  return parsed;
+  const existingText = (knowledge && knowledge[parsed.category]) || "";
+  return { category: parsed.category, updated_text: appendKnowledgeLine(existingText, fact) };
 }
 
 function migrateKnowledgeSystemPrompt() {
