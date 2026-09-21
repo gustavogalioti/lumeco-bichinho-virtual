@@ -140,8 +140,19 @@
     <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
     <button id="connectionBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔌 Conexão</button>
-    <button id="resetMemBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">esquecer conversas e recomeçar</button>
     <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
+    <button id="resetMemBtn" type="button" style="width:100%; text-align:left; margin-top:22px; padding:14px; border-radius:14px; cursor:pointer; background:rgba(255,80,60,0.1); border:1px solid rgba(255,80,60,0.35); color:#FF8F7A; font-family:'Manrope'; font-size:14px;">⚠️ esquecer conversas e recomeçar</button>
+  </div>
+</div>
+
+<div class="setup hidden" id="dangerConfirmEl">
+  <div class="setup-card">
+    <h2 style="color:#FF8F7A;">⚠️ Apagar conversas</h2>
+    <p>Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Não dá pra desfazer.</p>
+    <label for="dangerConfirmInput">Digite <strong>APAGAR</strong> pra confirmar</label>
+    <input type="text" id="dangerConfirmInput" autocomplete="off" placeholder="APAGAR">
+    <button id="dangerConfirmBtn" disabled style="background:#E8493A; opacity:0.5;">Apagar tudo</button>
+    <button id="dangerCancelBtn" type="button" class="btn-secondary">Cancelar</button>
   </div>
 </div>
 
@@ -1412,15 +1423,41 @@ document.getElementById('connectionBtn').addEventListener('click', ()=>{
   setupEl.classList.remove('hidden');
 });
 
+// Ação perigosa e irreversível: em vez de um confirm() simples, exige digitar
+// "APAGAR" pra habilitar o botão — reduz apagar sem querer por toque acidental.
 const resetMemBtn = document.getElementById('resetMemBtn');
-resetMemBtn.addEventListener('click', async ()=>{
-  if(!confirm('Isso apaga o que o Jarbas aprendeu sozinho nas conversas (não mexe na base de conhecimento que você escreveu sobre você). Continuar?')) return;
+const dangerConfirmEl = document.getElementById('dangerConfirmEl');
+const dangerConfirmInput = document.getElementById('dangerConfirmInput');
+const dangerConfirmBtn = document.getElementById('dangerConfirmBtn');
+const dangerCancelBtn = document.getElementById('dangerCancelBtn');
+
+resetMemBtn.addEventListener('click', ()=>{
+  settingsMenu.classList.add('hidden');
+  dangerConfirmInput.value = '';
+  dangerConfirmBtn.disabled = true;
+  dangerConfirmBtn.style.opacity = '0.5';
+  dangerConfirmEl.classList.remove('hidden');
+  dangerConfirmInput.focus();
+});
+
+dangerConfirmInput.addEventListener('input', ()=>{
+  const ok = dangerConfirmInput.value.trim() === 'APAGAR';
+  dangerConfirmBtn.disabled = !ok;
+  dangerConfirmBtn.style.opacity = ok ? '1' : '0.5';
+});
+
+dangerCancelBtn.addEventListener('click', ()=>{
+  dangerConfirmEl.classList.add('hidden');
+});
+
+dangerConfirmBtn.addEventListener('click', async ()=>{
+  if(dangerConfirmInput.value.trim() !== 'APAGAR') return;
   mem = { history:[], memory:'', knowledge: mem.knowledge || emptyKnowledge(), location: mem.location || null, routines: mem.routines || [], timeline: mem.timeline || [], msgCount:0 };
   history = [];
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) await pushMemoryToServer(workerUrl);
-  settingsMenu.classList.add('hidden');
+  dangerConfirmEl.classList.add('hidden');
   setCaption('jarbas', 'Prontinho, começamos do zero.');
   hint.textContent = 'toque para falar';
 });
