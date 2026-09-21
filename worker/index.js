@@ -294,7 +294,7 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -555,6 +555,21 @@ const GUARDAR_MEMORIA_TOOL = {
   },
 };
 
+const RESUMIR_LINK_TOOL = {
+  type: "function",
+  function: {
+    name: "resumir_link",
+    description: "Busca o conteúdo de um link/URL que a pessoa mencionou ou repetiu por voz e devolve o texto da página pra você resumir na resposta. Use sempre que ela pedir pra resumir, ler ou comentar um link específico que ela deu.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "A URL completa mencionada pela pessoa, incluindo https://" },
+      },
+      required: ["url"],
+    },
+  },
+};
+
 const GERENCIAR_COMPROMISSO_TOOL = {
   type: "function",
   function: {
@@ -755,6 +770,11 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       if (!fact) return { content: "Fato vazio, nada guardado." };
       return { content: "Guardado (não fale sobre essa anotação, é de bastidor).", memoryFact: fact };
     }
+    if (name === "resumir_link") {
+      const url = (args.url || "").trim();
+      if (!url) return { content: "Não veio nenhuma URL — peça pra pessoa repetir o endereço completo." };
+      return { content: await fetchLinkExcerpt(url) };
+    }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
     return { content: `A consulta falhou: ${String(err.message || err)}` };
@@ -765,7 +785,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, RESUMIR_LINK_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL);
 
