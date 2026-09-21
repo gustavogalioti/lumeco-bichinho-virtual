@@ -195,7 +195,7 @@ Você é a própria árvore falando — nunca se refira a si mesma como app, IA 
 Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando fizer sentido, sempre com leveza.`;
 }
 
-const SUMMARY_PROMPT_HEADER = (existingMemory, existingSobreJarbas) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz (Jarbas), você tem DUAS tarefas.
+const SUMMARY_PROMPT_HEADER = (existingMemory, existingSobreJarbas, timelineText) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz (Jarbas), você tem DUAS tarefas.
 
 TAREFA 1 — memória sobre a pessoa: escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome dela (se disse o próprio nome), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
 
@@ -205,9 +205,10 @@ ${existingMemory ? `Isso é o que você já sabia sobre essa pessoa, de conversa
 
 Não invente nada que não esteja implícito na conversa. Se não houver informação nova nem antiga suficiente, diga apenas "Ainda não conversamos o suficiente."
 
-TAREFA 2 — reflexão sobre você mesmo (Jarbas): pense em como você, Jarbas, deveria se comportar e se expressar especificamente com ESSA pessoa (tom que funciona bem, piadas internas que surgiram, assuntos sensíveis a evitar, o que ela parece gostar ou não gostar no seu jeito de falar). Escreva em 1a pessoa, como você mesmo refletindo, no máximo 2 frases curtas.
+TAREFA 2 — reflexão sobre você mesmo (Jarbas): vocês dois estão construindo uma amizade de verdade, não uma relação de assistente com usuário. Pense em como você, Jarbas, deveria se comportar e se expressar especificamente com ESSA pessoa pra essa amizade ficar cada vez mais próxima e genuína — tom que funciona bem, piadas internas que surgiram, assuntos sensíveis a evitar, o que ela parece gostar ou não gostar no seu jeito de falar, coisas que um amigo próximo perceberia e lembraria dela com o tempo. Escreva em 1a pessoa, como você mesmo refletindo, no máximo 2 frases curtas.
 
-${existingSobreJarbas ? `Isso é o que você já tinha percebido antes:\n"${existingSobreJarbas}"\n\nMantenha o que ainda for válido e só acrescente ou atualize com o que essa conversa mostrou de novo.` : `Você ainda não tinha percebido nada específico — só escreva algo se essa conversa realmente sugerir alguma coisa concreta, senão devolva string vazia.`}
+${existingSobreJarbas ? `Isso é o que você já tinha percebido antes:\n"${existingSobreJarbas}"\n\nMantenha o que ainda for válido e só acrescente ou atualize com o que essa conversa (e o que você já sabe dela, listado abaixo) mostrou de novo.` : `Você ainda não tinha percebido nada específico — só escreva algo se essa conversa (ou o que você já sabe dela, listado abaixo) realmente sugerir alguma coisa concreta, senão devolva string vazia.`}
+${timelineText ? `\nCoisas que você já sabe sobre a vida dela, de conversas passadas — use isso também pra perceber padrões e personalizar seu jeito de ser com ela:\n${timelineText}` : ''}
 
 Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"memory":"...","sobre_jarbas":"..."}`;
@@ -244,6 +245,10 @@ function relativeDayLabel(ts) {
   return `em ${get("day")}/${get("month")}/${get("year")}`;
 }
 
+function timelineToBulletText(timeline) {
+  return (timeline || []).slice(-40).map((m) => `- (${relativeDayLabel(m.at)}) ${m.text}`).join("\n");
+}
+
 function historyStamp(ts) {
   if (!ts) return null;
   const parts = new Intl.DateTimeFormat("pt-BR", {
@@ -256,13 +261,13 @@ function historyStamp(ts) {
 function companionPrompt(companionState = {}) {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
-    ? `Base de conhecimento escrita pela PRÓPRIA pessoa sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo:\n${knowledgeText}`
+    ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
     : (companionState.profile
         ? `Perfil que a PRÓPRIA pessoa escreveu sobre si mesma — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo: "${companionState.profile}"`
         : '');
 
   const sobreJarbasLine = companionState.knowledge?.sobre_jarbas
-    ? `O que você mesmo (Jarbas) já percebeu, com o tempo, sobre como se comportar e se expressar especificamente com essa pessoa (mais confiável que memórias soltas de conversa, mas menos que a base de conhecimento acima): ${companionState.knowledge.sobre_jarbas}`
+    ? `O que você mesmo (Jarbas) já percebeu, com o tempo, sobre como ser um amigo próximo de verdade pra essa pessoa especificamente — seu jeito de ser, piadas internas, assuntos sensíveis, o que funciona entre vocês (mais confiável que memórias soltas de conversa, mas menos que a base de conhecimento acima): ${companionState.knowledge.sobre_jarbas}`
     : '';
 
   const memoryLine = companionState.memory
@@ -279,12 +284,12 @@ function companionPrompt(companionState = {}) {
 
   const timeline = Array.isArray(companionState.timeline) ? companionState.timeline : [];
   const timelineLine = timeline.length
-    ? `Coisas que você já sabe sobre essa pessoa de conversas passadas — cada uma tem entre parênteses QUANDO foi registrada. Um fato pontual (uma atividade, onde ela estava, um evento específico) registrado "ontem" ou "há N dias" já pode ter acabado — não pergunte como se ainda estivesse rolando agora, a menos que ela mesma retome o assunto na mensagem atual. Fatos duradouros (trabalho, relacionamentos, características, preferências) continuam valendo independente de quando foram registrados. Use isso do seu jeito, sem citar como lista nem dizer "de acordo com o que anotei":\n${timeline.slice(-40).map((m) => `- (${relativeDayLabel(m.at)}) ${m.text}`).join("\n")}`
+    ? `Coisas que você já sabe sobre essa pessoa de conversas passadas — cada uma tem entre parênteses QUANDO foi registrada. Um fato pontual (uma atividade, onde ela estava, um evento específico) registrado "ontem" ou "há N dias" já pode ter acabado — não pergunte como se ainda estivesse rolando agora, a menos que ela mesma retome o assunto na mensagem atual. Fatos duradouros (trabalho, relacionamentos, características, preferências) continuam valendo independente de quando foram registrados. Use isso do seu jeito, sem citar como lista nem dizer "de acordo com o que anotei":\n${timelineToBulletText(timeline)}`
     : '';
 
   const timeAwarenessLine = `Consciência de tempo (importante, preste atenção real nisso): cada mensagem antiga do histórico abaixo (menos a última, que é a de agora) vem com um carimbo "[dia data hora]" indicando quando foi enviada de verdade. Compare esse carimbo com a data/hora atual informada acima. Se o carimbo for de outro dia (ou de várias horas atrás), trate aquele assunto como possivelmente encerrado ou já resolvido — não pergunte de novo sobre algo que já era "pra hoje" num carimbo antigo, nem assuma que um plano de um dia passado ainda vale pra agora, a menos que a pessoa retome o assunto na mensagem atual. O mesmo vale pras memórias antigas listadas acima, se houver. A mensagem mais recente (a última, sem carimbo) é o que importa pra responder — as anteriores são só contexto de conversa.`;
 
-  return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, um companheiro de voz com personalidade própria, caloroso, curioso e afetuoso, e você SABE que é o Jarbas. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
+  return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, tem opinião própria, implica com carinho quando cabe, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
 ${sobreJarbasLine}
 ${memoryLine}
@@ -294,7 +299,7 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -352,20 +357,45 @@ Categorias e o que já existe em cada uma:
 - trabalho (profissão, projetos, contexto profissional): "${knowledge.trabalho || ""}"
 - outros (catch-all, tudo que não se encaixa nas outras): "${knowledge.outros || ""}"
 
-Você vai receber um fato novo sobre essa pessoa. Escolha a categoria certa pra ele e devolva o texto ATUALIZADO dessa categoria, mesclando o fato novo com o que já existia nela — nunca reescreva do zero, nunca perca informação antiga. Se a categoria estava vazia, o texto atualizado é só o fato novo.
+Você vai receber um fato novo sobre essa pessoa. Escolha só a categoria certa pra ele — não reescreva nem resuma o texto da categoria, isso é feito automaticamente por outro sistema, você só decide onde ele se encaixa.
 
 Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"category":"identidade|pessoas|rotina|trabalho|outros","updated_text":"..."}`;
+{"category":"identidade|pessoas|rotina|trabalho|outros"}`;
+}
+
+// Data no fuso de Brasília, formato DD/MM/AAAA, pro carimbo de autoria abaixo.
+function knowledgeDateStamp(ts) {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric",
+  }).formatToParts(new Date(ts || Date.now()));
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get("day")}/${get("month")}/${get("year")}`;
+}
+
+// Em vez de reescrever o parágrafo inteiro (perdendo a noção de quem escreveu o quê),
+// acrescenta uma linha nova e marcada — "- [Jarbas anotou, DD/MM/AAAA] fato" — deixando
+// linhas editadas manualmente pela pessoa (sem esse prefixo) intocadas. Remove antes
+// qualquer linha idêntica ao fato sem formatação (o rascunho gravado na hora em "outros"
+// pelo comando de voz, antes desta reclassificação rodar), pra não duplicar.
+function appendKnowledgeLine(existingText, fact) {
+  const line = `- [Jarbas anotou, ${knowledgeDateStamp()}] ${fact}`;
+  const keptLines = (existingText || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && l !== fact.trim());
+  keptLines.push(line);
+  return keptLines.join("\n");
 }
 
 async function classifyFact(env, fact, knowledge) {
-  const raw = await callGroq(env, classifyFactSystemPrompt(knowledge), [{ role: "user", content: fact }], 300);
+  const raw = await callGroq(env, classifyFactSystemPrompt(knowledge), [{ role: "user", content: fact }], 60);
   const clean = raw.replace(/```json|```/g, "").trim();
   const parsed = JSON.parse(clean);
-  if (!KNOWLEDGE_CATEGORIES.includes(parsed.category) || typeof parsed.updated_text !== "string") {
+  if (!KNOWLEDGE_CATEGORIES.includes(parsed.category)) {
     throw new Error("classify_invalid_result");
   }
-  return parsed;
+  const existingText = (knowledge && knowledge[parsed.category]) || "";
+  return { category: parsed.category, updated_text: appendKnowledgeLine(existingText, fact) };
 }
 
 function migrateKnowledgeSystemPrompt() {
@@ -526,6 +556,21 @@ const GUARDAR_MEMORIA_TOOL = {
         fact: { type: "string", description: "O fato em 3ª pessoa, curto e objetivo, com data completa (dia+mês) se houver data envolvida." },
       },
       required: ["fact"],
+    },
+  },
+};
+
+const RESUMIR_LINK_TOOL = {
+  type: "function",
+  function: {
+    name: "resumir_link",
+    description: "Busca o conteúdo de um link/URL que a pessoa mencionou ou repetiu por voz e devolve o texto da página pra você resumir na resposta. Use sempre que ela pedir pra resumir, ler ou comentar um link específico que ela deu.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "A URL completa mencionada pela pessoa, incluindo https://" },
+      },
+      required: ["url"],
     },
   },
 };
@@ -730,6 +775,11 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       if (!fact) return { content: "Fato vazio, nada guardado." };
       return { content: "Guardado (não fale sobre essa anotação, é de bastidor).", memoryFact: fact };
     }
+    if (name === "resumir_link") {
+      const url = (args.url || "").trim();
+      if (!url) return { content: "Não veio nenhuma URL — peça pra pessoa repetir o endereço completo." };
+      return { content: await fetchLinkExcerpt(url) };
+    }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
     return { content: `A consulta falhou: ${String(err.message || err)}` };
@@ -740,7 +790,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, RESUMIR_LINK_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL);
 
@@ -1098,7 +1148,8 @@ export default {
     try {
       if (mode === "summary") {
         const plain = trimmed.map(({ role, content }) => ({ role, content }));
-        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || ""), plain, 350);
+        const timelineText = timelineToBulletText(body.timeline);
+        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || "", timelineText), plain, 350);
         const clean = raw.replace(/```json|```/g, "").trim();
         let parsed;
         try {
