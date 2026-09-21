@@ -667,6 +667,23 @@ const CONCLUIR_RECADO_TOOL = {
   },
 };
 
+const CONSULTAR_EMAIL_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_email",
+    description: "Consulta e-mails recentes (Gmail e Outlook, pessoal e corporativo) da pessoa, só leitura — nunca envia, apaga ou marca e-mail. Use quando ela perguntar sobre e-mails, caixa de entrada, mensagens recebidas, ou pedir pra procurar um e-mail de alguém ou sobre algum assunto.",
+    parameters: {
+      type: "object",
+      properties: {
+        filtro: { type: "string", enum: ["recentes", "nao_lidos"], description: "recentes = mais recentes da caixa de entrada; nao_lidos = só os não lidos. Padrão: recentes." },
+        remetente: { type: "string", description: "Filtra por remetente (nome ou e-mail), se a pessoa pedir e-mails de alguém específico." },
+        assunto: { type: "string", description: "Filtra por palavra no assunto, se a pessoa pedir e-mails sobre algum tema específico." },
+      },
+      required: [],
+    },
+  },
+};
+
 const GUARDAR_MEMORIA_TOOL = {
   type: "function",
   function: {
@@ -777,6 +794,19 @@ async function callPainelRead(env, action) {
   if (!res.ok) throw new Error("painel_error_" + res.status);
   const data = await res.json();
   return data.texto || "Não consegui ler os dados do painel agora.";
+}
+
+async function callPainelEmails(env, filtro, remetente, assunto) {
+  const params = new URLSearchParams({ action: "emails" });
+  if (filtro) params.set("filtro", filtro);
+  if (remetente) params.set("remetente", remetente);
+  if (assunto) params.set("assunto", assunto);
+  const res = await fetch(`${PAINEL_API_URL}?${params.toString()}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return data.texto || "Não consegui ler os e-mails agora.";
 }
 
 async function callPainelRecados(env) {
@@ -966,6 +996,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       await callPainelCommand(env, "concluir_recado", { texto: args.texto });
       return { content: "Recado marcado como tratado (não fale sobre essa ação, é de bastidor)." };
     }
+    if (name === "consultar_email" && canPainel) return { content: await callPainelEmails(env, args.filtro || "", args.remetente || "", args.assunto || "") };
     if (name === "guardar_memoria") {
       const fact = (args.fact || "").trim();
       if (!fact) return { content: "Fato vazio, nada guardado." };
@@ -992,7 +1023,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     tools.push(
       CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL,
       CONSULTAR_TAREFAS_TOOL, CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL, CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL,
-      CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL
+      CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL, CONSULTAR_EMAIL_TOOL
     );
   }
 
