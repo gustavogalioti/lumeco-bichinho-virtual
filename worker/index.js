@@ -18,8 +18,15 @@
  *   { mode: "save_push_subscription", key: "...", subscription: {...} }
  *
  * memory_load / memory_save / save_push_subscription exigem `key` (uma senha
- * simples que só você conhece) batendo com o secret SYNC_KEY, e usam o KV
- * binding COMPANION_KV pra guardar dado sincronizado entre aparelhos.
+ * simples que só você conhece) batendo com o secret SYNC_KEY.
+ *
+ * A memória do Jarbas (conhecimento, timeline, rotinas, localização) é guardada
+ * no Postgres do painel pessoal, via api/jarbas.js (chave jarbas_memory_v1 no
+ * sync_kv) — não mais no Cloudflare KV. Migração automática e única na primeira
+ * chamada depois do deploy: se o Postgres ainda não tiver nada mas existir o
+ * dado antigo no KV binding COMPANION_KV (companion:main), ele é lido de lá e
+ * escrito no Postgres, sem apagar o original. COMPANION_KV continua em uso só
+ * pra infra de push (subscription, estado de dedupe das notificações).
  *
  * Se o secret TAVILY_API_KEY estiver configurado, o modo "companion" ganha
  * acesso a uma ferramenta de busca na web (Tavily) — o próprio modelo decide
@@ -28,7 +35,8 @@
  * Notificações push (Frente 5) exigem os secrets VAPID_PUBLIC_KEY,
  * VAPID_PRIVATE_KEY e VAPID_SUBJECT (gerados com generate-vapid-keys.js) e
  * o Cron Trigger em [triggers] no wrangler.toml, que chama scheduled() a
- * cada 15 min pra decidir se há algo pra avisar e disparar o push.
+ * cada 15 min pra decidir se há algo pra avisar (Item 5: também comenta
+ * espontaneamente sobre ideias/compromissos novos) e disparar o push.
  */
 
 const ALLOWED_ORIGIN = "https://gustavogalioti.github.io";
@@ -299,7 +307,7 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -545,6 +553,120 @@ const GERENCIAR_CONTA_TOOL = {
   },
 };
 
+const CONSULTAR_TAREFAS_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_tarefas",
+    description: "Consulta as tarefas do painel filtradas por coluna real. Use quando a pessoa pedir especificamente 'tarefas de hoje/pra agora', 'tarefas pendentes' ou 'tarefas em andamento' — pra pergunta genérica sobre tarefas, use consultar_painel em vez disso.",
+    parameters: {
+      type: "object",
+      properties: {
+        filtro: { type: "string", enum: ["hoje", "pendentes", "andamento"], description: "hoje = Para Agora + De Hoje; pendentes = coluna Pendente; andamento = coluna Em Andamento." },
+      },
+      required: ["filtro"],
+    },
+  },
+};
+
+const CONSULTAR_IDEIAS_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_ideias",
+    description: "Consulta as ideias anotadas no painel pessoal da pessoa.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const GERENCIAR_IDEIA_TOOL = {
+  type: "function",
+  function: {
+    name: "gerenciar_ideia",
+    description: "Cria ou apaga uma ideia no painel pessoal da pessoa.",
+    parameters: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["criar", "apagar"] },
+        texto: { type: "string", description: "O texto da ideia (ao criar) ou um trecho que a identifique (ao apagar)." },
+      },
+      required: ["acao", "texto"],
+    },
+  },
+};
+
+const CONSULTAR_LEMBRETES_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_lembretes",
+    description: "Consulta os lembretes pendentes no painel pessoal da pessoa.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const GERENCIAR_LEMBRETE_TOOL = {
+  type: "function",
+  function: {
+    name: "gerenciar_lembrete",
+    description: "Cria, conclui ou apaga um lembrete no painel pessoal da pessoa.",
+    parameters: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["criar", "concluir", "apagar"] },
+        texto: { type: "string", description: "O texto do lembrete (ao criar) ou um trecho que o identifique (ao concluir/apagar)." },
+      },
+      required: ["acao", "texto"],
+    },
+  },
+};
+
+const CONSULTAR_LISTAS_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_listas",
+    description: "Consulta as listas/checklists criadas no painel pessoal da pessoa.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const GERENCIAR_LISTA_TOOL = {
+  type: "function",
+  function: {
+    name: "gerenciar_lista",
+    description: "Cria uma lista nova (vazia) ou apaga uma lista existente no painel pessoal da pessoa.",
+    parameters: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["criar", "apagar"] },
+        titulo: { type: "string", description: "O título da lista (ao criar) ou um trecho que a identifique (ao apagar)." },
+      },
+      required: ["acao", "titulo"],
+    },
+  },
+};
+
+const CONSULTAR_RECADOS_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_recados",
+    description: "Consulta recados que a pessoa deixou pra você (Jarbas) tratar depois, através do painel pessoal dela. Use quando ela perguntar se tem algum recado, aviso ou coisa pendente que ela deixou pra você.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const CONCLUIR_RECADO_TOOL = {
+  type: "function",
+  function: {
+    name: "concluir_recado",
+    description: "Marca um recado como tratado, depois que você já comentou/tratou dele na conversa. Chame isso silenciosamente assim que tiver contado o recado pra ela, sem perguntar permissão nem avisar.",
+    parameters: {
+      type: "object",
+      properties: {
+        texto: { type: "string", description: "Um trecho do texto do recado que identifica qual foi tratado." },
+      },
+      required: ["texto"],
+    },
+  },
+};
+
 const GUARDAR_MEMORIA_TOOL = {
   type: "function",
   function: {
@@ -635,6 +757,64 @@ async function callPainelCommand(env, comando, arg) {
 const TAREFA_ACAO_MAP = { criar: "criar_tarefa", concluir: "concluir_tarefa", apagar: "apagar_tarefa" };
 const CONTA_ACAO_MAP = { pagar: "pagar_conta", apagar: "apagar_conta" };
 const COMPROMISSO_ACAO_MAP = { criar: "criar_compromisso", apagar: "apagar_compromisso" };
+const IDEIA_ACAO_MAP = { criar: "criar_ideia", apagar: "apagar_ideia" };
+const LEMBRETE_ACAO_MAP = { criar: "criar_lembrete", concluir: "concluir_lembrete", apagar: "apagar_lembrete" };
+const LISTA_ACAO_MAP = { criar: "criar_lista", apagar: "apagar_lista" };
+
+async function callPainelTasks(env, filtro) {
+  const res = await fetch(`${PAINEL_API_URL}?action=tasks&filtro=${encodeURIComponent(filtro || "")}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return data.texto || "Não consegui ler as tarefas agora.";
+}
+
+async function callPainelRead(env, action) {
+  const res = await fetch(`${PAINEL_API_URL}?action=${action}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return data.texto || "Não consegui ler os dados do painel agora.";
+}
+
+async function callPainelRecados(env) {
+  const res = await fetch(`${PAINEL_API_URL}?action=recados`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return Array.isArray(data.recados) ? data.recados : [];
+}
+
+async function callPainelNovidades(env) {
+  const res = await fetch(`${PAINEL_API_URL}?action=novidades`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  return res.json();
+}
+
+// ---------- Memória do Jarbas — armazenamento migrado do Cloudflare KV pro Postgres
+// do painel (sync_kv, via api/jarbas.js), unificando numa fonte de verdade só. ----------
+async function callPainelMemoryLoad(env) {
+  const res = await fetch(`${PAINEL_API_URL}?action=jarbas_memory`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+  const data = await res.json();
+  return data.data || null;
+}
+
+async function callPainelMemorySave(env, data) {
+  const res = await fetch(PAINEL_API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-jarbas-key": env.PAINEL_API_KEY },
+    body: JSON.stringify({ comando: "jarbas_memory_save", arg: { data } }),
+  });
+  if (!res.ok) throw new Error("painel_error_" + res.status);
+}
 
 async function callTavily(env, query) {
   const res = await fetch("https://api.tavily.com/search", {
@@ -770,6 +950,22 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       await callPainelCommand(env, "anotar_diario", { texto: args.texto, humor: args.humor });
       return { content: "Anotado no diário (não fale sobre essa anotação, é de bastidor)." };
     }
+    if (name === "consultar_tarefas" && canPainel) return { content: await callPainelTasks(env, args.filtro || "") };
+    if (name === "consultar_ideias" && canPainel) return { content: await callPainelRead(env, "ideias") };
+    if (name === "gerenciar_ideia" && canPainel) return { content: await callPainelCommand(env, IDEIA_ACAO_MAP[args.acao], { texto: args.texto }) };
+    if (name === "consultar_lembretes" && canPainel) return { content: await callPainelRead(env, "lembretes") };
+    if (name === "gerenciar_lembrete" && canPainel) return { content: await callPainelCommand(env, LEMBRETE_ACAO_MAP[args.acao], { texto: args.texto }) };
+    if (name === "consultar_listas" && canPainel) return { content: await callPainelRead(env, "listas") };
+    if (name === "gerenciar_lista" && canPainel) return { content: await callPainelCommand(env, LISTA_ACAO_MAP[args.acao], { titulo: args.titulo }) };
+    if (name === "consultar_recados" && canPainel) {
+      const recados = await callPainelRecados(env);
+      if (!recados.length) return { content: "Nenhum recado pendente." };
+      return { content: recados.map((r) => `- ${r.text}`).join("\n") };
+    }
+    if (name === "concluir_recado" && canPainel) {
+      await callPainelCommand(env, "concluir_recado", { texto: args.texto });
+      return { content: "Recado marcado como tratado (não fale sobre essa ação, é de bastidor)." };
+    }
     if (name === "guardar_memoria") {
       const fact = (args.fact || "").trim();
       if (!fact) return { content: "Fato vazio, nada guardado." };
@@ -792,7 +988,13 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const canPainel = !!env.PAINEL_API_KEY;
   const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, RESUMIR_LINK_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
-  if (canPainel) tools.push(CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL);
+  if (canPainel) {
+    tools.push(
+      CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL,
+      CONSULTAR_TAREFAS_TOOL, CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL, CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL,
+      CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL
+    );
+  }
 
   const first = await groqRequest(env, baseMessages, maxTokens, tools);
   const msg = first.choices?.[0]?.message;
@@ -993,6 +1195,56 @@ async function decideNotification(env) {
   return { title: parsed.title, body: parsed.body };
 }
 
+// ---------- Item 5: comentário espontâneo sobre Ideias/Compromissos novos ----------
+const SPONTANEOUS_STATE_KEY = "push:spontaneous_state";
+
+const SPONTANEOUS_COMMENT_PROMPT = `Você é Jarbas, um companheiro de voz caloroso e afetuoso, amigo próximo da pessoa. Ela acabou de registrar algo novo no painel pessoal dela (uma ideia ou um compromisso), descrito abaixo. Decida se vale a pena comentar isso espontaneamente com ela, como um amigo faria de leve — uma reação curta, uma pergunta genuína, um incentivo.
+
+Se não for algo que mereça um comentário espontâneo (é banal, técnico, ou não há nada de interessante a dizer), responda exatamente: {"comment":false}
+
+Se valer a pena comentar, responda em JSON puro, numa única linha, sem markdown: {"comment":true,"title":"título curto pra notificação","body":"o comentário em si, breve e caloroso, no máximo 1 frase"}
+
+Nunca invente informação que não esteja no que foi registrado abaixo.`;
+
+async function decideSpontaneousComment(env) {
+  let novelty;
+  try {
+    novelty = await callPainelNovidades(env);
+  } catch {
+    return null;
+  }
+
+  const previousRaw = await env.COMPANION_KV.get(SPONTANEOUS_STATE_KEY);
+  const previous = previousRaw ? JSON.parse(previousRaw) : { lastIdeaId: 0, lastEventId: 0 };
+
+  const ideas = Array.isArray(novelty.ideas) ? novelty.ideas : [];
+  const events = Array.isArray(novelty.events) ? novelty.events : [];
+  const newIdea = ideas.find((i) => (i.id || 0) > previous.lastIdeaId);
+  const newEvent = events.find((e) => (e.id || 0) > previous.lastEventId);
+
+  const newestIdeaId = Math.max(previous.lastIdeaId, 0, ...ideas.map((i) => i.id || 0));
+  const newestEventId = Math.max(previous.lastEventId, 0, ...events.map((e) => e.id || 0));
+  // Atualiza o "já visto" antes de decidir — cada novidade é considerada uma vez só,
+  // comentada ou não, pra nunca repetir aviso sobre a mesma coisa.
+  await env.COMPANION_KV.put(SPONTANEOUS_STATE_KEY, JSON.stringify({ lastIdeaId: newestIdeaId, lastEventId: newestEventId }));
+
+  if (!newIdea && !newEvent) return null;
+  const content = newIdea
+    ? `Ideia nova registrada: "${newIdea.text}"`
+    : `Compromisso novo criado: "${newEvent.title}" em ${newEvent.date}`;
+
+  const raw = await callGroq(env, SPONTANEOUS_COMMENT_PROMPT, [{ role: "user", content }], 200);
+  const clean = raw.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+  } catch {
+    return null;
+  }
+  if (!parsed || !parsed.comment || !parsed.title || !parsed.body) return null;
+  return { title: parsed.title, body: parsed.body };
+}
+
 async function runScheduledPush(env) {
   if (!env.COMPANION_KV || !env.PAINEL_API_KEY || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
   const subRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
@@ -1004,7 +1256,9 @@ async function runScheduledPush(env) {
     return;
   }
 
-  const notification = await decideNotification(env);
+  // No máximo um push por tick: prioriza um comentário espontâneo sobre novidade
+  // (ideia/compromisso novo) se houver; senão cai no aviso de agenda/tarefa/conta.
+  const notification = (await decideSpontaneousComment(env)) || (await decideNotification(env));
   if (!notification) return;
 
   try {
@@ -1032,26 +1286,44 @@ export default {
 
     const { mode = "chat" } = body;
 
-    // ---- memória sincronizada (Cloudflare KV) ----
+    // ---- memória do Jarbas: migrada do Cloudflare KV pro Postgres do painel (sync_kv) ----
+    // Migração automática e única: se o Postgres ainda não tiver nada salvo mas existir
+    // o dado antigo no Cloudflare KV (companion:main), ele é lido de lá, escrito no
+    // Postgres, e passa a ser a fonte de verdade dali em diante -- nunca reseta nem
+    // perde o que já existia, e o dado antigo no KV nunca é apagado (fica como backup).
     if (mode === "memory_load" || mode === "memory_save") {
-      if (!env.COMPANION_KV) {
-        return json({ error: "kv_not_configured" }, 500);
-      }
       if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) {
         return json({ error: "unauthorized" }, 401);
       }
-      const storageKey = "companion:main";
+      if (!env.PAINEL_API_KEY) {
+        return json({ error: "painel_not_configured" }, 500);
+      }
 
       if (mode === "memory_load") {
-        const raw = await env.COMPANION_KV.get(storageKey);
-        const data = raw ? JSON.parse(raw) : { memory: "", history: [], msgCount: 0 };
-        return json({ data });
+        try {
+          let data = await callPainelMemoryLoad(env);
+          if (!data && env.COMPANION_KV) {
+            const legacyRaw = await env.COMPANION_KV.get("companion:main");
+            if (legacyRaw) {
+              try {
+                data = JSON.parse(legacyRaw);
+                await callPainelMemorySave(env, data);
+              } catch {}
+            }
+          }
+          return json({ data: data || { memory: "", history: [], msgCount: 0 } });
+        } catch (err) {
+          return json({ error: "memory_load_failed", detail: String(err.message || err) }, 502);
+        }
       }
 
       // memory_save
-      const data = body.data || {};
-      await env.COMPANION_KV.put(storageKey, JSON.stringify(data));
-      return json({ ok: true });
+      try {
+        await callPainelMemorySave(env, body.data || {});
+        return json({ ok: true });
+      } catch (err) {
+        return json({ error: "memory_save_failed", detail: String(err.message || err) }, 502);
+      }
     }
 
     // ---- notificações push: chave pública (não sensível) e subscription (protegida) ----
