@@ -504,7 +504,7 @@ let listening = false;
 
 const MEMORY_KEY = 'raiz_companion_memory_v1';
 const SYNC_KEY_STORAGE = 'raiz_sync_key';
-const SUMMARY_EVERY = 3;
+const SUMMARY_EVERY = 2;
 const HISTORY_KEEP_AFTER_SUMMARY = 6;
 const HISTORY_MAX = 20;
 
@@ -763,7 +763,8 @@ async function updateMemory(workerUrl){
         mode:'summary',
         messages: history.slice(-16),
         existingMemory: mem.memory || '',
-        existingSobreJarbas: mem.knowledge.sobre_jarbas || ''
+        existingSobreJarbas: mem.knowledge.sobre_jarbas || '',
+        timeline: mem.timeline || []
       })
     });
     if(!resp.ok) return;
