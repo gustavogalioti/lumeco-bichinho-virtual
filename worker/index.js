@@ -307,7 +307,8 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -1009,6 +1010,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
     }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
+    console.error(`runTool_failed (${name}):`, String(err?.message || err));
     return { content: `A consulta falhou: ${String(err.message || err)}` };
   }
 }
@@ -1473,19 +1475,30 @@ export default {
         });
         let parsed;
         let saveMemory = null;
-        try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
-          saveMemory = raw.saveMemory;
-          const clean = raw.text.replace(/```json|```/g, "").trim();
+        let lastErr = null;
+        // Tenta 2x antes de desistir — falhas transitórias do Groq (rede, 429, 5xx) não
+        // deveriam virar "engasgada" na primeira tentativa. Loga sempre, pra dar pra
+        // diagnosticar no painel de logs do Cloudflare quando acontecer de novo.
+        for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
           try {
-            parsed = JSON.parse(clean);
-            if (!parsed.reply) throw new Error("no_reply_field");
-          } catch {
-            parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+            const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
+            saveMemory = raw.saveMemory;
+            const clean = raw.text.replace(/```json|```/g, "").trim();
+            try {
+              parsed = JSON.parse(clean);
+              if (!parsed.reply) throw new Error("no_reply_field");
+            } catch {
+              parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+            }
+          } catch (err) {
+            lastErr = err;
+            console.error(`companion_mode_failed (tentativa ${attempt + 1}):`, String(err?.message || err));
           }
-        } catch (err) {
+        }
+        if (!parsed) {
           // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
           parsed = { emotion: "neutro", reply: "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
+          if (lastErr) console.error("companion_mode_gave_up:", String(lastErr?.message || lastErr));
         }
         if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
           parsed.emotion = "neutro";
