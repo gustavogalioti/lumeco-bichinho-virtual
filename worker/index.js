@@ -325,7 +325,7 @@ function extractReplyFallback(raw) {
 
 async function groqRequest(env, messages, maxTokens, tools) {
   const body = {
-    model: env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    model: env.GROQ_MODEL || "openai/gpt-oss-120b",
     messages,
     max_tokens: maxTokens,
     temperature: 0.8,
