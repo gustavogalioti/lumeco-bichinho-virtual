@@ -307,9 +307,10 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia). Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha nessa mesma ferramenta. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou.
-Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta (no máximo 2 frases curtas).
+Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
 Use "confirmado" quando estiver concordando ou confirmando algo que a pessoa disse. Use "focado" quando estiver prestando atenção séria em algo específico. Escolha a emoção que combina genuinamente com o que você está dizendo. Nunca deixe o JSON incompleto.`;
@@ -517,8 +518,14 @@ const CONSULTAR_PAINEL_TOOL = {
   function: {
     name: "consultar_painel",
     description:
-      "Consulta a agenda de hoje, as tarefas pendentes e as contas pendentes da pessoa no painel de controle pessoal dela. Use sempre que ela perguntar sobre compromissos, agenda, tarefas ou contas a pagar.",
-    parameters: { type: "object", properties: {}, required: [] },
+      "Consulta a agenda (de hoje ou amanhã), as tarefas pendentes e as contas pendentes da pessoa no painel de controle pessoal dela. Use sempre que ela perguntar sobre compromissos, agenda, tarefas ou contas a pagar.",
+    parameters: {
+      type: "object",
+      properties: {
+        dia: { type: "string", enum: ["hoje", "amanha"], description: "hoje (padrão, use se ela não especificar) ou amanha, se ela perguntar especificamente pela agenda de amanhã." },
+      },
+      required: [],
+    },
   },
 };
 
@@ -738,12 +745,12 @@ const ANOTAR_DIARIO_TOOL = {
   function: {
     name: "anotar_no_diario",
     description:
-      "Registra silenciosamente no Diário do painel pessoal algo importante e duradouro que a pessoa contou (um fato sobre a vida dela, um sentimento marcante, uma conquista, uma preocupação). Use isso além de responder normalmente, não no lugar de responder — é uma ação de bastidor, a pessoa não vai ver confirmação disso na fala. Não use para perguntas triviais ou conversa fiada, só para coisas que valem a pena ficar registradas.",
+      "Registra no Diário do painel pessoal. Duas situações bem diferentes: (1) a pessoa PEDIU EXPLICITAMENTE pra anotar/registrar algo no diário (ex: 'anota no meu diário que...', 'adiciona no diário...') — nesse caso chame SEMPRE, sem julgar se o conteúdo é trivial ou não, mesmo que pareça banal (ex: horário de remédio, o que comeu) — a decisão de anotar já foi dela, não é sua; (2) a pessoa contou algo importante e duradouro por conta própria, sem pedir (um fato sobre a vida dela, um sentimento marcante, uma conquista, uma preocupação) — nesse caso, use seu próprio julgamento, só pra coisas que valem a pena ficar registradas. Em ambos os casos é uma ação de bastidor além de responder normalmente — não fale que anotou.",
     parameters: {
       type: "object",
       properties: {
-        texto: { type: "string", description: "O fato ou sentimento a registrar, em 1 frase, em português." },
-        humor: { type: "string", enum: ["otimo", "bom", "neutro", "ruim", "pessimo"], description: "O humor associado ao que foi contado." },
+        texto: { type: "string", description: "O texto a registrar. Se a pessoa pediu explicitamente, use exatamente o que ela pediu pra anotar." },
+        humor: { type: "string", enum: ["otimo", "bom", "neutro", "ruim", "pessimo"], description: "O humor associado ao que foi contado, se der pra perceber." },
       },
       required: ["texto"],
     },
@@ -752,23 +759,43 @@ const ANOTAR_DIARIO_TOOL = {
 
 const PAINEL_API_URL = "https://painel-controle-pearl.vercel.app/api/jarbas";
 
-async function callPainelSnapshot(env) {
-  const res = await fetch(`${PAINEL_API_URL}?action=snapshot`, {
+// Ações ligadas ao painel precisam ser confiáveis (não podem ficar de vez em quando
+// no "engasgada" por uma falha transitória de rede entre o Worker e o Vercel) — tenta
+// 2x, com timeout de 8s por tentativa, e loga o erro real quando desiste de verdade.
+async function fetchPainelJson(url, opts) {
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(url, { ...opts, signal: controller.signal });
+      if (!res.ok) throw new Error("painel_error_" + res.status);
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+      console.error(`painel_call_failed (tentativa ${attempt + 1}, ${url}):`, String(err?.message || err));
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  throw lastErr;
+}
+
+async function callPainelSnapshot(env, dia) {
+  const params = new URLSearchParams({ action: "snapshot" });
+  if (dia) params.set("dia", dia);
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?${params.toString()}`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return data.texto || "Não consegui ler os dados do painel agora.";
 }
 
 async function callPainelCommand(env, comando, arg) {
-  const res = await fetch(PAINEL_API_URL, {
+  const data = await fetchPainelJson(PAINEL_API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-jarbas-key": env.PAINEL_API_KEY },
     body: JSON.stringify({ comando, arg }),
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return data.reply || "Feito.";
 }
 
@@ -780,20 +807,16 @@ const LEMBRETE_ACAO_MAP = { criar: "criar_lembrete", concluir: "concluir_lembret
 const LISTA_ACAO_MAP = { criar: "criar_lista", apagar: "apagar_lista" };
 
 async function callPainelTasks(env, filtro) {
-  const res = await fetch(`${PAINEL_API_URL}?action=tasks&filtro=${encodeURIComponent(filtro || "")}`, {
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?action=tasks&filtro=${encodeURIComponent(filtro || "")}`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return data.texto || "Não consegui ler as tarefas agora.";
 }
 
 async function callPainelRead(env, action) {
-  const res = await fetch(`${PAINEL_API_URL}?action=${action}`, {
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?action=${action}`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return data.texto || "Não consegui ler os dados do painel agora.";
 }
 
@@ -802,49 +825,40 @@ async function callPainelEmails(env, filtro, remetente, assunto) {
   if (filtro) params.set("filtro", filtro);
   if (remetente) params.set("remetente", remetente);
   if (assunto) params.set("assunto", assunto);
-  const res = await fetch(`${PAINEL_API_URL}?${params.toString()}`, {
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?${params.toString()}`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return data.texto || "Não consegui ler os e-mails agora.";
 }
 
 async function callPainelRecados(env) {
-  const res = await fetch(`${PAINEL_API_URL}?action=recados`, {
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?action=recados`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return Array.isArray(data.recados) ? data.recados : [];
 }
 
 async function callPainelNovidades(env) {
-  const res = await fetch(`${PAINEL_API_URL}?action=novidades`, {
+  return fetchPainelJson(`${PAINEL_API_URL}?action=novidades`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  return res.json();
 }
 
 // ---------- Memória do Jarbas — armazenamento migrado do Cloudflare KV pro Postgres
 // do painel (sync_kv, via api/jarbas.js), unificando numa fonte de verdade só. ----------
 async function callPainelMemoryLoad(env) {
-  const res = await fetch(`${PAINEL_API_URL}?action=jarbas_memory`, {
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?action=jarbas_memory`, {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
-  const data = await res.json();
   return data.data || null;
 }
 
 async function callPainelMemorySave(env, data) {
-  const res = await fetch(PAINEL_API_URL, {
+  await fetchPainelJson(PAINEL_API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-jarbas-key": env.PAINEL_API_KEY },
     body: JSON.stringify({ comando: "jarbas_memory_save", arg: { data } }),
   });
-  if (!res.ok) throw new Error("painel_error_" + res.status);
 }
 
 async function callTavily(env, query) {
@@ -973,7 +987,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       return { content: await callWeather(cidade) };
     }
     if (name === "buscar_na_web" && canSearch) return { content: await callTavily(env, args.query || "") };
-    if (name === "consultar_painel" && canPainel) return { content: await callPainelSnapshot(env) };
+    if (name === "consultar_painel" && canPainel) return { content: await callPainelSnapshot(env, args.dia || "") };
     if (name === "gerenciar_tarefa" && canPainel) return { content: await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto }) };
     if (name === "gerenciar_conta" && canPainel) return { content: await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome }) };
     if (name === "gerenciar_compromisso" && canPainel) return { content: await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora }) };
