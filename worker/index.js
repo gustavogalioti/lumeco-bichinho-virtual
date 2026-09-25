@@ -820,6 +820,52 @@ async function callPainelRead(env, action) {
   return data.texto || "Não consegui ler os dados do painel agora.";
 }
 
+function normalizeText(text) {
+  return (text || "").toString().toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Rede de segurança: quando o Groq falha de vez (rate limit, instabilidade), tenta
+// responder os pedidos mais comuns direto no painel, sem precisar do LLM — mesma
+// ideia do fallback por palavra-chave que o Pedro já usa. Só cobre os padrões que a
+// pessoa disse precisar "sem erro" (agenda, tarefas, diário, contas); qualquer coisa
+// fora disso continua caindo no aviso de "engasgada".
+async function tryDeterministicFallback(env, userText) {
+  if (!env.PAINEL_API_KEY) return null;
+  const n = normalizeText(userText);
+  if (!n) return null;
+
+  try {
+    if (/\bdiario\b/.test(n) && /\b(anota|anote|adiciona|adicione|registra|registre|escreve|escreva)\b/.test(n)) {
+      const m = userText.match(/(?:anota|anote|adiciona|adicione|registra|registre|escreve|escreva)[^,:]*?(?:que|:)\s*(.+)/i);
+      const texto = (m ? m[1] : userText).trim();
+      if (texto) {
+        await callPainelCommand(env, "anotar_diario", { texto });
+        return "Anotei no diário.";
+      }
+    }
+    if (/\bagenda\b|\bcompromisso/.test(n)) {
+      const dia = /\bamanha\b/.test(n) ? "amanha" : "hoje";
+      return await callPainelSnapshot(env, dia);
+    }
+    if (/\btarefa/.test(n)) {
+      let filtro = "";
+      if (/\bandamento\b/.test(n)) filtro = "andamento";
+      else if (/\bhoje\b|\bagora\b/.test(n)) filtro = "hoje";
+      else if (/\bpendente/.test(n)) filtro = "pendentes";
+      return await callPainelTasks(env, filtro);
+    }
+    if (/\bconta/.test(n)) {
+      return await callPainelSnapshot(env, "hoje");
+    }
+  } catch (err) {
+    console.error("deterministic_fallback_failed:", String(err?.message || err));
+    return null;
+  }
+  return null;
+}
+
 async function callPainelEmails(env, filtro, remetente, assunto) {
   const params = new URLSearchParams({ action: "emails" });
   if (filtro) params.set("filtro", filtro);
@@ -1510,9 +1556,14 @@ export default {
           }
         }
         if (!parsed) {
-          // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
-          parsed = { emotion: "neutro", reply: "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
           if (lastErr) console.error("companion_mode_gave_up:", String(lastErr?.message || lastErr));
+          // Antes de virar "engasgada", tenta os padrões mais comuns direto no painel
+          // (agenda, tarefas, diário, contas) sem precisar do Groq — rede de segurança
+          // pros casos que precisam funcionar mesmo se o LLM estiver fora do ar.
+          const lastUserText = timestamped[timestamped.length - 1]?.content || "";
+          const fallbackReply = await tryDeterministicFallback(env, lastUserText);
+          // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
+          parsed = { emotion: "neutro", reply: fallbackReply || "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
         }
         if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
           parsed.emotion = "neutro";
