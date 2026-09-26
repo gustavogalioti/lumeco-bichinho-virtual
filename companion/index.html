@@ -935,7 +935,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -948,6 +948,10 @@ async function askRaiz(userText, isRetry){
       if(!Array.isArray(mem.timeline)) mem.timeline = [];
       mem.timeline.push({ id: Date.now(), text: parsed.save_memory, at: new Date().toISOString() });
       mem.timeline = mem.timeline.slice(-80);
+    }
+    if(parsed.save_learned){
+      if(!Array.isArray(mem.learned)) mem.learned = [];
+      mem.learned.push({ id: Date.now(), text: parsed.save_learned, at: new Date().toISOString() });
     }
     saveMemoryState();
     pushMemoryToServer(workerUrl);

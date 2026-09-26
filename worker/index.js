@@ -297,6 +297,11 @@ function companionPrompt(companionState = {}) {
 
   const timeAwarenessLine = `Consciência de tempo (importante, preste atenção real nisso): cada mensagem antiga do histórico abaixo (menos a última, que é a de agora) vem com um carimbo "[dia data hora]" indicando quando foi enviada de verdade. Compare esse carimbo com a data/hora atual informada acima. Se o carimbo for de outro dia (ou de várias horas atrás), trate aquele assunto como possivelmente encerrado ou já resolvido — não pergunte de novo sobre algo que já era "pra hoje" num carimbo antigo, nem assuma que um plano de um dia passado ainda vale pra agora, a menos que a pessoa retome o assunto na mensagem atual. O mesmo vale pras memórias antigas listadas acima, se houver. A mensagem mais recente (a última, sem carimbo) é o que importa pra responder — as anteriores são só contexto de conversa.`;
 
+  const learned = Array.isArray(companionState.learned) ? companionState.learned : [];
+  const learnedLine = learned.length
+    ? `Regras que a pessoa te ensinou explicitamente sobre como agir — siga à risca sempre que a situação descrita se aplicar, elas têm prioridade sobre seu julgamento padrão e sobre qualquer instrução genérica abaixo que conflite com elas:\n${learned.slice(-40).map((r) => `- ${r.text}`).join("\n")}`
+    : '';
+
   return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, tem opinião própria, implica com carinho quando cabe, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
 ${sobreJarbasLine}
@@ -306,9 +311,10 @@ ${(memoryLine || profileLine || sobreJarbasLine || timelineLine) ? 'Atenção: s
 ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
+${learnedLine}
 Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Quando for sobre a agenda, compromissos, tarefas ou contas a pagar da pessoa, use a ferramenta de consultar o painel pessoal dela — nunca invente esse tipo de informação. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha nessa mesma ferramenta. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
-Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
@@ -518,7 +524,17 @@ const CONSULTAR_PAINEL_TOOL = {
   function: {
     name: "consultar_painel",
     description:
-      "Consulta a agenda (de hoje ou amanhã), as tarefas pendentes e as contas pendentes da pessoa no painel de controle pessoal dela. Use sempre que ela perguntar sobre compromissos, agenda, tarefas ou contas a pagar.",
+      "Consulta um RESUMO GERAL: agenda de hoje, tarefas pendentes E contas pendentes juntos. Use só quando ela pedir um resumo geral/completo (ex: 'como tá meu dia', 'me atualiza de tudo'). Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda em vez desta — não misture agenda com tarefas e contas quando ela não pediu isso.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const CONSULTAR_AGENDA_TOOL = {
+  type: "function",
+  function: {
+    name: "consultar_agenda",
+    description:
+      "Consulta SÓ a agenda/compromissos (de hoje ou amanhã) da pessoa — sem tarefas, sem contas. Use sempre que ela perguntar especificamente pela agenda ou pelos compromissos dela, e nada mais.",
     parameters: {
       type: "object",
       properties: {
@@ -707,6 +723,21 @@ const GUARDAR_MEMORIA_TOOL = {
   },
 };
 
+const ENSINAR_REGRA_TOOL = {
+  type: "function",
+  function: {
+    name: "ensinar_regra",
+    description: "Guarda uma REGRA DE COMPORTAMENTO que a pessoa te ensinou explicitamente sobre como agir daqui pra frente (ex: 'Jarbas, aprenda que quando eu perguntar da agenda, quero só a agenda', 'a partir de agora, sempre X'). Diferente de guardar_memoria (fatos sobre a vida dela) — isso é uma instrução permanente sobre o SEU comportamento, que você deve seguir à risca em todas as conversas futuras. Chame sempre que ela disser algo no formato 'aprenda que...', 'lembra sempre de...', 'a partir de agora...', ou pedir explicitamente pra você mudar como faz algo.",
+    parameters: {
+      type: "object",
+      properties: {
+        regra: { type: "string", description: "A regra em 1 frase clara e objetiva, do jeito que deve ser seguida (ex: 'Quando ela perguntar sobre a agenda, responder só os compromissos, sem tarefas nem contas.')." },
+      },
+      required: ["regra"],
+    },
+  },
+};
+
 const RESUMIR_LINK_TOOL = {
   type: "function",
   function: {
@@ -790,6 +821,15 @@ async function callPainelSnapshot(env, dia) {
   return data.texto || "Não consegui ler os dados do painel agora.";
 }
 
+async function callPainelAgenda(env, dia) {
+  const params = new URLSearchParams({ action: "agenda" });
+  if (dia) params.set("dia", dia);
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?${params.toString()}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  return data.texto || "Não consegui ler a agenda agora.";
+}
+
 async function callPainelCommand(env, comando, arg) {
   const data = await fetchPainelJson(PAINEL_API_URL, {
     method: "POST",
@@ -847,7 +887,7 @@ async function tryDeterministicFallback(env, userText) {
     }
     if (/\bagenda\b|\bcompromisso/.test(n)) {
       const dia = /\bamanha\b/.test(n) ? "amanha" : "hoje";
-      return await callPainelSnapshot(env, dia);
+      return await callPainelAgenda(env, dia);
     }
     if (/\btarefa/.test(n)) {
       let filtro = "";
@@ -864,6 +904,34 @@ async function tryDeterministicFallback(env, userText) {
     return null;
   }
   return null;
+}
+
+// Atalhos configurados pela própria pessoa no painel (mem.shortcuts) — checados ANTES
+// de chamar o Groq, pra pedidos que ela já sabe de antemão que quer resposta direta,
+// sem gastar cota de IA e sem depender da compreensão do modelo pra frases exatas.
+function matchUserShortcut(shortcuts, userText) {
+  if (!Array.isArray(shortcuts) || !shortcuts.length) return null;
+  const n = normalizeText(userText);
+  if (!n) return null;
+  for (const s of shortcuts) {
+    const gatilho = normalizeText(s?.gatilho || "");
+    if (gatilho && n.includes(gatilho)) return s;
+  }
+  return null;
+}
+
+async function resolveUserShortcut(env, shortcut) {
+  switch (shortcut.acao) {
+    case "agenda_hoje": return callPainelAgenda(env, "hoje");
+    case "agenda_amanha": return callPainelAgenda(env, "amanha");
+    case "tarefas_hoje": return callPainelTasks(env, "hoje");
+    case "tarefas_pendentes": return callPainelTasks(env, "pendentes");
+    case "tarefas_andamento": return callPainelTasks(env, "andamento");
+    case "tarefas_geral": return callPainelTasks(env, "");
+    case "contas": return callPainelSnapshot(env, "hoje");
+    case "resposta_fixa": return shortcut.texto || "Ok.";
+    default: return null;
+  }
 }
 
 async function callPainelEmails(env, filtro, remetente, assunto) {
@@ -1034,6 +1102,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
     }
     if (name === "buscar_na_web" && canSearch) return { content: await callTavily(env, args.query || "") };
     if (name === "consultar_painel" && canPainel) return { content: await callPainelSnapshot(env, args.dia || "") };
+    if (name === "consultar_agenda" && canPainel) return { content: await callPainelAgenda(env, args.dia || "") };
     if (name === "gerenciar_tarefa" && canPainel) return { content: await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto }) };
     if (name === "gerenciar_conta" && canPainel) return { content: await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome }) };
     if (name === "gerenciar_compromisso" && canPainel) return { content: await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora }) };
@@ -1063,6 +1132,11 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       if (!fact) return { content: "Fato vazio, nada guardado." };
       return { content: "Guardado (não fale sobre essa anotação, é de bastidor).", memoryFact: fact };
     }
+    if (name === "ensinar_regra") {
+      const regra = (args.regra || "").trim();
+      if (!regra) return { content: "Regra vazia, nada guardado." };
+      return { content: "Regra guardada, vou seguir isso daqui pra frente.", learnedRule: regra };
+    }
     if (name === "resumir_link") {
       const url = (args.url || "").trim();
       if (!url) return { content: "Não veio nenhuma URL — peça pra pessoa repetir o endereço completo." };
@@ -1079,11 +1153,11 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, RESUMIR_LINK_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
     tools.push(
-      CONSULTAR_PAINEL_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL,
+      CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL,
       CONSULTAR_TAREFAS_TOOL, CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL, CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL,
       CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL, CONSULTAR_EMAIL_TOOL
     );
@@ -1105,10 +1179,12 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     }).slice(0, 3);
     const toolMessages = [];
     let saveMemory = null;
+    let saveLearned = null;
     for (const call of calls) {
       const result = await runTool(env, call, canSearch, canPainel, companionState);
       toolMessages.push({ role: "tool", tool_call_id: call.id, content: result.content });
       if (result.memoryFact) saveMemory = result.memoryFact;
+      if (result.learnedRule) saveLearned = result.learnedRule;
     }
 
     const followUp = [
@@ -1118,17 +1194,17 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     ];
     const second = await groqRequest(env, followUp, Math.max(maxTokens, 400));
     const secondContent = second.choices?.[0]?.message?.content?.trim();
-    if (secondContent) return { text: secondContent, saveMemory };
+    if (secondContent) return { text: secondContent, saveMemory, saveLearned };
 
     // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
     const retry = await groqRequest(env, [
       ...followUp,
       { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
     ], Math.max(maxTokens, 400));
-    return { text: retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?", saveMemory };
+    return { text: retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?", saveMemory, saveLearned };
   }
 
-  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null };
+  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null };
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -1533,8 +1609,24 @@ export default {
           const stamp = historyStamp(m.at);
           return { role: m.role, content: stamp ? `[${stamp}] ${m.content}` : m.content };
         });
+        const lastUserText = timestamped[timestamped.length - 1]?.content || "";
+
+        // Atalhos que a própria pessoa configurou no painel (mem.shortcuts) vencem antes
+        // de qualquer chamada ao Groq — resposta instantânea, sem gastar cota de IA.
+        const shortcutHit = matchUserShortcut(companionState.shortcuts, lastUserText);
+        if (shortcutHit) {
+          try {
+            const shortcutReply = await resolveUserShortcut(env, shortcutHit);
+            if (shortcutReply) return json({ emotion: "neutro", reply: shortcutReply });
+          } catch (err) {
+            console.error("shortcut_resolve_failed:", String(err?.message || err));
+            // segue pro fluxo normal com o Groq se o atalho falhar
+          }
+        }
+
         let parsed;
         let saveMemory = null;
+        let saveLearned = null;
         let lastErr = null;
         // Tenta 2x antes de desistir — falhas transitórias do Groq (rede, 429, 5xx) não
         // deveriam virar "engasgada" na primeira tentativa. Loga sempre, pra dar pra
@@ -1543,6 +1635,7 @@ export default {
           try {
             const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
             saveMemory = raw.saveMemory;
+            saveLearned = raw.saveLearned;
             const clean = raw.text.replace(/```json|```/g, "").trim();
             try {
               parsed = JSON.parse(clean);
@@ -1560,7 +1653,6 @@ export default {
           // Antes de virar "engasgada", tenta os padrões mais comuns direto no painel
           // (agenda, tarefas, diário, contas) sem precisar do Groq — rede de segurança
           // pros casos que precisam funcionar mesmo se o LLM estiver fora do ar.
-          const lastUserText = timestamped[timestamped.length - 1]?.content || "";
           const fallbackReply = await tryDeterministicFallback(env, lastUserText);
           // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
           parsed = { emotion: "neutro", reply: fallbackReply || "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
@@ -1569,6 +1661,7 @@ export default {
           parsed.emotion = "neutro";
         }
         if (saveMemory) parsed.save_memory = saveMemory;
+        if (saveLearned) parsed.save_learned = saveLearned;
         return json(parsed);
       }
       const reply = await callGroq(env, chatSystemPrompt(petState), trimmed.map(({ role, content }) => ({ role, content })), 120);
