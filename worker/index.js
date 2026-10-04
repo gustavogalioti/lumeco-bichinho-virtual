@@ -330,9 +330,23 @@ function extractReplyFallback(raw) {
   return raw.replace(/^\{.*?"reply"\s*:\s*"?/, "").replace(/"?\}?\s*$/, "").trim() || "Hmm, se perdeu meu pensamento. Pode repetir?";
 }
 
+// "Cérebro" de texto/raciocínio do Jarbas. Usa a OpenAI quando OPENAI_API_KEY estiver
+// configurada (mesmo formato de requisição — Chat Completions com tools — compatível
+// com o endpoint da Groq), senão cai pra Groq como sempre. Transcrição de voz (Whisper)
+// e a voz unificada (Edge TTS) continuam 100% à parte, em transcribeWithGroq/speakEdge —
+// essa troca afeta só o texto das respostas, nunca a voz.
 async function groqRequest(env, messages, maxTokens, tools) {
+  const useOpenAI = !!env.OPENAI_API_KEY;
+  const url = useOpenAI
+    ? "https://api.openai.com/v1/chat/completions"
+    : "https://api.groq.com/openai/v1/chat/completions";
+  const model = useOpenAI
+    ? (env.OPENAI_MODEL || "gpt-4o-mini")
+    : (env.GROQ_MODEL || "openai/gpt-oss-120b");
+  const apiKey = useOpenAI ? env.OPENAI_API_KEY : env.GROQ_API_KEY;
+
   const body = {
-    model: env.GROQ_MODEL || "openai/gpt-oss-120b",
+    model,
     messages,
     max_tokens: maxTokens,
     temperature: 0.8,
@@ -341,18 +355,18 @@ async function groqRequest(env, messages, maxTokens, tools) {
     body.tools = tools;
     body.tool_choice = "auto";
   }
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${env.GROQ_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const detail = await res.text();
-    throw new Error(`groq_error: ${detail.slice(0, 300)}`);
+    throw new Error(`${useOpenAI ? "openai" : "groq"}_error: ${detail.slice(0, 300)}`);
   }
   return res.json();
 }
