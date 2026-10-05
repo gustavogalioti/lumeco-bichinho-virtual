@@ -61,3 +61,27 @@ O `wrangler.toml` já tem um Cron Trigger (`[triggers]`) rodando a cada 15
 minutos — depois do primeiro `wrangler deploy` com os secrets configurados,
 ele já começa a rodar sozinho. Sem os 3 secrets, o cron roda mas não faz
 nada (falha silenciosa, sem gastar chamada à Groq).
+
+## Voz unificada: Azure AI Speech (opcional)
+
+A voz padrão (`pt-BR-AntonioNeural`) hoje usa um protocolo não-oficial do
+Microsoft Edge, que pode quebrar sem aviso se a Microsoft mudar algo. Pra uma
+voz mais estável, dá pra usar a API REST oficial do Azure AI Speech como
+provedor principal — se não configurar nada, continua tudo exatamente como
+hoje (só Edge TTS).
+
+1. Crie um recurso "Speech" no Azure Portal (https://portal.azure.com) —
+   tem um nível gratuito.
+2. Na página do recurso, em "Keys and Endpoint", copie uma das chaves e o
+   nome da região (ex.: `brazilsouth`).
+3. Configure os dois secrets:
+   ```
+   wrangler secret put AZURE_SPEECH_KEY
+   wrangler secret put AZURE_SPEECH_REGION
+   ```
+   (`AZURE_SPEECH_REGION` é só o nome da região, ex.: `brazilsouth`, não a URL inteira.)
+
+**Os dois são opcionais.** Sem eles, o Worker usa só o Edge TTS, como sempre.
+Com eles configurados, toda síntese de voz tenta primeiro o Azure (oficial,
+mesma voz `pt-BR-AntonioNeural`); se a chave/região estiver errada ou o Azure
+estiver fora do ar, cai automaticamente pro Edge TTS sem a pessoa notar.

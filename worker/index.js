@@ -190,6 +190,101 @@ async function synthesizeEdgeTts(text) {
   return bytesToBase64(merged);
 }
 
+// ---------- Voz unificada: Azure AI Speech REST API (oficial), provedor principal ----------
+// Documentação oficial consultada: "Text to speech API reference (REST)" — Speech
+// service, Azure AI services (learn.microsoft.com/azure/ai-services/speech-service/
+// rest-text-to-speech). Endpoint region-based (cognitiveservices/v1), headers
+// Ocp-Apim-Subscription-Key + Content-Type: application/ssml+xml +
+// X-Microsoft-OutputFormat + User-Agent, corpo SSML, erros 400/401/403/415/429/502/503
+// documentados — citado também no PR.
+//
+// Cache curto em memória do isolate pra frases curtas repetidas (ex: saudações) —
+// "melhor esforço", não persiste entre isolates/deploys, só evita regastar caracteres
+// do plano quando a mesma frase curta se repete no mesmo isolate. LRU simples, tamanho
+// pequeno (não é pensado pra reduzir latência, só custo).
+const AZURE_TTS_CACHE = new Map();
+const AZURE_TTS_CACHE_MAX = 40;
+const AZURE_TTS_CACHE_MAX_CHARS = 60;
+
+function azureTtsCacheGet(key) {
+  const hit = AZURE_TTS_CACHE.get(key);
+  if (hit) { AZURE_TTS_CACHE.delete(key); AZURE_TTS_CACHE.set(key, hit); } // reinsere no fim (LRU)
+  return hit;
+}
+function azureTtsCacheSet(key, value) {
+  if (AZURE_TTS_CACHE.size >= AZURE_TTS_CACHE_MAX) {
+    const oldest = AZURE_TTS_CACHE.keys().next().value;
+    AZURE_TTS_CACHE.delete(oldest);
+  }
+  AZURE_TTS_CACHE.set(key, value);
+}
+
+async function synthesizeAzureTts(env, text) {
+  const cacheKey = text.trim();
+  const cacheable = cacheKey.length > 0 && cacheKey.length <= AZURE_TTS_CACHE_MAX_CHARS;
+  if (cacheable) {
+    const cached = azureTtsCacheGet(cacheKey);
+    if (cached) {
+      console.log(`tts_call provider=azure latency_ms=0 chars=${cacheKey.length} cache=hit`);
+      return cached;
+    }
+  }
+
+  // Mesma voz, idioma e rate do Edge TTS atual — só muda o transporte (REST oficial,
+  // sem WebSocket) e o provedor.
+  const ssml =
+    `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
+    `<voice name='${EDGE_VOICE}'><prosody rate='+2%' pitch='+0Hz'>${xmlEscape(text)}</prosody></voice></speak>`;
+
+  const url = `https://${env.AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": env.AZURE_SPEECH_KEY,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+        "User-Agent": "JarbasCompanion",
+      },
+      body: ssml,
+      signal: controller.signal,
+    });
+    const latencyMs = Date.now() - startedAt;
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      const err = new Error(`azure_tts_error_${res.status}: ${detail.slice(0, 200)}`);
+      err.status = res.status;
+      // 401/403/404 = chave ou região inválida (configuração); 429/5xx = limite do
+      // plano ou instabilidade — os dois casos caem pro Edge no chamador, só o log muda.
+      const reason = [401, 403, 404].includes(res.status) ? "chave_ou_regiao_invalida" : "transitorio";
+      console.log(`tts_call provider=azure latency_ms=${latencyMs} chars=${text.length} error=${res.status} motivo=${reason}`);
+      throw err;
+    }
+
+    const buf = await res.arrayBuffer();
+    const audio_b64 = bytesToBase64(new Uint8Array(buf));
+    console.log(`tts_call provider=azure latency_ms=${latencyMs} chars=${text.length} cache=miss`);
+    if (cacheable) azureTtsCacheSet(cacheKey, audio_b64);
+    return audio_b64;
+  } catch (err) {
+    const latencyMs = Date.now() - startedAt;
+    if (err.name === "AbortError") {
+      console.log(`tts_call provider=azure latency_ms=${latencyMs} chars=${text.length} timeout=true`);
+      throw new Error("azure_tts_timeout_8s");
+    }
+    if (typeof err.status !== "number") {
+      console.log(`tts_call provider=azure latency_ms=${latencyMs} chars=${text.length} error=network`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function chatSystemPrompt(petState) {
   const memoryLine = petState.memory
     ? `O que você já sabe sobre quem cuida de você, de conversas anteriores: ${petState.memory}`
@@ -1694,10 +1789,22 @@ export default {
       }
     }
 
-    // ---- voz unificada (Microsoft Edge neural, não-oficial) — com fallback automático no app ----
+    // ---- voz unificada: Azure AI Speech (oficial) é o provedor principal; se faltar
+    // configuração ou falhar (401/403/404 chave/região inválida, 429/5xx transitório,
+    // timeout), cai pro Edge TTS (não-oficial) como reserva — e se os dois falharem,
+    // o app já cai pra voz nativa do navegador por conta própria. ----
     if (mode === "tts") {
+      if (!body.text) return json({ error: "text_required" }, 400);
+      const canAzure = !!(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION);
+      if (canAzure) {
+        try {
+          const audio_b64 = await synthesizeAzureTts(env, body.text);
+          return json({ audio_b64 });
+        } catch (err) {
+          console.error("azure_tts_failed, caindo pro Edge TTS:", String(err?.message || err));
+        }
+      }
       try {
-        if (!body.text) return json({ error: "text_required" }, 400);
         const audio_b64 = await synthesizeEdgeTts(body.text);
         return json({ audio_b64 });
       } catch (err) {
