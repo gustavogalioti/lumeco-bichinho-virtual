@@ -1281,10 +1281,10 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
   }
 }
 
-async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}) {
-  const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
-  const canSearch = !!env.TAVILY_API_KEY;
-  const canPainel = !!env.PAINEL_API_KEY;
+// Conjunto completo de ferramentas (comportamento de antes) — usado quando nenhuma
+// intenção bate por palavra-chave (conjunto mínimo não se aplica a ela) e como
+// contingência de reenvio, se o modelo pedir uma ferramenta fora do subconjunto.
+function buildAllTools(canSearch, canPainel) {
   const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
@@ -1294,9 +1294,73 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL, CONSULTAR_EMAIL_TOOL
     );
   }
+  return tools;
+}
 
-  const first = await groqRequest(env, baseMessages, maxTokens, tools);
-  const msg = first.choices?.[0]?.message;
+// Subconjunto de ferramentas por intenção, via regra simples de palavras-chave sobre o
+// último texto do usuário — evita mandar as ~20 ferramentas em toda chamada, mesmo em
+// papo casual. guardar_memoria/ensinar_regra sempre entram; se nada casar, conjunto
+// mínimo (memória/regra + consultar_painel). Isso é uma heurística, não entendimento
+// de linguagem — por isso callGroqWithSearch reenvia com o conjunto completo se o
+// modelo pedir uma ferramenta que não foi incluída aqui.
+function selectToolsForMessage(userText, canSearch, canPainel) {
+  const n = normalizeText(userText);
+  const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL]);
+  let matchedAny = false;
+  const add = (...toolsToAdd) => { toolsToAdd.forEach((t) => selected.add(t)); matchedAny = true; };
+
+  if (canPainel && /\b(agenda|compromisso)/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
+  if (canPainel && /\btarefa/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_TAREFAS_TOOL, GERENCIAR_TAREFA_TOOL);
+  if (canPainel && /\bconta(s)?\b/.test(n)) add(CONSULTAR_PAINEL_TOOL, GERENCIAR_CONTA_TOOL);
+  if (canPainel && /\bdiari/.test(n)) add(ANOTAR_DIARIO_TOOL);
+  if (canPainel && /\bideia/.test(n)) add(CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL);
+  if (canPainel && /\blembret/.test(n)) add(CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL);
+  if (canPainel && /\blista/.test(n)) add(CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL);
+  if (canPainel && (n.includes("email") || n.includes("e mail") || n.includes("caixa de entrada"))) add(CONSULTAR_EMAIL_TOOL);
+  if (canPainel && /\brecado/.test(n)) add(CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL);
+  if (/\b(clima|tempo|chuva|previsao)\b/.test(n)) add(WEATHER_TOOL);
+  if (canSearch && /\b(pesquis|busca|noticia)/.test(n)) add(SEARCH_TOOL);
+  if (n.includes("http") || n.includes("www") || /\blink/.test(n)) add(RESUMIR_LINK_TOOL);
+
+  if (!matchedAny && canPainel) selected.add(CONSULTAR_PAINEL_TOOL);
+  return Array.from(selected);
+}
+
+async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}) {
+  const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
+  const canSearch = !!env.TAVILY_API_KEY;
+  const canPainel = !!env.PAINEL_API_KEY;
+  const lastUserText = messages[messages.length - 1]?.content || "";
+
+  let tools = selectToolsForMessage(lastUserText, canSearch, canPainel);
+  let callCount = 0;
+  let providerUsed = null;
+  // Dedupe de ferramenta de escrita por assinatura (nome+args), válido pra requisição
+  // inteira (não só dentro de uma resposta) — nenhuma retentativa aqui re-executa uma
+  // ferramenta já executada, só reaproveita o resultado guardado.
+  const executed = new Map();
+
+  const logCalls = (extra = "") => console.log(`companion_llm_calls total=${callCount} provider=${providerUsed}${extra}`);
+
+  callCount++;
+  let first = await groqRequest(env, baseMessages, maxTokens, tools);
+  providerUsed = first._provider;
+  let msg = first.choices?.[0]?.message;
+
+  if (msg?.tool_calls?.length) {
+    // O modelo só deveria pedir ferramentas que foram oferecidas, mas o prompt de
+    // personalidade descreve todas as capacidades em prosa — se ele "lembrar" de uma
+    // ferramenta fora do subconjunto enviado, reenvia UMA vez com o conjunto completo.
+    const offeredNames = new Set(tools.map((t) => t.function.name));
+    const needsFullSet = msg.tool_calls.some((c) => !offeredNames.has(c.function.name));
+    if (needsFullSet) {
+      tools = buildAllTools(canSearch, canPainel);
+      callCount++;
+      first = await groqRequest(env, baseMessages, maxTokens, tools);
+      providerUsed = first._provider;
+      msg = first.choices?.[0]?.message;
+    }
+  }
 
   if (msg?.tool_calls?.length) {
     // remove chamadas repetidas (mesma ferramenta + mesmos argumentos) — evita
@@ -1313,7 +1377,12 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     let saveMemory = null;
     let saveLearned = null;
     for (const call of calls) {
-      const result = await runTool(env, call, canSearch, canPainel, companionState);
+      const sig = call.function.name + "|" + call.function.arguments;
+      let result = executed.get(sig);
+      if (!result) {
+        result = await runTool(env, call, canSearch, canPainel, companionState);
+        executed.set(sig, result);
+      }
       toolMessages.push({ role: "tool", tool_call_id: call.id, content: result.content });
       if (result.memoryFact) saveMemory = result.memoryFact;
       if (result.learnedRule) saveLearned = result.learnedRule;
@@ -1324,18 +1393,42 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       { role: "assistant", content: msg.content || null, tool_calls: msg.tool_calls },
       ...toolMessages,
     ];
-    const second = await groqRequest(env, followUp, Math.max(maxTokens, 400));
-    const secondContent = second.choices?.[0]?.message?.content?.trim();
-    if (secondContent) return { text: secondContent, saveMemory, saveLearned };
 
-    // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
-    const retry = await groqRequest(env, [
-      ...followUp,
-      { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
-    ], Math.max(maxTokens, 400));
-    return { text: retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?", saveMemory, saveLearned };
+    // Dali em diante, as ferramentas já rodaram — qualquer nova tentativa (resposta
+    // vazia ou erro na chamada) só repete a chamada que gera a FALA, reaproveitando
+    // toolMessages. Ferramenta de escrita nunca roda de novo nesta requisição.
+    const retrySpeech = async () => {
+      callCount++;
+      const retry = await groqRequest(env, [
+        ...followUp,
+        { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
+      ], Math.max(maxTokens, 400));
+      providerUsed = retry._provider;
+      return retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?";
+    };
+
+    try {
+      callCount++;
+      const second = await groqRequest(env, followUp, Math.max(maxTokens, 400));
+      providerUsed = second._provider;
+      const secondContent = second.choices?.[0]?.message?.content?.trim();
+      if (secondContent) {
+        logCalls();
+        return { text: secondContent, saveMemory, saveLearned };
+      }
+      // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
+      const text = await retrySpeech();
+      logCalls();
+      return { text, saveMemory, saveLearned };
+    } catch (err) {
+      console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
+      const text = await retrySpeech();
+      logCalls();
+      return { text, saveMemory, saveLearned };
+    }
   }
 
+  logCalls();
   return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null };
 }
 
@@ -1759,29 +1852,27 @@ export default {
         let parsed;
         let saveMemory = null;
         let saveLearned = null;
-        let lastErr = null;
-        // Tenta 2x antes de desistir — falhas transitórias do Groq (rede, 429, 5xx) não
-        // deveriam virar "engasgada" na primeira tentativa. Loga sempre, pra dar pra
-        // diagnosticar no painel de logs do Cloudflare quando acontecer de novo.
-        for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+        // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
+        // provedores configurados em cadeia com fallback internamente, e
+        // callGroqWithSearch já retenta a chamada que gera a FALA sem re-executar
+        // ferramentas. Repetir a chamada inteira aqui de novo é que causava o bug de
+        // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
+        // segunda chamada ao LLM falhava.
+        try {
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
+          saveMemory = raw.saveMemory;
+          saveLearned = raw.saveLearned;
+          const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
-            const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
-            saveMemory = raw.saveMemory;
-            saveLearned = raw.saveLearned;
-            const clean = raw.text.replace(/```json|```/g, "").trim();
-            try {
-              parsed = JSON.parse(clean);
-              if (!parsed.reply) throw new Error("no_reply_field");
-            } catch {
-              parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
-            }
-          } catch (err) {
-            lastErr = err;
-            console.error(`companion_mode_failed (tentativa ${attempt + 1}):`, String(err?.message || err));
+            parsed = JSON.parse(clean);
+            if (!parsed.reply) throw new Error("no_reply_field");
+          } catch {
+            parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
           }
+        } catch (err) {
+          console.error("companion_mode_failed:", String(err?.message || err));
         }
         if (!parsed) {
-          if (lastErr) console.error("companion_mode_gave_up:", String(lastErr?.message || lastErr));
           // Antes de virar "engasgada", tenta os padrões mais comuns direto no painel
           // (agenda, tarefas, diário, contas) sem precisar do Groq — rede de segurança
           // pros casos que precisam funcionar mesmo se o LLM estiver fora do ar.
