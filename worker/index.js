@@ -330,45 +330,163 @@ function extractReplyFallback(raw) {
   return raw.replace(/^\{.*?"reply"\s*:\s*"?/, "").replace(/"?\}?\s*$/, "").trim() || "Hmm, se perdeu meu pensamento. Pode repetir?";
 }
 
-// "Cérebro" de texto/raciocínio do Jarbas. Usa a OpenAI quando OPENAI_API_KEY estiver
-// configurada (mesmo formato de requisição — Chat Completions com tools — compatível
-// com o endpoint da Groq), senão cai pra Groq como sempre. Transcrição de voz (Whisper)
-// e a voz unificada (Edge TTS) continuam 100% à parte, em transcribeWithGroq/speakEdge —
-// essa troca afeta só o texto das respostas, nunca a voz.
-async function groqRequest(env, messages, maxTokens, tools) {
-  const useOpenAI = !!env.OPENAI_API_KEY;
-  const url = useOpenAI
-    ? "https://api.openai.com/v1/chat/completions"
-    : "https://api.groq.com/openai/v1/chat/completions";
-  const model = useOpenAI
-    ? (env.OPENAI_MODEL || "gpt-4o-mini")
-    : (env.GROQ_MODEL || "openai/gpt-oss-120b");
-  const apiKey = useOpenAI ? env.OPENAI_API_KEY : env.GROQ_API_KEY;
+// ---------- Roteador de provedores de LLM (Groq / OpenAI) com fallback ----------
+// "Cérebro" de texto/raciocínio do Jarbas. groqRequest tenta os provedores configurados
+// em ordem (LLM_ORDER, padrão "groq,openai"; só entram os que têm chave), com fallback
+// automático em erro transitório. Mesma assinatura e mesmo formato de retorno de antes
+// (objeto de resposta do Chat Completions, agora com um campo extra _provider) — quem
+// chama (callGroq, callGroqWithSearch) não precisa saber qual provedor respondeu.
+// Transcrição de voz (Whisper) e a voz unificada (Edge TTS) continuam 100% à parte, em
+// transcribeWithGroq/speakEdge — nada aqui afeta a voz.
 
-  const body = {
-    model,
-    messages,
-    max_tokens: maxTokens,
-    temperature: 0.8,
+// Circuit breaker em memória do isolate — "melhor esforço": cada isolate novo do Worker
+// começa com os contadores zerados (não persiste entre deploys nem é compartilhado
+// entre isolates), só evita martelar um provedor que falhou transitoriamente agora mesmo
+// dentro do mesmo isolate.
+const LLM_CIRCUIT = new Map();
+const LLM_CIRCUIT_THRESHOLD = 2;
+const LLM_CIRCUIT_OPEN_MS = 60000;
+
+function llmCircuitIsOpen(name) {
+  const c = LLM_CIRCUIT.get(name);
+  return !!(c?.openUntil && Date.now() < c.openUntil);
+}
+function llmCircuitRecordTransientFailure(name) {
+  const c = LLM_CIRCUIT.get(name) || { failCount: 0, openUntil: 0 };
+  c.failCount++;
+  if (c.failCount >= LLM_CIRCUIT_THRESHOLD) c.openUntil = Date.now() + LLM_CIRCUIT_OPEN_MS;
+  LLM_CIRCUIT.set(name, c);
+}
+function llmCircuitReset(name) {
+  LLM_CIRCUIT.set(name, { failCount: 0, openUntil: 0 });
+}
+
+function llmProviderDefs(env) {
+  return {
+    groq: { name: "groq", url: "https://api.groq.com/openai/v1/chat/completions", apiKey: env.GROQ_API_KEY, model: env.GROQ_MODEL || "openai/gpt-oss-120b" },
+    openai: { name: "openai", url: "https://api.openai.com/v1/chat/completions", apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL || "gpt-4o-mini" },
   };
+}
+
+// LLM_ORDER (ex: "openai,groq") define a ordem da cadeia sem precisar mudar código;
+// padrão "groq,openai". Só entram provedores com chave configurada — se só existir uma
+// chave, o comportamento é equivalente a usar só aquele provedor, como antes.
+function buildLlmChain(env) {
+  const defs = llmProviderDefs(env);
+  const orderNames = (env.LLM_ORDER || "groq,openai").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const chain = [];
+  const seen = new Set();
+  for (const n of [...orderNames, ...Object.keys(defs)]) {
+    if (defs[n] && !seen.has(n)) { chain.push(defs[n]); seen.add(n); }
+  }
+  return chain.filter((p) => !!p.apiKey);
+}
+
+function llmErrorIsPermanent(status) {
+  return status === 400 || status === 401 || status === 403 || status === 404;
+}
+
+async function callLlmOnce(provider, messages, maxTokens, tools, isFallback) {
+  const body = { model: provider.model, messages, max_tokens: maxTokens, temperature: 0.8 };
   if (tools) {
     body.tools = tools;
     body.tool_choice = "auto";
   }
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
 
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`${useOpenAI ? "openai" : "groq"}_error: ${detail.slice(0, 300)}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(provider.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.apiKey}` },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const latencyMs = Date.now() - startedAt;
+
+    if (!res.ok) {
+      const detailText = await res.text().catch(() => "");
+      const err = new Error(`${provider.name}_error_${res.status}: ${detailText.slice(0, 300)}`);
+      err.status = res.status;
+      err.retryAfter = Number(res.headers.get("retry-after")) || null;
+      throw err;
+    }
+
+    const data = await res.json();
+    console.log(`llm_call provider=${provider.name} model=${provider.model} latency_ms=${latencyMs} tokens=${JSON.stringify(data.usage || null)} fallback=${isFallback}`);
+    data._provider = provider.name;
+    return data;
+  } catch (err) {
+    const latencyMs = Date.now() - startedAt;
+    if (err.name === "AbortError") {
+      console.log(`llm_call provider=${provider.name} model=${provider.model} latency_ms=${latencyMs} tokens=null fallback=${isFallback} timeout=true`);
+      const e = new Error(`${provider.name}_timeout_20s`);
+      e.transient = true;
+      throw e;
+    }
+    if (typeof err.status !== "number") err.transient = true; // erro de rede, sem status HTTP
+    console.log(`llm_call provider=${provider.name} model=${provider.model} latency_ms=${latencyMs} tokens=null fallback=${isFallback} error=${err.status || "network"}`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
+}
+
+async function groqRequest(env, messages, maxTokens, tools) {
+  const chain = buildLlmChain(env);
+  if (!chain.length) throw new Error("llm_no_provider_configured");
+
+  const errors = [];
+  for (let i = 0; i < chain.length; i++) {
+    const provider = chain[i];
+    const isFallback = i > 0;
+
+    if (llmCircuitIsOpen(provider.name)) {
+      console.error(`llm_call_skipped provider=${provider.name} reason=circuit_open`);
+      errors.push(`${provider.name}: circuito aberto (falhas transitórias recentes)`);
+      continue;
+    }
+
+    try {
+      const data = await callLlmOnce(provider, messages, maxTokens, tools, isFallback);
+      llmCircuitReset(provider.name);
+      return data;
+    } catch (err) {
+      const status = err.status;
+
+      if (llmErrorIsPermanent(status)) {
+        // Erro permanente (chave inválida, modelo descontinuado, etc.) não conta pro
+        // circuit breaker — não é uma instabilidade momentânea, é configuração errada.
+        console.error(`llm_call_failed provider=${provider.name} status=${status} permanent=true detail="${String(err.message).slice(0, 200)}"`);
+        errors.push(`${provider.name}: erro permanente (${status}) — provavelmente chave inválida ou modelo descontinuado`);
+        continue;
+      }
+
+      // Transitório. Se veio Retry-After curto (até 2s), espera e tenta esse MESMO
+      // provedor de novo uma vez antes de desistir dele e ir pro próximo.
+      if (status === 429 && err.retryAfter && err.retryAfter <= 2) {
+        console.log(`llm_call_retry provider=${provider.name} retry_after_s=${err.retryAfter}`);
+        await new Promise((r) => setTimeout(r, err.retryAfter * 1000));
+        try {
+          const data = await callLlmOnce(provider, messages, maxTokens, tools, isFallback);
+          llmCircuitReset(provider.name);
+          return data;
+        } catch (err2) {
+          console.error(`llm_call_failed provider=${provider.name} status=${err2.status || "network"} transient=true detail="${String(err2.message).slice(0, 200)}"`);
+          errors.push(`${provider.name}: transitório (${err2.status || "rede/timeout"})`);
+          llmCircuitRecordTransientFailure(provider.name);
+          continue;
+        }
+      }
+
+      console.error(`llm_call_failed provider=${provider.name} status=${status || "network"} transient=true detail="${String(err.message).slice(0, 200)}"`);
+      errors.push(`${provider.name}: transitório (${status || "rede/timeout"})`);
+      llmCircuitRecordTransientFailure(provider.name);
+    }
+  }
+
+  throw new Error(`llm_all_providers_failed: ${errors.join(" | ")}`);
 }
 
 async function callGroq(env, systemPrompt, messages, maxTokens) {
