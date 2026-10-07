@@ -150,6 +150,7 @@
     <h2>Configurações</h2>
     <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
+    <div id="voiceProviderLabel" style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;"></div>
     <button id="connectionBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔌 Conexão</button>
     <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
   </div>
@@ -689,9 +690,31 @@ function speakBrowser(text){
 // Mesma voz em qualquer aparelho. Protocolo não-oficial: se falhar por qualquer
 // motivo, cai automaticamente pra voz do navegador (speakBrowser) nessa mesma fala,
 // sem travar o app e sem precisar mexer em nada.
-// Desligada por padrão até confirmarmos que é 100% estável — ligue no botão "voz: padrão do aparelho".
+// Ligada por padrão (já validada) — desligue no botão "voz: padrão do aparelho" se preferir a voz nativa.
 const EDGE_VOICE_ON_KEY = 'raiz_edge_voice_on';
-function edgeVoiceEnabled(){ return localStorage.getItem(EDGE_VOICE_ON_KEY) === '1'; }
+function edgeVoiceEnabled(){ return localStorage.getItem(EDGE_VOICE_ON_KEY) !== '0'; }
+
+// Remove um prefixo "[...]" solto no início da fala — mesma rede de segurança do
+// Worker, caso algum carimbo antigo ainda apareça (ex: histórico salvo antes do fix).
+function stripTimestampPrefix(text){
+  if(typeof text !== 'string') return text;
+  let out = text;
+  for(let i=0; i<3; i++){
+    const next = out.replace(/^\s*\[[^[\]]{1,80}\]\s*/, '');
+    if(next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+const LAST_VOICE_PROVIDER_KEY = 'raiz_last_voice_provider';
+function updateVoiceProviderLabel(){
+  const el = document.getElementById('voiceProviderLabel');
+  if(!el) return;
+  const provider = localStorage.getItem(LAST_VOICE_PROVIDER_KEY);
+  const labels = { azure: 'última voz: Azure (oficial)', edge: 'última voz: Edge TTS', browser: 'última voz: navegador (reserva)' };
+  el.textContent = labels[provider] || '';
+}
 
 function playBase64Audio(b64){
   return new Promise((resolve, reject)=>{
@@ -720,6 +743,7 @@ async function speakEdge(text){
     if(!resp.ok) throw new Error('tts_http_' + resp.status);
     const data = await resp.json();
     if(!data || !data.audio_b64) throw new Error('tts_empty');
+    try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, data.provider || 'edge'); updateVoiceProviderLabel(); }catch{}
     await playBase64Audio(data.audio_b64);
   } finally {
     clearTimeout(t);
@@ -736,6 +760,7 @@ async function speak(text){
       // segue pro plano B automaticamente, sem interromper a conversa
     }
   }
+  try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, 'browser'); updateVoiceProviderLabel(); }catch{}
   await speakBrowser(text);
 }
 
@@ -941,6 +966,7 @@ async function askRaiz(userText, isRetry){
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
     const parsed = await resp.json();
     if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
+    parsed.reply = stripTimestampPrefix(parsed.reply);
 
     history.push({role:'assistant', content: parsed.reply, at: new Date().toISOString()});
     mem.history = history;
@@ -1026,6 +1052,7 @@ async function runRoutine(routine){
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
     const parsed = await resp.json();
     if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
+    parsed.reply = stripTimestampPrefix(parsed.reply);
     setEmotion(parsed.emotion || 'neutro');
     setCaption('jarbas', parsed.reply);
     hint.textContent = 'falando...';
@@ -1572,7 +1599,8 @@ document.getElementById('profileSaveBtn').addEventListener('click', async ()=>{
 
 const voiceModeBtn = document.getElementById('voiceModeBtn');
 function updateVoiceModeBtn(){
-  voiceModeBtn.textContent = edgeVoiceEnabled() ? 'voz: unificada (experimental)' : 'voz: padrão do aparelho';
+  voiceModeBtn.textContent = edgeVoiceEnabled() ? 'voz: unificada' : 'voz: padrão do aparelho';
+  updateVoiceProviderLabel();
 }
 voiceModeBtn.addEventListener('click', ()=>{
   localStorage.setItem(EDGE_VOICE_ON_KEY, edgeVoiceEnabled() ? '0' : '1');

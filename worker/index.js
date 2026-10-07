@@ -298,9 +298,11 @@ Você é a própria árvore falando — nunca se refira a si mesma como app, IA 
 Pode mencionar sua altura, as estações do ano, o vento ou a luz do sol quando fizer sentido, sempre com leveza.`;
 }
 
-const SUMMARY_PROMPT_HEADER = (existingMemory, existingSobreJarbas, timelineText) => `A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz (Jarbas), você tem DUAS tarefas.
+const SUMMARY_PROMPT_HEADER = (existingMemory, existingSobreJarbas, timelineText, todayLabel) => `Hoje é ${todayLabel}. A partir do histórico de conversa abaixo entre uma pessoa e seu companheiro de voz (Jarbas), você tem DUAS tarefas.
 
 TAREFA 1 — memória sobre a pessoa: escreva uma memória atualizada sobre essa pessoa, em português, no máximo 4 frases curtas: nome dela (se disse o próprio nome), gostos, rotina, assuntos recorrentes, cidade onde mora (se disse).
+
+IMPORTANTE: essa memória é pra guardar fatos DURADOUROS (rotina, características, preferências, relacionamentos, trabalho) — nunca descreva um estado ou atividade momentânea (ex: "está numa festa", "está viajando nesse momento", "está comemorando hoje") como se fosse algo permanente, isso fica desatualizado rápido e faz o Jarbas parecer perdido no tempo em conversas futuras. Se algo pontual for relevante o suficiente pra mencionar, deixe claro que foi algo específico de um dia (cite a data, já que hoje é ${todayLabel}), nunca como fato genérico sem data.
 
 IMPORTANTE: se ela mencionar nome de outras pessoas (esposa, marido, namorado(a), filhos, amigos, colegas), registre claramente de quem é cada nome — por exemplo "o nome dela é Ana" vs "a esposa dela se chama Maria". NUNCA troque o nome da própria pessoa pelo nome de alguém que ela só mencionou.
 
@@ -352,16 +354,62 @@ function timelineToBulletText(timeline) {
   return (timeline || []).slice(-40).map((m) => `- (${relativeDayLabel(m.at)}) ${m.text}`).join("\n");
 }
 
-function historyStamp(ts) {
-  if (!ts) return null;
-  const parts = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
-  }).formatToParts(new Date(ts));
-  const get = (t) => parts.find((p) => p.type === t)?.value;
-  return `${get("weekday")} ${get("day")}/${get("month")} ${get("hour")}:${get("minute")}`;
+// Remove um prefixo "[...]" solto no início da fala — rede de segurança contra o
+// Jarbas imitar o formato de carimbo (ex: "[seg 07/10 14:23]") no começo da resposta.
+function stripTimestampPrefix(text) {
+  if (typeof text !== "string") return text;
+  let out = text;
+  for (let i = 0; i < 3; i++) {
+    const next = out.replace(/^\s*\[[^[\]]{1,80}\]\s*/, "");
+    if (next === out) break;
+    out = next;
+  }
+  return out;
 }
 
-function companionPrompt(companionState = {}) {
+function periodOfDayLabel(hour) {
+  if (hour >= 5 && hour < 12) return "de manhã";
+  if (hour >= 12 && hour < 18) return "de tarde";
+  if (hour >= 18) return "à noite";
+  return "de madrugada";
+}
+
+// Uma única linha de "lacuna de tempo" pro prompt, no lugar de carimbar cada mensagem
+// do histórico (isso vazava pra fala do Jarbas). Calcula quanto tempo passou desde a
+// mensagem anterior (a penúltima de `trimmed` — a última é a pergunta de agora).
+function formatTimeGapLine(prevAt, nowMs) {
+  if (!prevAt) return "";
+  const prev = new Date(prevAt);
+  const now = new Date(nowMs || Date.now());
+  const diffMs = now - prev;
+  if (!Number.isFinite(diffMs) || diffMs < 20 * 60000) return "";
+
+  const diffMin = diffMs / 60000;
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", weekday: "long", hour: "2-digit", hour12: false,
+  }).formatToParts(prev);
+  const weekday = parts.find((p) => p.type === "weekday")?.value || "";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const period = periodOfDayLabel(hour);
+  const when = relativeDayLabel(prevAt);
+  const gapText = diffMin < 60
+    ? "menos de uma hora"
+    : diffMin < 24 * 60
+      ? `cerca de ${Math.round(diffMin / 60)} hora(s)`
+      : `cerca de ${Math.round(diffMin / (24 * 60))} dia(s)`;
+
+  return `Consciência de tempo (importante, preste atenção real nisso): a última troca de mensagens dessa conversa foi ${when} (${weekday} ${period}), e já se passaram ${gapText} até agora. As mensagens do histórico abaixo (menos a última, que é a de agora) são dessa conversa anterior — se algum assunto ali parecia "pra hoje" ou era uma situação momentânea, trate como possivelmente encerrado ou já resolvido, a menos que a pessoa retome o assunto na mensagem atual. O mesmo vale pras memórias antigas listadas acima, se houver. Nunca fale essa lacuna de tempo em voz alta nem mencione que mensagens têm carimbo — isso é só pra você se orientar.`;
+}
+
+function todayLabelPtBR() {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", weekday: "long", day: "2-digit", month: "long", year: "numeric",
+  }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get("weekday")}, ${get("day")} de ${get("month")} de ${get("year")}`;
+}
+
+function companionPrompt(companionState = {}, timeGapLine = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
     ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
@@ -390,7 +438,7 @@ function companionPrompt(companionState = {}) {
     ? `Coisas que você já sabe sobre essa pessoa de conversas passadas — cada uma tem entre parênteses QUANDO foi registrada. Um fato pontual (uma atividade, onde ela estava, um evento específico) registrado "ontem" ou "há N dias" já pode ter acabado — não pergunte como se ainda estivesse rolando agora, a menos que ela mesma retome o assunto na mensagem atual. Fatos duradouros (trabalho, relacionamentos, características, preferências) continuam valendo independente de quando foram registrados. Use isso do seu jeito, sem citar como lista nem dizer "de acordo com o que anotei":\n${timelineToBulletText(timeline)}`
     : '';
 
-  const timeAwarenessLine = `Consciência de tempo (importante, preste atenção real nisso): cada mensagem antiga do histórico abaixo (menos a última, que é a de agora) vem com um carimbo "[dia data hora]" indicando quando foi enviada de verdade. Compare esse carimbo com a data/hora atual informada acima. Se o carimbo for de outro dia (ou de várias horas atrás), trate aquele assunto como possivelmente encerrado ou já resolvido — não pergunte de novo sobre algo que já era "pra hoje" num carimbo antigo, nem assuma que um plano de um dia passado ainda vale pra agora, a menos que a pessoa retome o assunto na mensagem atual. O mesmo vale pras memórias antigas listadas acima, se houver. A mensagem mais recente (a última, sem carimbo) é o que importa pra responder — as anteriores são só contexto de conversa.`;
+  const timeAwarenessLine = timeGapLine || '';
 
   const learned = Array.isArray(companionState.learned) ? companionState.learned : [];
   const learnedLine = learned.length
@@ -407,7 +455,7 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 ${learnedLine}
-Quando a pessoa contar algo pessoal e duradouro sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá.
+Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Se o fato for pontual ou um estado momentâneo (ex: "está numa festa agora", "ficou de mau humor hoje") em vez de algo duradouro (trabalho, relacionamento, característica, preferência), inclua a data de hoje no próprio texto do fato ao guardar — sem isso, você pode ler essa memória numa conversa futura como se ainda estivesse acontecendo.
 Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
@@ -939,11 +987,11 @@ const GUARDAR_MEMORIA_TOOL = {
   type: "function",
   function: {
     name: "guardar_memoria",
-    description: "Guarda um fato pessoal, duradouro e relevante sobre a pessoa pra lembrar em conversas futuras — viagens, planos, preferências, pessoas importantes, sentimentos marcantes, eventos da vida dela. Chame isso silenciosamente sempre que ela compartilhar algo assim, sem perguntar permissão nem avisar que vai guardar. Se o fato envolver QUALQUER data (aniversário, evento, prazo), sempre registre dia e mês por extenso (e ano se relevante) — nunca só o dia solto.",
+    description: "Guarda um fato pessoal e relevante sobre a pessoa pra lembrar em conversas futuras — viagens, planos, preferências, pessoas importantes, sentimentos marcantes, eventos da vida dela. Chame isso silenciosamente sempre que ela compartilhar algo assim, sem perguntar permissão nem avisar que vai guardar. IMPORTANTE — distinga dois tipos de fato: (1) fatos DURADOUROS (trabalho, relacionamento, característica, preferência, onde mora) não precisam de data, continuam valendo com o tempo; (2) fatos PONTUAIS (uma atividade específica, um estado momentâneo, um evento isolado — algo que já deve ter acabado) SEMPRE precisam da data em que aconteceram registrada no próprio texto, por extenso (dia e mês, ano se fizer sentido) — sem isso, o fato pode ser lido como se ainda estivesse acontecendo em qualquer conversa futura. Se o fato envolver uma data futura (aniversário, evento, prazo), sempre registre dia e mês por extenso (e ano se relevante) — nunca só o dia solto.",
     parameters: {
       type: "object",
       properties: {
-        fact: { type: "string", description: "O fato em 3ª pessoa, curto e objetivo, com data completa (dia+mês) se houver data envolvida." },
+        fact: { type: "string", description: "O fato em 3ª pessoa, curto e objetivo. Se for pontual/momentâneo (não duradouro), inclua a data em que aconteceu no próprio texto (ex: 'Em 7 de outubro, estava comemorando no bar com amigos'). Se envolver uma data futura marcada, inclua dia+mês completos." },
       },
       required: ["fact"],
     },
@@ -1892,14 +1940,14 @@ export default {
       if (canAzure) {
         try {
           const audio_b64 = await synthesizeAzureTts(env, body.text);
-          return json({ audio_b64 });
+          return json({ audio_b64, provider: "azure" });
         } catch (err) {
           console.error("azure_tts_failed, caindo pro Edge TTS:", String(err?.message || err));
         }
       }
       try {
         const audio_b64 = await synthesizeEdgeTts(body.text);
-        return json({ audio_b64 });
+        return json({ audio_b64, provider: "edge" });
       } catch (err) {
         return json({ error: "tts_failed", detail: String(err.message || err) }, 502);
       }
@@ -1922,7 +1970,7 @@ export default {
       if (mode === "summary") {
         const plain = trimmed.map(({ role, content }) => ({ role, content }));
         const timelineText = timelineToBulletText(body.timeline);
-        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || "", timelineText), plain, 350);
+        const raw = await callGroq(env, SUMMARY_PROMPT_HEADER(body.existingMemory || "", body.existingSobreJarbas || "", timelineText, todayLabelPtBR()), plain, 350);
         const clean = raw.replace(/```json|```/g, "").trim();
         let parsed;
         try {
@@ -1935,12 +1983,13 @@ export default {
         return json({ reply, sobre_jarbas });
       }
       if (mode === "companion") {
-        // carimba mensagens antigas do histórico com dia/hora reais; a última (a de agora) fica sem carimbo
-        const timestamped = trimmed.map((m, i) => {
-          if (i === trimmed.length - 1) return { role: m.role, content: m.content };
-          const stamp = historyStamp(m.at);
-          return { role: m.role, content: stamp ? `[${stamp}] ${m.content}` : m.content };
-        });
+        // Não carimba mais as mensagens do histórico com "[dia hora]" — isso vazava pra
+        // fala do Jarbas, que às vezes imitava o formato no início da resposta. Em vez
+        // disso, calcula uma única linha de "lacuna de tempo" (a penúltima mensagem é a
+        // última troca real; a última é a pergunta de agora) pra injetar no prompt.
+        const timestamped = trimmed.map((m) => ({ role: m.role, content: m.content }));
+        const prevAt = trimmed.length > 1 ? trimmed[trimmed.length - 2].at : null;
+        const timeGapLine = formatTimeGapLine(prevAt, Date.now());
         const lastUserText = timestamped[timestamped.length - 1]?.content || "";
 
         // Atalhos que a própria pessoa configurou no painel (mem.shortcuts) vencem antes
@@ -1966,7 +2015,7 @@ export default {
         // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
         // segunda chamada ao LLM falhava.
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState), timestamped, 450, companionState);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine), timestamped, 450, companionState);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
           const clean = raw.text.replace(/```json|```/g, "").trim();
@@ -1990,6 +2039,7 @@ export default {
         if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
           parsed.emotion = "neutro";
         }
+        if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
         if (saveMemory) parsed.save_memory = saveMemory;
         if (saveLearned) parsed.save_learned = saveLearned;
         return json(parsed);
