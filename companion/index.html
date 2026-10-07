@@ -151,6 +151,9 @@
     <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
     <div id="voiceProviderLabel" style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;"></div>
+    <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
+    <button id="interruptSensitivityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">sensibilidade: média</button>
+    <div style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;">Toque na tela ou no microfone sempre interrompe o Jarbas enquanto ele fala.</div>
     <button id="connectionBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔌 Conexão</button>
     <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
   </div>
@@ -625,9 +628,11 @@ function handleLearnCommand(text){
 
   setCaption('jarbas', `Anotado: "${fact}"`);
   setEmotion('confirmado');
-  speak(`Anotado: ${fact}`).then(()=>{
-    setEmotion('neutro');
-    hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+  speak(`Anotado: ${fact}`).then((finishedNormally)=>{
+    if(finishedNormally){
+      setEmotion('neutro');
+      hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+    }
     resumeHandsFreeListening();
   });
 
@@ -716,52 +721,288 @@ function updateVoiceProviderLabel(){
   el.textContent = labels[provider] || '';
 }
 
-function playBase64Audio(b64){
+// ---------- Fala em pedaços (streaming por frase) + interrupção (barge-in) ----------
+// `speechState.generation` é o "token" da fala atual: toda vez que uma nova fala começa
+// ou é cancelada, incrementa. Qualquer callback assíncrono pendente de uma fala antiga
+// checa `myGen !== speechState.generation` pra saber que foi superado e para de agir.
+let speechState = { generation: 0, audio: null, pending: [], settleCurrentAudio: null };
+let isSpeaking = false;
+
+function cancelSpeech(){
+  speechState.generation++;
+  // Resolve diretamente a Promise do áudio em andamento (se houver) — pause()/src=''
+  // não garantem que onended/onerror disparem em todo navegador, então sem isso o
+  // speakChunksStreaming (e portanto o askRaiz que espera speak()) podia travar pra sempre.
+  if(speechState.settleCurrentAudio){
+    const fn = speechState.settleCurrentAudio;
+    speechState.settleCurrentAudio = null;
+    fn();
+  }
+  if(speechState.audio){
+    try{ speechState.audio.pause(); }catch(e){}
+    try{ speechState.audio.src = ''; }catch(e){}
+    speechState.audio = null;
+  }
+  for(const c of speechState.pending){ try{ c.abort(); }catch(e){} }
+  speechState.pending = [];
+  if('speechSynthesis' in window){ try{ speechSynthesis.cancel(); }catch(e){} }
+  state.targetTalk = 0;
+}
+
+// Divide a fala em frases (por . ! ? e quebras de linha). Fragmentos curtos (<40
+// caracteres) são acumulados e grudados na frase seguinte, pra não pedir TTS de
+// pedacinhos minúsculos tipo "Oi!" sozinhos.
+function splitIntoSpeechChunks(text){
+  if(typeof text !== 'string') return [];
+  const clean = text.replace(/\s*\n+\s*/g, ' ').trim();
+  if(!clean) return [];
+  const raw = clean.split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(Boolean);
+  const chunks = [];
+  let pending = '';
+  for(const piece of raw){
+    const combined = pending ? `${pending} ${piece}` : piece;
+    if(combined.length < 40){
+      pending = combined;
+      continue;
+    }
+    chunks.push(combined);
+    pending = '';
+  }
+  if(pending){
+    if(chunks.length) chunks[chunks.length - 1] += ' ' + pending;
+    else chunks.push(pending);
+  }
+  return chunks;
+}
+
+async function fetchTtsAudio(text, signal){
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(!workerUrl) throw new Error('no_worker');
+  const resp = await fetch(workerUrl, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ mode:'tts', text }),
+    signal
+  });
+  if(!resp.ok) throw new Error('tts_http_' + resp.status);
+  const data = await resp.json();
+  if(!data || !data.audio_b64) throw new Error('tts_empty');
+  return { b64: data.audio_b64, provider: data.provider || 'edge' };
+}
+
+function playAudioForGen(ttsResult, myGen){
   return new Promise((resolve, reject)=>{
-    const audio = new Audio('data:audio/mpeg;base64,' + b64);
+    if(myGen !== speechState.generation){ resolve(); return; }
+    const audio = new Audio('data:audio/mpeg;base64,' + ttsResult.b64);
+    speechState.audio = audio;
     let pulseTimer = null;
-    const cleanup = ()=>{ if(pulseTimer) clearInterval(pulseTimer); state.targetTalk = 0; };
-    audio.onplay = ()=>{ pulseTimer = setInterval(()=>{ state.targetTalk = 0.35 + Math.random()*0.45; }, 110); };
-    audio.onended = ()=>{ cleanup(); resolve(); };
-    audio.onerror = ()=>{ cleanup(); reject(new Error('audio_playback_failed')); };
-    audio.play().catch(err=>{ cleanup(); reject(err); });
+    let settled = false;
+    const cleanup = ()=>{
+      if(pulseTimer) clearInterval(pulseTimer);
+      if(speechState.audio === audio) speechState.audio = null;
+      if(speechState.settleCurrentAudio === settleResolve) speechState.settleCurrentAudio = null;
+      state.targetTalk = 0;
+    };
+    const settleResolve = ()=>{ if(settled) return; settled = true; cleanup(); resolve(); };
+    const settleReject = (err)=>{ if(settled) return; settled = true; cleanup(); reject(err); };
+    speechState.settleCurrentAudio = settleResolve;
+    audio.onplay = ()=>{
+      pulseTimer = setInterval(()=>{ state.targetTalk = 0.35 + Math.random()*0.45; }, 110);
+      try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, ttsResult.provider); updateVoiceProviderLabel(); }catch{}
+    };
+    audio.onended = settleResolve;
+    audio.onerror = ()=>settleReject(new Error('audio_playback_failed'));
+    audio.play().catch(settleReject);
   });
 }
 
-async function speakEdge(text){
-  const workerUrl = localStorage.getItem('raiz_worker_url');
-  if(!workerUrl) throw new Error('no_worker');
-  const controller = new AbortController();
-  const t = setTimeout(()=>controller.abort(), 12000); // não deixa travar a conversa esperando (rede mobile é mais lenta que wifi/desktop)
-  try{
-    const resp = await fetch(workerUrl, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ mode:'tts', text }),
-      signal: controller.signal
-    });
-    if(!resp.ok) throw new Error('tts_http_' + resp.status);
-    const data = await resp.json();
-    if(!data || !data.audio_b64) throw new Error('tts_empty');
-    try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, data.provider || 'edge'); updateVoiceProviderLabel(); }catch{}
-    await playBase64Audio(data.audio_b64);
-  } finally {
-    clearTimeout(t);
+async function speakBrowserForGen(text, myGen){
+  if(myGen !== speechState.generation) return;
+  try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, 'browser'); updateVoiceProviderLabel(); }catch{}
+  await speakBrowser(text);
+}
+
+// Toca as frases em sequência, mas pede o TTS da próxima (no máximo 1 à frente)
+// enquanto a atual ainda está tocando — assim não há lacuna perceptível entre elas,
+// sem pedir TTS de tudo de uma vez (gastaria à toa se a fala for interrompida).
+async function speakChunksStreaming(chunks, myGen){
+  const ttsCache = new Array(chunks.length).fill(null);
+
+  function ensureFetching(i){
+    if(i < 0 || i >= chunks.length || ttsCache[i]) return;
+    const controller = new AbortController();
+    speechState.pending.push(controller);
+    const timer = setTimeout(()=>controller.abort(), 12000);
+    ttsCache[i] = fetchTtsAudio(chunks[i], controller.signal)
+      .then(res => { clearTimeout(timer); return res; })
+      .catch(err => { clearTimeout(timer); return { error: err }; });
+  }
+
+  ensureFetching(0);
+  ensureFetching(1);
+
+  for(let i=0; i<chunks.length; i++){
+    if(myGen !== speechState.generation) return;
+    ensureFetching(i + 1);
+    const result = await ttsCache[i];
+    if(myGen !== speechState.generation) return;
+    if(!result || result.error){
+      await speakBrowserForGen(chunks[i], myGen);
+      continue;
+    }
+    try{
+      await playAudioForGen(result, myGen);
+    }catch(err){
+      if(myGen !== speechState.generation) return;
+      await speakBrowserForGen(chunks[i], myGen);
+    }
   }
 }
 
+// Resolve `true` se a fala terminou normalmente, `false` se foi interrompida no meio
+// (por voz ou toque) — quem chama usa isso pra não sobrescrever o hint de "pode falar,
+// estou ouvindo" que a interrupção já deixou na tela.
 async function speak(text){
-  if(edgeVoiceEnabled()){
-    try{
-      await speakEdge(text);
-      return;
-    }catch(err){
-      console.warn('Voz unificada falhou, caindo pro plano B (voz do navegador):', err);
-      // segue pro plano B automaticamente, sem interromper a conversa
+  speechState.generation++;
+  const myGen = speechState.generation;
+  isSpeaking = true;
+  startInterruptMonitor(myGen);
+  try{
+    if(edgeVoiceEnabled()){
+      const chunks = splitIntoSpeechChunks(text);
+      if(chunks.length){
+        await speakChunksStreaming(chunks, myGen);
+        return myGen === speechState.generation;
+      }
+    }
+    if(myGen !== speechState.generation) return false;
+    try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, 'browser'); updateVoiceProviderLabel(); }catch{}
+    await speakBrowser(text);
+    return myGen === speechState.generation;
+  } finally {
+    if(myGen === speechState.generation){
+      stopInterruptMonitor();
+      isSpeaking = false;
     }
   }
-  try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, 'browser'); updateVoiceProviderLabel(); }catch{}
-  await speakBrowser(text);
+}
+
+// ---------- Interrupção por voz (barge-in) ----------
+// Monitora o microfone enquanto o Jarbas fala, com o mesmo princípio de calibração de
+// ruído do reconhecimento por toque (startTapRecording): mede o ruído de fundo nos
+// primeiros ~300ms e só considera "a pessoa está falando" quando o volume fica bem
+// acima disso por um tempo sustentado — evita disparo falso com o eco do alto-falante.
+const INTERRUPT_ENABLED_KEY = 'raiz_interrupt_enabled'; // '1' sempre | '0' nunca | ausente = automático (só com fone)
+const INTERRUPT_SENSITIVITY_KEY = 'raiz_interrupt_sensitivity'; // 'alta' | 'media' | 'baixa'
+const INTERRUPT_SENSITIVITY_PRESETS = { alta: 4, media: 8, baixa: 14 };
+let headphonesLikely = false;
+let interruptMonitor = null;
+
+async function detectHeadphones(){
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return false;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    headphonesLikely = devices.some(d => d.kind === 'audiooutput' && /fone|headphone|headset|earphone|bluetooth|airpods|earbud/i.test(d.label || ''));
+  }catch(e){ headphonesLikely = false; }
+  return headphonesLikely;
+}
+
+function interruptEnabled(){
+  const v = localStorage.getItem(INTERRUPT_ENABLED_KEY);
+  if(v === '1') return true;
+  if(v === '0') return false;
+  return headphonesLikely; // automático: só liga sozinho se detectar fone
+}
+
+function getInterruptSensitivityValue(){
+  const key = localStorage.getItem(INTERRUPT_SENSITIVITY_KEY) || 'media';
+  return INTERRUPT_SENSITIVITY_PRESETS[key] || INTERRUPT_SENSITIVITY_PRESETS.media;
+}
+
+function stopInterruptMonitor(){
+  if(!interruptMonitor) return;
+  if(interruptMonitor.raf) cancelAnimationFrame(interruptMonitor.raf);
+  if(interruptMonitor.audioCtx){ try{ interruptMonitor.audioCtx.close(); }catch(e){} }
+  if(interruptMonitor.stream){ interruptMonitor.stream.getTracks().forEach(t=>t.stop()); }
+  interruptMonitor = null;
+}
+
+async function startInterruptMonitor(myGen){
+  if(!interruptEnabled()) return;
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:true, noiseSuppression:true } });
+    if(myGen !== speechState.generation){ stream.getTracks().forEach(t=>t.stop()); return; }
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    interruptMonitor = { stream, audioCtx, analyser, raf: null };
+
+    const CALIBRATION_MS = 300;
+    const SUSTAIN_MS = 300;
+    const startedAt = Date.now();
+    let noiseSamples = [];
+    let noiseFloor = null;
+    let threshold = null;
+    let aboveStart = null;
+    const margin = getInterruptSensitivityValue();
+
+    const check = ()=>{
+      if(!interruptMonitor || myGen !== speechState.generation) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for(let i=0;i<data.length;i++){ const v = data[i]-128; sum += v*v; }
+      const rms = Math.sqrt(sum/data.length);
+      const elapsed = Date.now() - startedAt;
+
+      if(noiseFloor === null){
+        noiseSamples.push(rms);
+        if(elapsed >= CALIBRATION_MS){
+          noiseFloor = noiseSamples.reduce((a,b)=>a+b,0) / noiseSamples.length;
+          threshold = noiseFloor + margin;
+        }
+        interruptMonitor.raf = requestAnimationFrame(check);
+        return;
+      }
+
+      if(rms > threshold){
+        if(aboveStart === null) aboveStart = Date.now();
+        else if(Date.now() - aboveStart > SUSTAIN_MS){
+          interruptNow();
+          return;
+        }
+      } else {
+        aboveStart = null;
+      }
+      interruptMonitor.raf = requestAnimationFrame(check);
+    };
+    interruptMonitor.raf = requestAnimationFrame(check);
+  }catch(e){
+    // sem acesso a um segundo stream de microfone pra monitorar — segue só com
+    // interrupção por toque (sempre disponível, ver micBtn/stage abaixo).
+  }
+}
+
+// Interrompe a fala em andamento (por voz ou por toque). Não envia o áudio captado
+// durante a interrupção como pergunta — só para a fala e volta pra escuta normal
+// (hands-free continua exigindo "jarbas" fora da janela de conversa, como sempre).
+function interruptNow(){
+  if(!isSpeaking) return false;
+  stopInterruptMonitor();
+  cancelSpeech();
+  isSpeaking = false;
+  const last = history[history.length - 1];
+  if(last && last.role === 'assistant') last.interrupted = true;
+  saveMemoryState();
+  setEmotion('neutro');
+  hint.textContent = handsFree ? 'pode falar, estou ouvindo...' : 'toque e fale';
+  if(handsFree){
+    resumeHandsFreeListening();
+  }
+  return true;
 }
 
 async function updateMemory(workerUrl){
@@ -985,9 +1226,11 @@ async function askRaiz(userText, isRetry){
     setEmotion(parsed.emotion || 'neutro');
     setCaption('jarbas', parsed.reply);
     hint.textContent = 'falando...';
-    await speak(parsed.reply);
-    hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
-    setEmotion('neutro');
+    const finishedNormally = await speak(parsed.reply);
+    if(finishedNormally){
+      hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+      setEmotion('neutro');
+    }
 
     if(mem.msgCount % SUMMARY_EVERY === 0){
       updateMemory(workerUrl);
@@ -1345,6 +1588,10 @@ async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
 }
 
 micBtn.addEventListener('click', ()=>{
+  if(interruptNow()){
+    if(!handsFree) startTapRecording();
+    return;
+  }
   if(handsFree){
     if(!recognition) return;
     if(listening){ recognition.stop(); return; }
@@ -1357,6 +1604,11 @@ micBtn.addEventListener('click', ()=>{
   if(listening){ stopTapRecording(); return; }
   startTapRecording();
 });
+
+// Tocar em qualquer lugar da tela (fora dos botões) também interrompe o Jarbas
+// enquanto ele fala — alternativa de segurança pra quem não usa fone de ouvido.
+document.querySelector('.stage').addEventListener('click', ()=>{ interruptNow(); });
+caption.addEventListener('click', ()=>{ interruptNow(); });
 
 const handsFreeBtn = document.getElementById('handsFreeBtn');
 function updateHandsFreeBtn(){
@@ -1406,6 +1658,7 @@ if(savedSyncKey) syncKeyInput.value = savedSyncKey;
 async function completeStartup(url, syncKey){
   try{
     await navigator.mediaDevices.getUserMedia({audio:true});
+    detectHeadphones(); // melhor esforço; não bloqueia o início se falhar
     hint.textContent = 'sincronizando memória...';
     await syncMemoryFromServer(url);
     await migrateProfileToKnowledge(url);
@@ -1607,6 +1860,46 @@ voiceModeBtn.addEventListener('click', ()=>{
   updateVoiceModeBtn();
 });
 updateVoiceModeBtn();
+
+// Interrupção por voz: cicla "automático (só com fone)" -> "sempre ligado" -> "desligado".
+// Por toque na tela/microfone sempre funciona, independente dessa configuração.
+const interruptModeBtn = document.getElementById('interruptModeBtn');
+const INTERRUPT_MODE_LABELS = { auto: 'interromper por voz: automático (fone)', on: 'interromper por voz: sempre ligado', off: 'interromper por voz: desligado' };
+function interruptModeKey(){
+  const v = localStorage.getItem(INTERRUPT_ENABLED_KEY);
+  if(v === '1') return 'on';
+  if(v === '0') return 'off';
+  return 'auto';
+}
+function updateInterruptModeBtn(){
+  interruptModeBtn.textContent = INTERRUPT_MODE_LABELS[interruptModeKey()];
+}
+interruptModeBtn.addEventListener('click', ()=>{
+  const next = { auto: '1', on: '0', off: null }[interruptModeKey()];
+  if(next === null) localStorage.removeItem(INTERRUPT_ENABLED_KEY);
+  else localStorage.setItem(INTERRUPT_ENABLED_KEY, next);
+  updateInterruptModeBtn();
+});
+updateInterruptModeBtn();
+
+const interruptSensitivityBtn = document.getElementById('interruptSensitivityBtn');
+const INTERRUPT_SENSITIVITY_LABELS = { alta: 'sensibilidade: alta', media: 'sensibilidade: média', baixa: 'sensibilidade: baixa' };
+function updateInterruptSensitivityBtn(){
+  const key = localStorage.getItem(INTERRUPT_SENSITIVITY_KEY) || 'media';
+  interruptSensitivityBtn.textContent = INTERRUPT_SENSITIVITY_LABELS[key] || INTERRUPT_SENSITIVITY_LABELS.media;
+}
+interruptSensitivityBtn.addEventListener('click', ()=>{
+  const order = ['media', 'alta', 'baixa'];
+  const current = localStorage.getItem(INTERRUPT_SENSITIVITY_KEY) || 'media';
+  const next = order[(order.indexOf(current) + 1) % order.length];
+  localStorage.setItem(INTERRUPT_SENSITIVITY_KEY, next);
+  updateInterruptSensitivityBtn();
+});
+updateInterruptSensitivityBtn();
+
+if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+  navigator.mediaDevices.addEventListener('devicechange', ()=>{ detectHeadphones(); });
+}
 
 resize();
 
