@@ -608,8 +608,8 @@ ${locationLine}
 ${timeAwarenessLine}
 ${learnedLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
-Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
 Ao relatar a agenda de HOJE (nunca a de amanhã), compare o horário de cada compromisso com a hora atual informada acima: se todo mundo que estava marcado pra hoje já passou do horário, diga isso com naturalidade — algo como "por hoje você não tem mais nada marcado, seu único/último compromisso era às 10h, a reunião com X — inclusive, como foi?" — nomeando o compromisso e perguntando como foi, em vez de só recitar o horário como se ainda fosse acontecer. Se ainda tiver algo pela frente hoje, relate normalmente sem esse comentário.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
@@ -1208,14 +1208,40 @@ const ANOTAR_DIARIO_TOOL = {
   function: {
     name: "anotar_no_diario",
     description:
-      "Registra no Diário do painel pessoal. Duas situações bem diferentes: (1) a pessoa PEDIU EXPLICITAMENTE pra anotar/registrar algo no diário (ex: 'anota no meu diário que...', 'adiciona no diário...') — nesse caso chame SEMPRE, sem julgar se o conteúdo é trivial ou não, mesmo que pareça banal (ex: horário de remédio, o que comeu) — a decisão de anotar já foi dela, não é sua; (2) a pessoa contou algo importante e duradouro por conta própria, sem pedir (um fato sobre a vida dela, um sentimento marcante, uma conquista, uma preocupação) — nesse caso, use seu próprio julgamento, só pra coisas que valem a pena ficar registradas. Em ambos os casos é uma ação de bastidor além de responder normalmente — não fale que anotou.",
+      "Registra no Diário do painel pessoal. Duas situações bem diferentes: (1) a pessoa PEDIU EXPLICITAMENTE pra anotar/registrar algo no diário (ex: 'anota no meu diário que...', 'adiciona no diário...') — chame SEMPRE, sem julgar se o conteúdo é trivial ou não, mesmo que pareça banal (ex: horário de remédio, o que comeu) — a decisão de anotar já foi dela, não é sua; depois de chamar, confirme brevemente que anotou, sem precisar repetir o texto todo; (2) a pessoa contou algo importante e duradouro por conta própria, sem pedir (um fato sobre a vida dela, um sentimento marcante, uma conquista, uma preocupação) — nesse caso, use seu próprio julgamento, só pra coisas que valem a pena ficar registradas, e continue em bastidor, sem falar que anotou. IMPORTANTE sobre o texto nos dois casos: o diário é lido meses depois, sozinho, sem o contexto desta conversa — escreva uma frase AUTO-EXPLICATIVA, fiel ao que foi dito mas não literal demais: troque 'você'/'seu'/'sua' quando se referirem a você mesmo (Jarbas) pelo nome 'Jarbas' (ex: 'um update no seu sistema' deve virar 'um update no sistema do Jarbas'), e resolva 'ele'/'ela'/'isso' pelo nome ou assunto concreto. Pode incluir um emoji leve e combinando, e escolher o humor coerente — nunca invente fatos que não foram ditos. Se o que a pessoa pediu pra anotar estiver visivelmente incompleto ou cortado (termina em '...', em 'que', numa preposição solta como 'no'/'do'/'de'/'seu', ou simplesmente não faz sentido sozinho), NÃO chame essa ferramenta — responda perguntando, numa frase curta, qual é o texto completo.",
     parameters: {
       type: "object",
       properties: {
-        texto: { type: "string", description: "O texto a registrar. Se a pessoa pediu explicitamente, use exatamente o que ela pediu pra anotar." },
+        texto: { type: "string", description: "O texto já reescrito de forma auto-explicativa (sem pronomes ambíguos pro Jarbas), fiel ao conteúdo pedido." },
         humor: { type: "string", enum: ["otimo", "bom", "neutro", "ruim", "pessimo"], description: "O humor associado ao que foi contado, se der pra perceber." },
       },
       required: ["texto"],
+    },
+  },
+};
+
+const DESFAZER_ANOTACAO_DIARIO_TOOL = {
+  type: "function",
+  function: {
+    name: "desfazer_anotacao_diario",
+    description:
+      "Desfaz (remove) a anotação MAIS RECENTE que você mesmo (Jarbas) escreveu no diário, só se tiver sido nas últimas 24h. Use quando a pessoa pedir pra apagar, desfazer ou remover a última coisa que você anotou. NUNCA afirme que apagou ou substituiu algo sem chamar essa ferramenta e ver o resultado — ela só funciona pra anotações SUAS e recentes; se a pessoa quiser apagar algo que ela mesma escreveu direto no painel, ou uma anotação sua mais antiga, a ferramenta vai recusar — nesse caso explique isso com franqueza e ofereça anotar uma correção nova em vez disso (use corrigir_anotacao_diario ou anotar_no_diario).",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
+const CORRIGIR_ANOTACAO_DIARIO_TOOL = {
+  type: "function",
+  function: {
+    name: "corrigir_anotacao_diario",
+    description:
+      "Corrige (substitui o texto de) a anotação MAIS RECENTE que você mesmo (Jarbas) escreveu no diário, só se tiver sido nas últimas 24h — guarda o texto anterior no histórico, não cria uma segunda entrada. Use quando a pessoa pedir pra corrigir, trocar ou ajustar a última coisa que você anotou. NUNCA afirme que corrigiu algo sem chamar essa ferramenta e ver o resultado — mesma regra de segurança do desfazer: só funciona pra anotação SUA recente. Aplique ao novo_texto a mesma reescrita auto-explicativa descrita em anotar_no_diario.",
+    parameters: {
+      type: "object",
+      properties: {
+        novo_texto: { type: "string", description: "O novo texto, já reescrito de forma auto-explicativa (sem pronomes ambíguos pro Jarbas)." },
+      },
+      required: ["novo_texto"],
     },
   },
 };
@@ -1313,12 +1339,16 @@ async function callPainelAgenda(env, dia) {
   return data.texto || "Não consegui ler a agenda agora.";
 }
 
-async function callPainelCommand(env, comando, arg) {
-  const data = await fetchPainelJson(PAINEL_API_URL, {
+async function callPainelCommandFull(env, comando, arg) {
+  return await fetchPainelJson(PAINEL_API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-jarbas-key": env.PAINEL_API_KEY },
     body: JSON.stringify({ comando, arg }),
   });
+}
+
+async function callPainelCommand(env, comando, arg) {
+  const data = await callPainelCommandFull(env, comando, arg);
   return data.reply || "Feito.";
 }
 
@@ -1347,6 +1377,26 @@ function normalizeText(text) {
   return (text || "").toString().toLowerCase()
     .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Rede de segurança (nunca substitui o julgamento do modelo, só pega o óbvio que ele
+// deixar passar): recusa anotar um texto claramente vazio ou cortado no meio — termina
+// em reticências, ou é bem curto e termina numa preposição/pronome solto ("...no seu",
+// "que", "do").
+const DIARY_INCOMPLETE_ENDINGS = new Set([
+  "no", "na", "nos", "nas", "do", "da", "dos", "das", "de", "em", "num", "numa",
+  "seu", "sua", "seus", "suas", "com", "pra", "para", "que", "e", "o", "a",
+]);
+function isDiaryTextObviouslyIncomplete(texto) {
+  const t = (texto || "").trim();
+  if (!t) return true;
+  if (/(\.\.\.|…)\s*$/.test(t)) return true;
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length < 3) {
+    const last = normalizeText(words[words.length - 1] || "");
+    if (DIARY_INCOMPLETE_ENDINGS.has(last)) return true;
+  }
+  return false;
 }
 
 // Detecta um pedido explícito de registrar algo no diário ("anota/adiciona/registra/
@@ -1783,7 +1833,8 @@ const TOOL_KIND = {
   consultar_lembretes: "leitura", consultar_listas: "leitura", consultar_recados: "leitura",
   consultar_email: "leitura", resumir_link: "leitura",
   gerenciar_tarefa: "acao_pedida", gerenciar_conta: "acao_pedida", gerenciar_compromisso: "acao_pedida",
-  anotar_no_diario: "acao_pedida", gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
+  anotar_no_diario: "acao_pedida", desfazer_anotacao_diario: "acao_pedida", corrigir_anotacao_diario: "acao_pedida",
+  gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
   gerenciar_lista: "acao_pedida", concluir_recado: "acao_pedida", guardar_memoria: "acao_pedida", ensinar_regra: "acao_pedida",
 };
 
@@ -1805,8 +1856,26 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
     if (name === "gerenciar_conta" && canPainel) return { content: await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome }) };
     if (name === "gerenciar_compromisso" && canPainel) return { content: await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora }) };
     if (name === "anotar_no_diario" && canPainel) {
-      await callPainelCommand(env, "anotar_diario", { texto: args.texto, humor: args.humor });
-      return { content: "Anotado no diário (não fale sobre essa anotação, é de bastidor)." };
+      const texto = (args.texto || "").trim();
+      if (isDiaryTextObviouslyIncomplete(texto)) {
+        return { content: "Não anotei nada — o texto pedido parece incompleto ou cortado. Pergunte à pessoa qual é a frase completa antes de tentar de novo." };
+      }
+      await callPainelCommand(env, "anotar_diario", { texto, humor: args.humor });
+      return { content: `Anotei: "${texto}"` };
+    }
+    if (name === "desfazer_anotacao_diario" && canPainel) {
+      const data = await callPainelCommandFull(env, "desfazer_diario", {});
+      if (data?.ok) return { content: `Desfiz a anotação: "${data.texto}"` };
+      return { content: `Não consegui desfazer: ${data?.motivo || "não achei nenhuma anotação minha recente pra desfazer."}` };
+    }
+    if (name === "corrigir_anotacao_diario" && canPainel) {
+      const novoTexto = (args.novo_texto || "").trim();
+      if (isDiaryTextObviouslyIncomplete(novoTexto)) {
+        return { content: "Não corrigi nada — o novo texto pedido parece incompleto ou cortado. Pergunte à pessoa qual é a frase completa antes de tentar de novo." };
+      }
+      const data = await callPainelCommandFull(env, "corrigir_diario", { novoTexto });
+      if (data?.ok) return { content: `Corrigi a anotação para: "${data.texto}"` };
+      return { content: `Não consegui corrigir: ${data?.motivo || "não achei nenhuma anotação minha recente pra corrigir."}` };
     }
     if (name === "consultar_tarefas" && canPainel) return { content: await callPainelTasks(env, args.filtro || "") };
     if (name === "consultar_ideias" && canPainel) return { content: await callPainelRead(env, "ideias") };
@@ -1867,7 +1936,8 @@ function buildAllTools(canSearch, canPainel) {
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
     tools.push(
-      CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL, ANOTAR_DIARIO_TOOL,
+      CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL,
+      ANOTAR_DIARIO_TOOL, DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL,
       CONSULTAR_TAREFAS_TOOL, CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL, CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL,
       CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL, CONSULTAR_EMAIL_TOOL
     );
@@ -1890,7 +1960,13 @@ function selectToolsForMessage(userText, canSearch, canPainel) {
   if (canPainel && /\b(agenda|compromisso)/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
   if (canPainel && /\btarefa/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_TAREFAS_TOOL, GERENCIAR_TAREFA_TOOL);
   if (canPainel && /\bconta(s)?\b/.test(n)) add(CONSULTAR_PAINEL_TOOL, GERENCIAR_CONTA_TOOL);
-  if (canPainel && /\bdiari/.test(n)) add(ANOTAR_DIARIO_TOOL);
+  if (canPainel && /\bdiari/.test(n)) add(ANOTAR_DIARIO_TOOL, DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL);
+  // Mesmo sem a palavra "diário" — um pedido de seguimento tipo "apaga essa última
+  // atualização e adiciona uma nova" (depois de já ter pedido pra anotar algo antes)
+  // também precisa oferecer desfazer/corrigir, não só o genérico.
+  if (canPainel && /\b(apaga|apague|desfaz|desfez|desfazer|remove|removeu|remova|corrige|corrigiu|corrigir|troca|trocar|troque)\b/.test(n)) {
+    add(DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL);
+  }
   if (canPainel && /\bideia/.test(n)) add(CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL);
   if (canPainel && /\blembret/.test(n)) add(CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL);
   if (canPainel && /\blista/.test(n)) add(CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL);
