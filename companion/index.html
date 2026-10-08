@@ -149,6 +149,7 @@
   <div class="setup-card">
     <h2>Configurações</h2>
     <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
+    <button id="memoryItemsBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">💭 O que o Jarbas lembra</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
     <div id="voiceProviderLabel" style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;"></div>
     <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
@@ -215,6 +216,31 @@
 
     <button id="profileSaveBtn">Salvar</button>
     <button id="profileCancelBtn" class="btn-secondary">Cancelar</button>
+  </div>
+</div>
+
+<div class="setup hidden" id="memoryItemsEl">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
+    <h2>O que o Jarbas lembra</h2>
+    <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">Nada aqui é apagado — só arquivado. Itens arquivados continuam guardados e podem ser restaurados.</p>
+    <input type="text" id="memoryItemsSearch" placeholder="Buscar..." style="margin-bottom:10px;">
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <select id="memoryItemsTypeFilter" style="flex:1;">
+        <option value="">Todos os tipos</option>
+        <option value="duradouro">Duradouro</option>
+        <option value="episodico">Episódico</option>
+        <option value="correcao">Correção</option>
+        <option value="pendencia">Pendência</option>
+        <option value="insight">Insight</option>
+      </select>
+      <select id="memoryItemsStatusFilter" style="flex:1;">
+        <option value="">Ativos e arquivados</option>
+        <option value="ativo">Só ativos</option>
+        <option value="arquivado">Só arquivados</option>
+      </select>
+    </div>
+    <div id="memoryItemsList"></div>
+    <button id="memoryItemsCloseBtn" class="btn-secondary" style="margin-top:16px;">Fechar</button>
   </div>
 </div>
 
@@ -506,6 +532,64 @@ function loadMemoryState(){
   return { history:[], memory:'', knowledge:null, location:null, routines:[], timeline:[], msgCount:0 };
 }
 
+// F2-2 — migração automática e NÃO destrutiva: se mem.items ainda não existe, cria a
+// partir da timeline atual (cada entrada vira um item "episodico", relevanteAte = +3
+// dias). mem.timeline nunca é apagada nem alterada — continua existindo em paralelo,
+// por compatibilidade (é o que alimenta o resumo do modo "summary" também).
+function ensureItemsMigrated(){
+  if(!Array.isArray(mem.items)){
+    const timeline = Array.isArray(mem.timeline) ? mem.timeline : [];
+    mem.items = timeline.map(t => ({
+      id: 'mig_' + t.id,
+      kind: 'episodico',
+      text: t.text,
+      at: t.at,
+      importance: 1,
+      tags: [],
+      entidades: [],
+      status: 'ativo',
+      relevanteAte: t.at ? new Date(new Date(t.at).getTime() + 3*86400000).toISOString() : null,
+      followUpAt: null,
+      source: 'conversa',
+    }));
+  }
+  if(mem.itemsBackup === undefined) mem.itemsBackup = null;
+  if(mem.lastConsolidationAt === undefined) mem.lastConsolidationAt = null;
+}
+
+function newMemoryItemId(){
+  return 'it_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+const MEMORY_ITEM_KINDS = ['duradouro', 'episodico', 'correcao', 'pendencia', 'insight'];
+
+// Adiciona um item novo em mem.items (nunca mexe em mem.timeline/mem.memory/conhecimento).
+// `data` vem do Worker (parsed.save_memory_item, shape {texto,tipo,importancia,entidades,
+// followUpAt}) ou da consolidação (shape {texto,tipo,importancia,entidades,followUp}) —
+// aceita os dois nomes de campo de data de follow-up.
+function addMemoryItem(data, source){
+  ensureItemsMigrated();
+  if(!data || !data.texto || !String(data.texto).trim()) return null;
+  const tipo = MEMORY_ITEM_KINDS.includes(data.tipo) ? data.tipo : 'episodico';
+  const at = data.at || new Date().toISOString();
+  const followUpRaw = data.followUpAt || data.followUp || '';
+  const item = {
+    id: newMemoryItemId(),
+    kind: tipo,
+    text: String(data.texto).trim(),
+    at,
+    importance: Math.min(3, Math.max(1, parseInt(data.importancia, 10) || 2)),
+    tags: [],
+    entidades: Array.isArray(data.entidades) ? data.entidades.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim()) : [],
+    status: 'ativo',
+    relevanteAte: tipo === 'episodico' ? new Date(new Date(at).getTime() + 3 * 86400000).toISOString() : null,
+    followUpAt: (tipo === 'pendencia' && /^\d{4}-\d{2}-\d{2}$/.test(followUpRaw)) ? followUpRaw : null,
+    source: source || 'conversa',
+  };
+  mem.items.push(item);
+  return item;
+}
+
 const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
 function emptyKnowledge(){
   return { identidade:'', pessoas:'', rotina:'', trabalho:'', sobre_jarbas:'', outros:'' };
@@ -583,6 +667,7 @@ async function syncMemoryFromServer(workerUrl){
     const { data } = await resp.json();
     if(data){
       mem = data;
+      ensureItemsMigrated();
       history = mem.history || [];
       saveMemoryState();
     }
@@ -602,6 +687,7 @@ async function pushMemoryToServer(workerUrl){
 }
 
 let mem = loadMemoryState();
+ensureItemsMigrated();
 let history = mem.history || [];
 renderHistoryPanel();
 
@@ -1037,6 +1123,92 @@ async function updateMemory(workerUrl){
   }catch(e){}
 }
 
+// ---------- F2-2: consolidação de memória (disparada pelo app, SÓ no app) ----------
+// O Worker (mode:'consolidate') não grava nada — só calcula e devolve. O app aplica
+// aqui e é quem decide salvar (sobrescrevendo o blob inteiro, como sempre foi).
+const CONSOLIDATION_INTERVAL_MS = 20 * 60 * 60 * 1000; // no máximo 1x a cada 20h
+
+// Aplica o resultado da consolidação em mem.items, SEM apagar nada — mesclar/arquivar
+// só mudam o `status`/`kind` do item, nunca removem do array. Guarda o estado anterior
+// completo em mem.itemsBackup (só o último) antes de aplicar qualquer mudança.
+function applyConsolidationResult(result){
+  ensureItemsMigrated();
+  if(!result || typeof result !== 'object') return;
+  const before = mem.items.map(i => ({ ...i }));
+  const byId = new Map(mem.items.map(i => [i.id, i]));
+
+  for(const m of (Array.isArray(result.mesclar) ? result.mesclar : [])){
+    if(!m || !Array.isArray(m.descartarIds)) continue;
+    for(const did of m.descartarIds){
+      const it = byId.get(did);
+      if(it) it.status = 'arquivado';
+    }
+  }
+  for(const p of (Array.isArray(result.promover) ? result.promover : [])){
+    const it = p && byId.get(p.id);
+    if(it && p.novoTipo) it.kind = p.novoTipo;
+  }
+  for(const id of (Array.isArray(result.arquivar) ? result.arquivar : [])){
+    const it = byId.get(id);
+    if(it) it.status = 'arquivado';
+  }
+  for(const c of (Array.isArray(result.contradicoes) ? result.contradicoes : [])){
+    if(!c || !c.texto) continue;
+    if(c.arquivarId){
+      const old = byId.get(c.arquivarId);
+      if(old) old.status = 'arquivado';
+    }
+    const novo = addMemoryItem({ texto: c.texto, tipo: 'correcao', importancia: c.importancia || 3, entidades: c.entidades }, 'consolidacao');
+    if(novo) byId.set(novo.id, novo);
+  }
+  for(const n of (Array.isArray(result.novos) ? result.novos : [])){
+    if(!n || !n.texto) continue;
+    const novo = addMemoryItem({ texto: n.texto, tipo: n.tipo, importancia: n.importancia, entidades: n.entidades, followUp: n.followUp }, 'consolidacao');
+    if(novo) byId.set(novo.id, novo);
+  }
+  for(const ins of (Array.isArray(result.insights) ? result.insights : [])){
+    if(!ins || !ins.texto) continue;
+    const novo = addMemoryItem({ texto: ins.texto, tipo: 'insight', importancia: ins.importancia, entidades: ins.entidades }, 'consolidacao');
+    if(novo) byId.set(novo.id, novo);
+  }
+  for(const pe of (Array.isArray(result.pendencias) ? result.pendencias : [])){
+    if(!pe || !pe.texto) continue;
+    const novo = addMemoryItem({ texto: pe.texto, tipo: 'pendencia', importancia: pe.importancia || 2, entidades: pe.entidades, followUp: pe.followUp }, 'consolidacao');
+    if(novo) byId.set(novo.id, novo);
+  }
+
+  mem.itemsBackup = before;
+}
+
+async function maybeRunConsolidation(workerUrl){
+  try{
+    const syncKey = getSyncKey();
+    if(!workerUrl || !syncKey) return;
+    ensureItemsMigrated();
+    const last = mem.lastConsolidationAt ? new Date(mem.lastConsolidationAt).getTime() : 0;
+    if(Date.now() - last < CONSOLIDATION_INTERVAL_MS) return;
+
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        mode:'consolidate', key: syncKey,
+        items: mem.items || [],
+        messages: (mem.history || history || []).slice(-40),
+        hojeISO: todayISO(),
+      })
+    });
+    if(!resp.ok) return;
+    const result = await resp.json();
+    applyConsolidationResult(result);
+    mem.lastConsolidationAt = new Date().toISOString();
+    saveMemoryState();
+    await pushMemoryToServer(workerUrl);
+  }catch(e){
+    console.warn('Consolidação de memória falhou (sem problema, tenta de novo depois):', e);
+  }
+}
+
 function formatNowPtBR(){
   return new Date().toLocaleString('pt-BR', {
     weekday:'long', day:'2-digit', month:'long', year:'numeric',
@@ -1201,7 +1373,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -1212,9 +1384,14 @@ async function askRaiz(userText, isRetry){
     history.push({role:'assistant', content: parsed.reply, at: new Date().toISOString()});
     mem.history = history;
     if(parsed.save_memory){
+      // Compatibilidade: mem.timeline continua sendo alimentada do jeito que sempre foi
+      // (alimenta o modo "summary" também) — nada aqui muda.
       if(!Array.isArray(mem.timeline)) mem.timeline = [];
       mem.timeline.push({ id: Date.now(), text: parsed.save_memory, at: new Date().toISOString() });
       mem.timeline = mem.timeline.slice(-80);
+    }
+    if(parsed.save_memory_item){
+      addMemoryItem(parsed.save_memory_item, 'conversa');
     }
     if(parsed.save_learned){
       if(!Array.isArray(mem.learned)) mem.learned = [];
@@ -1667,6 +1844,7 @@ async function completeStartup(url, syncKey){
       saveMemoryState();
       pushMemoryToServer(url);
     }
+    maybeRunConsolidation(url); // em segundo plano, nunca atrasa o início do app
     hint.textContent = 'toque para falar';
     if(!recognition) initRecognition();
     updateHandsFreeBtn();
@@ -1849,6 +2027,86 @@ document.getElementById('profileSaveBtn').addEventListener('click', async ()=>{
   profileEl.classList.add('hidden');
   setCaption('jarbas', 'Anotado, vou lembrar disso.');
 });
+
+/* ---------- F2-2: "O que o Jarbas lembra" — lista, busca, filtro, arquivar/restaurar ---------- */
+const MEMORY_KIND_LABELS = { duradouro: 'Duradouro', episodico: 'Episódico', correcao: 'Correção', pendencia: 'Pendência', insight: 'Insight' };
+const memoryItemsEl = document.getElementById('memoryItemsEl');
+const memoryItemsListEl = document.getElementById('memoryItemsList');
+const memoryItemsSearchEl = document.getElementById('memoryItemsSearch');
+const memoryItemsTypeFilterEl = document.getElementById('memoryItemsTypeFilter');
+const memoryItemsStatusFilterEl = document.getElementById('memoryItemsStatusFilter');
+
+function memoryItemAgeLabel(at){
+  if(!at) return 'data desconhecida';
+  const diffDays = Math.max(0, Math.round((Date.now() - new Date(at).getTime()) / 86400000));
+  if(diffDays === 0) return 'hoje';
+  if(diffDays === 1) return 'ontem';
+  if(diffDays < 7) return `há ${diffDays} dias`;
+  if(diffDays < 30){ const n = Math.round(diffDays/7); return `há ${n} semana${n>1?'s':''}`; }
+  if(diffDays < 365){ const n = Math.round(diffDays/30); return `há ${n} ${n>1?'meses':'mês'}`; }
+  const n = Math.round(diffDays/365);
+  return `há ${n} ano${n>1?'s':''}`;
+}
+
+function renderMemoryItemsList(){
+  ensureItemsMigrated();
+  const q = normalizeForMatch(memoryItemsSearchEl.value || '');
+  const tipoFiltro = memoryItemsTypeFilterEl.value;
+  const statusFiltro = memoryItemsStatusFilterEl.value;
+
+  const filtered = (mem.items || []).filter(i => {
+    if(tipoFiltro && i.kind !== tipoFiltro) return false;
+    if(statusFiltro && (i.status || 'ativo') !== statusFiltro) return false;
+    if(q && !normalizeForMatch(i.text).includes(q)) return false;
+    return true;
+  }).sort((a, b) => new Date(b.at) - new Date(a.at));
+
+  if(!filtered.length){
+    memoryItemsListEl.innerHTML = '<p style="color:var(--muted); font-size:13px;">Nada encontrado.</p>';
+    return;
+  }
+
+  memoryItemsListEl.innerHTML = filtered.map(i => {
+    const arquivado = i.status === 'arquivado';
+    const entidadesText = (i.entidades || []).join(', ');
+    const estrelas = '★'.repeat(i.importance || 1) + '☆'.repeat(3 - (i.importance || 1));
+    return `<div class="routine-card" style="opacity:${arquivado ? '0.6' : '1'};">
+      <div>
+        <div style="font-weight:600; font-size:14px;">${escapeHtml(i.text)}</div>
+        <div style="color:var(--muted); font-size:12px; margin-top:4px;">
+          ${MEMORY_KIND_LABELS[i.kind] || i.kind} · ${memoryItemAgeLabel(i.at)} · ${estrelas}${arquivado ? ' · arquivado' : ''}
+          ${entidadesText ? `<br>${escapeHtml(entidadesText)}` : ''}
+        </div>
+      </div>
+      <button type="button" class="btn-secondary routine-del" data-toggle-archive="${escapeHtml(i.id)}">${arquivado ? 'Restaurar' : 'Arquivar'}</button>
+    </div>`;
+  }).join('');
+
+  memoryItemsListEl.querySelectorAll('[data-toggle-archive]').forEach(btn => {
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-toggle-archive');
+      const item = (mem.items || []).find(i => i.id === id);
+      if(!item) return;
+      item.status = item.status === 'arquivado' ? 'ativo' : 'arquivado';
+      saveMemoryState();
+      const workerUrl = localStorage.getItem('raiz_worker_url');
+      if(workerUrl) await pushMemoryToServer(workerUrl);
+      renderMemoryItemsList();
+    });
+  });
+}
+
+document.getElementById('memoryItemsBtn').addEventListener('click', ()=>{
+  settingsMenu.classList.add('hidden');
+  memoryItemsEl.classList.remove('hidden');
+  renderMemoryItemsList();
+});
+document.getElementById('memoryItemsCloseBtn').addEventListener('click', ()=>{
+  memoryItemsEl.classList.add('hidden');
+});
+memoryItemsSearchEl.addEventListener('input', renderMemoryItemsList);
+memoryItemsTypeFilterEl.addEventListener('change', renderMemoryItemsList);
+memoryItemsStatusFilterEl.addEventListener('change', renderMemoryItemsList);
 
 const voiceModeBtn = document.getElementById('voiceModeBtn');
 function updateVoiceModeBtn(){

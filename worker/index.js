@@ -354,6 +354,155 @@ function timelineToBulletText(timeline) {
   return (timeline || []).slice(-40).map((m) => `- (${relativeDayLabel(m.at)}) ${m.text}`).join("\n");
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// F2-2 — memória: itens (mem.items) com tipo/importância/entidades, recuperados
+// por relevância (no máximo 10 ativos + ligações por entidade + arquivados com
+// sobreposição forte) em vez de mandar a timeline inteira no prompt. NADA é
+// apagado aqui — isso é só sobre o que entra no PROMPT desta mensagem.
+// ─────────────────────────────────────────────────────────────────────────
+const PT_STOPWORDS = new Set([
+  "a","o","os","as","um","uma","uns","umas","de","do","da","dos","das","em","no","na","nos","nas",
+  "e","ou","que","se","por","para","pra","com","sem","ao","aos","foi","era","ser","estar",
+  "esta","estou","sao","como","mas","nao","sim","ja","mais","muito","tambem","isso","essa",
+  "esse","eu","ele","ela","eles","elas","voce","vc","meu","minha","meus","minhas","seu","sua",
+  "seus","suas","nosso","nossa","num","numa","ta","ne","ai","la","aqui","tudo","todo","toda","todos","todas",
+  "quando","onde","qual","quais","porque","pois","entao","depois","antes","hoje","ontem","amanha",
+  "me","te","lhe","vos","tua","tuas","teu","teus","dele","dela","deles","delas","este",
+  "isto","aquilo","aquele","aquela","sobre","entre","ate","desde","assim","algo","alguem","nada","ninguem",
+]);
+
+// Normaliza (minúscula, sem acento, só letras/números) e divide em palavras, descartando
+// stopwords e palavras curtas demais pra carregar sinal (ex: "de", "em").
+function normalizeWordsForScoring(text) {
+  const norm = String(text || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ");
+  return norm.split(/\s+/).filter((w) => w.length > 2 && !PT_STOPWORDS.has(w));
+}
+
+function normalizeEntity(e) {
+  return normalizeWordsForScoring(e).join(" ");
+}
+
+// Idade de um item em texto curto, pro prompt saber "quando foi isso" sem precisar
+// de outra consulta — estende relativeDayLabel com semanas/meses/anos pra itens
+// arquivados antigos (relativeDayLabel só cobre até ~1 semana, o suficiente pra timeline).
+function itemAgeLabel(ts) {
+  if (!ts) return "data desconhecida";
+  const diffDays = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 86400000));
+  if (diffDays === 0) return "hoje";
+  if (diffDays === 1) return "ontem";
+  if (diffDays < 7) return `há ${diffDays} dias`;
+  if (diffDays < 30) { const n = Math.round(diffDays / 7); return `há ${n} semana${n > 1 ? "s" : ""}`; }
+  if (diffDays < 365) { const n = Math.round(diffDays / 30); return `há ${n} ${n > 1 ? "meses" : "mês"}`; }
+  const n = Math.round(diffDays / 365);
+  return `há ${n} ano${n > 1 ? "s" : ""}`;
+}
+
+// Pontuação isolada numa função própria (pedido explícito) — pra poder trocar por
+// embeddings/busca semântica depois sem mexer no resto da seleção.
+function scoreMemoryItem(item, context) {
+  let score = 0;
+  const itemWords = normalizeWordsForScoring(item.text);
+  for (const w of itemWords) if (context.queryWords.has(w)) score += 3;
+
+  const itemEntities = (item.entidades || []).map(normalizeEntity).filter(Boolean);
+  const itemTags = (item.tags || []).map(normalizeEntity).filter(Boolean);
+  for (const e of itemEntities) if (context.queryTerms.has(e)) score += 4;
+  for (const t of itemTags) if (context.queryTerms.has(t)) score += 2;
+
+  const ageDays = Math.max(0, (context.nowMs - new Date(item.at).getTime()) / 86400000);
+  score += Math.max(0, 2 - ageDays / 15); // recência: até 2 pontos, esvaindo em ~30 dias
+
+  score += Math.min(3, Math.max(1, item.importance || 1)); // importância: 1 a 3 pontos
+
+  return score;
+}
+
+// Seleciona no máximo `limit` itens ATIVOS por relevância (duradouro/correção-importância-3
+// sempre entram, sem contar pro limite), acrescenta arquivados só com sobreposição forte, e
+// por fim faz a LIGAÇÃO por entidade (até 2 itens extra por entidade compartilhada).
+function selectRelevantItems(items, recentTexts, nowMs = Date.now(), limit = 10) {
+  const all = Array.isArray(items) ? items : [];
+  const active = all.filter((i) => i.status !== "arquivado");
+  const archived = all.filter((i) => i.status === "arquivado");
+
+  const queryWords = new Set((recentTexts || []).flatMap(normalizeWordsForScoring));
+  // "entidades da pergunta": sem NLP de verdade — aproxima pelas mesmas palavras
+  // normalizadas do texto recente, o que já cobre nomes próprios ditos por voz/texto.
+  const queryTerms = queryWords;
+  const context = { queryWords, queryTerms, nowMs };
+
+  const forced = active.filter((i) => i.kind === "duradouro" || (i.kind === "correcao" && (i.importance || 1) >= 3));
+  const forcedIds = new Set(forced.map((i) => i.id));
+
+  const scored = active
+    .filter((i) => !forcedIds.has(i.id))
+    .map((i) => ({ item: i, score: scoreMemoryItem(i, context) }))
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const selected = [...forced];
+  const selectedIds = new Set(selected.map((i) => i.id));
+  const budget = Math.max(0, limit - forced.length);
+  for (const { item } of scored.slice(0, budget)) {
+    selected.push(item);
+    selectedIds.add(item.id);
+  }
+
+  // Arquivados: só entram com sobreposição FORTE de palavras (2+) ou uma entidade batendo.
+  for (const item of archived) {
+    if (selectedIds.has(item.id)) continue;
+    const itemWords = normalizeWordsForScoring(item.text);
+    const wordHits = itemWords.filter((w) => queryWords.has(w)).length;
+    const itemEntities = (item.entidades || []).map(normalizeEntity).filter(Boolean);
+    const entityHit = itemEntities.some((e) => queryTerms.has(e));
+    if (wordHits >= 2 || entityHit) {
+      selected.push(item);
+      selectedIds.add(item.id);
+    }
+  }
+
+  // Ligação por entidade: pra cada item já selecionado que tenha entidade, traz até 2
+  // outros itens (ativos ou arquivados) que compartilhem essa entidade — é isso que faz
+  // o Jarbas "ligar os pontos" entre pessoa/evento/data mesmo sem bater palavra nenhuma.
+  const byEntity = new Map();
+  for (const item of [...active, ...archived]) {
+    for (const e of (item.entidades || [])) {
+      const key = normalizeEntity(e);
+      if (!key) continue;
+      if (!byEntity.has(key)) byEntity.set(key, []);
+      byEntity.get(key).push(item);
+    }
+  }
+  for (const item of [...selected]) {
+    for (const e of (item.entidades || [])) {
+      const key = normalizeEntity(e);
+      const candidates = (byEntity.get(key) || []).filter((c) => !selectedIds.has(c.id) && c.id !== item.id);
+      for (const c of candidates.slice(0, 2)) {
+        selected.push(c);
+        selectedIds.add(c.id);
+      }
+    }
+  }
+
+  return selected;
+}
+
+function itemsToPromptText(items) {
+  return (items || []).map((i) => {
+    const idade = itemAgeLabel(i.at);
+    const tags = [];
+    if (i.status === "arquivado") tags.push("arquivado");
+    if (i.kind === "correcao") tags.push("correção");
+    if (i.kind === "insight") tags.push("insight");
+    if (i.kind === "pendencia") tags.push("pendência");
+    const tagText = tags.length ? ` [${tags.join(", ")}]` : "";
+    return `- (${idade}${tagText}) ${i.text}`;
+  }).join("\n");
+}
+
 // Remove um prefixo "[...]" solto no início da fala — rede de segurança contra o
 // Jarbas imitar o formato de carimbo (ex: "[seg 07/10 14:23]") no começo da resposta.
 function stripTimestampPrefix(text) {
@@ -409,7 +558,7 @@ function todayLabelPtBR() {
   return `${get("weekday")}, ${get("day")} de ${get("month")} de ${get("year")}`;
 }
 
-function companionPrompt(companionState = {}, timeGapLine = '') {
+function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
     ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
@@ -433,9 +582,12 @@ function companionPrompt(companionState = {}, timeGapLine = '') {
     ? `Localização atual da pessoa (use como padrão em perguntas de clima quando ela não especificar outra cidade): ${companionState.location.cidade}.`
     : '';
 
-  const timeline = Array.isArray(companionState.timeline) ? companionState.timeline : [];
-  const timelineLine = timeline.length
-    ? `Coisas que você já sabe sobre essa pessoa de conversas passadas — cada uma tem entre parênteses QUANDO foi registrada. Um fato pontual (uma atividade, onde ela estava, um evento específico) registrado "ontem" ou "há N dias" já pode ter acabado — não pergunte como se ainda estivesse rolando agora, a menos que ela mesma retome o assunto na mensagem atual. Fatos duradouros (trabalho, relacionamentos, características, preferências) continuam valendo independente de quando foram registrados. Use isso do seu jeito, sem citar como lista nem dizer "de acordo com o que anotei":\n${timelineToBulletText(timeline)}`
+  // F2-2: itens de memória já vêm pré-selecionados por relevância pelo chamador
+  // (selectRelevantItems), no lugar da timeline inteira — menos tokens, mais focado
+  // no que importa pra ESSA mensagem, com ligação por entidade pra puxar contexto
+  // relacionado (mesma pessoa/evento) mesmo sem bater palavra nenhuma.
+  const itemsLine = selectedItemsText
+    ? `Coisas que você já sabe sobre essa pessoa, selecionadas por relevância pra essa conversa — cada uma tem entre parênteses QUANDO foi registrada e, se for antiga, um rótulo de quanto tempo faz. Um fato episódico/pontual registrado há um tempo já pode ter acabado — não pergunte como se ainda estivesse rolando agora, a menos que ela retome o assunto na mensagem atual. Fatos duradouros e correções continuam valendo independente de quando foram registrados. Itens marcados "[arquivado]" são coisas mais antigas que voltaram à tona por terem relação direta com o que está sendo dito agora — ainda são verdadeiros, só mais antigos. Use isso do seu jeito, ligando pontos entre pessoas/eventos/datas quando fizer sentido, sem citar como lista nem dizer "de acordo com o que anotei":\n${selectedItemsText}`
     : '';
 
   const timeAwarenessLine = timeGapLine || '';
@@ -449,13 +601,13 @@ function companionPrompt(companionState = {}, timeGapLine = '') {
 ${profileLine}
 ${sobreJarbasLine}
 ${memoryLine}
-${timelineLine}
-${(memoryLine || profileLine || sobreJarbasLine || timelineLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
+${itemsLine}
+${(memoryLine || profileLine || sobreJarbasLine || itemsLine) ? 'Atenção: se alguma memória acima menciona nomes de terceiros (esposa, familiares, amigos), nunca confunda com o nome da própria pessoa com quem você fala agora — o nome dela é o que está descrito como sendo dela mesma, não de alguém que ela mencionou.' : ''}
 ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 ${learnedLine}
-Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Se o fato for pontual ou um estado momentâneo (ex: "está numa festa agora", "ficou de mau humor hoje") em vez de algo duradouro (trabalho, relacionamento, característica, preferência), inclua a data de hoje no próprio texto do fato ao guardar — sem isso, você pode ler essa memória numa conversa futura como se ainda estivesse acontecendo.
+Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
 Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
@@ -987,13 +1139,17 @@ const GUARDAR_MEMORIA_TOOL = {
   type: "function",
   function: {
     name: "guardar_memoria",
-    description: "Guarda um fato pessoal e relevante sobre a pessoa pra lembrar em conversas futuras — viagens, planos, preferências, pessoas importantes, sentimentos marcantes, eventos da vida dela. Chame isso silenciosamente sempre que ela compartilhar algo assim, sem perguntar permissão nem avisar que vai guardar. IMPORTANTE — distinga dois tipos de fato: (1) fatos DURADOUROS (trabalho, relacionamento, característica, preferência, onde mora) não precisam de data, continuam valendo com o tempo; (2) fatos PONTUAIS (uma atividade específica, um estado momentâneo, um evento isolado — algo que já deve ter acabado) SEMPRE precisam da data em que aconteceram registrada no próprio texto, por extenso (dia e mês, ano se fizer sentido) — sem isso, o fato pode ser lido como se ainda estivesse acontecendo em qualquer conversa futura. Se o fato envolver uma data futura (aniversário, evento, prazo), sempre registre dia e mês por extenso (e ano se relevante) — nunca só o dia solto.",
+    description: "Guarda um fato pessoal e relevante sobre a pessoa pra lembrar em conversas futuras — viagens, planos, preferências, pessoas importantes, sentimentos marcantes, eventos da vida dela, correções do que ela já te contou antes. Chame isso silenciosamente sempre que ela compartilhar algo assim, sem perguntar permissão nem avisar que vai guardar. Escolha o `tipo` com cuidado: \"duradouro\" pra trabalho/relacionamento/característica/preferência/onde mora (não precisa de data, continua valendo com o tempo); \"episodico\" pra uma atividade pontual, um estado momentâneo, um evento isolado que já deve ter acabado (SEMPRE inclua a data em que aconteceu no próprio texto, por extenso); \"correcao\" quando ela corrige algo que te contou antes (ex: \"eu não fui à praia, só coloquei no calendário\") — sempre importancia 3; \"pendencia\" quando ela diz que vai fazer algo e você deve lembrá-la depois (ex: \"vou ligar pro Pedro na sexta\") — preencha followUp com a data; \"insight\" é só usado pela consolidação automática, nunca chame com esse tipo. Se o fato envolver uma data futura marcada (aniversário, evento, prazo), sempre registre dia e mês por extenso.",
     parameters: {
       type: "object",
       properties: {
-        fact: { type: "string", description: "O fato em 3ª pessoa, curto e objetivo. Se for pontual/momentâneo (não duradouro), inclua a data em que aconteceu no próprio texto (ex: 'Em 7 de outubro, estava comemorando no bar com amigos'). Se envolver uma data futura marcada, inclua dia+mês completos." },
+        texto: { type: "string", description: "O fato em 3ª pessoa, curto e objetivo. Se for episódico/pontual, inclua a data em que aconteceu no próprio texto (ex: 'Em 7 de outubro, estava comemorando no bar com amigos')." },
+        tipo: { type: "string", enum: ["duradouro", "episodico", "correcao", "pendencia"], description: "Categoria do fato — ver a descrição da ferramenta pra escolher certo." },
+        importancia: { type: "integer", enum: [1, 2, 3], description: "1 = detalhe leve, 2 = relevante, 3 = importante/correção. Padrão 2 se não tiver certeza." },
+        entidades: { type: "array", items: { type: "string" }, description: "Nomes de pessoas, lugares ou projetos ligados a esse fato (ex: ['Gabriela', 'Curitiba']), se houver. Ajuda você a puxar esse fato de novo quando ela mencionar essa pessoa/lugar depois." },
+        followUp: { type: "string", description: "Só pra tipo \"pendencia\": data (AAAA-MM-DD) em que você deve lembrá-la disso, calculada a partir de hoje." },
       },
-      required: ["fact"],
+      required: ["texto", "tipo"],
     },
   },
 };
@@ -1301,6 +1457,101 @@ async function callPainelMemorySave(env, data) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// F2-2 — consolidação: disparada pelo APP (nunca pelo servidor), usa o Diário do
+// Jarbas (F2-1, log_read) como contexto extra. O Worker só CALCULA e devolve —
+// nunca grava em jarbas_memory_v1, só o app sobrescreve esse blob.
+// ─────────────────────────────────────────────────────────────────────────
+async function callPainelLogRead(env, desde, ate, limite) {
+  const params = new URLSearchParams({ action: "log_read", desde, ate, limite: String(limite || 500) });
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?${params.toString()}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY }, // log_read não exige a chave, mas não atrapalha mandar
+  });
+  return Array.isArray(data?.eventos) ? data.eventos : [];
+}
+
+function itemsToConsolidationText(items) {
+  return (Array.isArray(items) ? items : []).slice(0, 200).map((i) => {
+    const idade = itemAgeLabel(i.at);
+    return `[${i.id}] (${i.kind || "episodico"}, imp${i.importance || 1}, ${i.status || "ativo"}, ${idade}) ${String(i.text || "").slice(0, 150)}`;
+  }).join("\n");
+}
+
+function logEventsToConsolidationText(eventos) {
+  return (Array.isArray(eventos) ? eventos : []).slice(0, 150)
+    .map((e) => `- [${e.tipo}/${e.origem}] ${String(e.resumo || "").slice(0, 150)}`)
+    .join("\n");
+}
+
+const CONSOLIDATION_PROMPT = (hojeISO) => `Você é o processo de consolidação de memória do Jarbas, um companheiro de voz. Hoje é ${hojeISO}. Você recebe: (1) a lista atual de itens de memória, cada um com um id entre colchetes; (2) as últimas mensagens da conversa; (3) um resumo do que aconteceu nos últimos 7 dias (conversas, ações, leituras, mudanças no painel — o Diário do Jarbas). Sua tarefa é ORGANIZAR a memória — NUNCA apagar nada, só reorganizar e enriquecer.
+
+Faça isso, cada item de cada categoria abaixo:
+a) mesclar: itens duplicados ou muito parecidos — escolha um id pra manter (manterId) e liste os outros ids como descartados (descartarIds; eles serão arquivados, nunca apagados).
+b) promover: itens que se repetem bastante ou são claramente permanentes (trabalho, relacionamento, característica, preferência) — promova de "episodico" pra "duradouro" (id + novoTipo:"duradouro").
+c) arquivar: ids de itens pontuais/episódicos que claramente já passaram (um evento específico que já aconteceu e não tem mais relevância prática pra conversas futuras) — NUNCA arquive um item "duradouro" ou uma "correcao" importante.
+d) contradicoes: quando um fato novo (da conversa recente ou do Diário) contradiz um item antigo da lista — crie o fato novo e correto (texto, entidades, importancia:3) e arquive o antigo (arquivarId).
+e) novos: itens novos que apareceram na conversa recente ou nas ações do painel (Diário) e ainda não estão na lista de memória (texto, tipo, importancia, entidades, followUp se for pendência).
+f) insights: padrões ou conexões reais que você percebeu olhando o conjunto (ex: "costuma estudar nos fins de semana antes de provas", "gasta mais com X no fim do mês") — só inclua se for um padrão de verdade baseado no que foi passado, nunca invente (texto, importancia, entidades).
+g) pendencias: compromissos que a pessoa disse que ia cumprir e ainda não resolveu ("vou ligar pro Pedro na sexta") — com a data em que deve ser lembrada (followUp, formato AAAA-MM-DD, calculado a partir de hoje) (texto, followUp, entidades).
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato (todo campo é array, exceto resumo; devolva [] pra categoria sem nada):
+{"mesclar":[{"manterId":"...","descartarIds":["..."]}],"promover":[{"id":"...","novoTipo":"duradouro"}],"arquivar":["id1","id2"],"contradicoes":[{"texto":"...","entidades":["..."],"importancia":3,"arquivarId":"..."}],"novos":[{"texto":"...","tipo":"episodico","importancia":2,"entidades":["..."]}],"insights":[{"texto":"...","importancia":2,"entidades":["..."]}],"pendencias":[{"texto":"...","followUp":"AAAA-MM-DD","entidades":["..."]}],"resumo":"frase curta resumindo o que mudou nessa consolidação"}
+
+Nunca invente fatos que não estejam implícitos no que foi passado abaixo.`;
+
+const CONSOLIDATION_EMPTY_RESULT = { mesclar: [], promover: [], arquivar: [], novos: [], insights: [], pendencias: [], contradicoes: [], resumo: "" };
+
+async function runConsolidation(env, items, messages, hojeISO) {
+  const plainMessages = (Array.isArray(messages) ? messages : []).slice(-40).map((m) => ({
+    role: m.role === "assistant" ? "assistant" : "user",
+    content: String(m.content || "").slice(0, 500),
+  }));
+
+  let eventosTexto = "";
+  try {
+    const hoje = new Date();
+    const seteDiasAtras = new Date(hoje.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const eventos = await callPainelLogRead(env, seteDiasAtras.toISOString().slice(0, 10), hoje.toISOString().slice(0, 10), 500);
+    eventosTexto = logEventsToConsolidationText(eventos);
+  } catch (err) {
+    console.error("consolidation_log_read_failed:", String(err?.message || err));
+  }
+
+  const itemsTexto = itemsToConsolidationText(items);
+  const userContent = [
+    `ITENS DE MEMÓRIA ATUAIS:\n${itemsTexto || "(nenhum item ainda)"}`,
+    eventosTexto ? `\nÚLTIMOS 7 DIAS (Diário do Jarbas):\n${eventosTexto}` : "",
+  ].join("\n");
+
+  let raw;
+  try {
+    raw = await callGroq(env, CONSOLIDATION_PROMPT(hojeISO), [...plainMessages, { role: "user", content: userContent }], 900);
+  } catch (err) {
+    console.error("consolidation_llm_failed:", String(err?.message || err));
+    return CONSOLIDATION_EMPTY_RESULT;
+  }
+
+  const clean = raw.replace(/```json|```/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+  } catch {
+    return CONSOLIDATION_EMPTY_RESULT;
+  }
+  if (!parsed || typeof parsed !== "object") return CONSOLIDATION_EMPTY_RESULT;
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  return {
+    mesclar: arr(parsed.mesclar),
+    promover: arr(parsed.promover),
+    arquivar: arr(parsed.arquivar).filter((id) => typeof id === "string"),
+    novos: arr(parsed.novos),
+    insights: arr(parsed.insights),
+    pendencias: arr(parsed.pendencias),
+    contradicoes: arr(parsed.contradicoes),
+    resumo: typeof parsed.resumo === "string" ? parsed.resumo : "",
+  };
+}
+
 async function callTavily(env, query) {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
@@ -1563,9 +1814,21 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
     }
     if (name === "consultar_email" && canPainel) return { content: await callPainelEmails(env, args.filtro || "", args.remetente || "", args.assunto || "") };
     if (name === "guardar_memoria") {
-      const fact = (args.fact || "").trim();
-      if (!fact) return { content: "Fato vazio, nada guardado." };
-      return { content: "Guardado (não fale sobre essa anotação, é de bastidor).", memoryFact: fact };
+      // Aceita o campo antigo `fact` também (modelo em cache/few-shot pode ainda mandar
+      // assim) — nunca quebra por causa de um nome de campo desatualizado.
+      const texto = (args.texto || args.fact || "").trim();
+      if (!texto) return { content: "Fato vazio, nada guardado." };
+      const tipo = ["duradouro", "episodico", "correcao", "pendencia"].includes(args.tipo) ? args.tipo : "episodico";
+      const importancia = Math.min(3, Math.max(1, parseInt(args.importancia, 10) || (tipo === "correcao" ? 3 : 2)));
+      const entidades = Array.isArray(args.entidades)
+        ? args.entidades.filter((e) => typeof e === "string" && e.trim()).map((e) => e.trim()).slice(0, 8)
+        : [];
+      const followUpAt = tipo === "pendencia" && /^\d{4}-\d{2}-\d{2}$/.test(args.followUp || "") ? args.followUp : null;
+      return {
+        content: "Guardado (não fale sobre essa anotação, é de bastidor).",
+        memoryFact: texto, // compat: continua alimentando mem.timeline como antes
+        memoryItem: { texto, tipo, importancia, entidades, followUpAt },
+      };
     }
     if (name === "ensinar_regra") {
       const regra = (args.regra || "").trim();
@@ -1690,6 +1953,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     const toolMessages = [];
     let saveMemory = null;
     let saveLearned = null;
+    let saveMemoryItem = null;
     for (const call of calls) {
       const name = call.function.name;
       const argsStr = call.function.arguments;
@@ -1742,6 +2006,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       toolMessages.push({ role: "tool", tool_call_id: call.id, content: result.content });
       if (result.memoryFact) saveMemory = result.memoryFact;
       if (result.learnedRule) saveLearned = result.learnedRule;
+      if (result.memoryItem) saveMemoryItem = result.memoryItem;
     }
 
     const followUp = [
@@ -1770,23 +2035,23 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
         logCalls();
-        return { text: secondContent, saveMemory, saveLearned, metrics: metrics() };
+        return { text: secondContent, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
       logCalls();
-      return { text, saveMemory, saveLearned, metrics: metrics() };
+      return { text, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
       pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
       logCalls();
-      return { text, saveMemory, saveLearned, metrics: metrics() };
+      return { text, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
     }
   }
 
   logCalls();
-  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null, metrics: metrics() };
+  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null, saveMemoryItem: null, metrics: metrics() };
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -2252,6 +2517,25 @@ export default {
       }
     }
 
+    // ---- F2-2: consolidação de memória — SÓ CALCULA e devolve, nunca grava nada.
+    // Protegido pela mesma SYNC_KEY de memory_load/memory_save porque é o APP (nunca o
+    // servidor) quem decide se/quando aplicar e salvar o resultado em jarbas_memory_v1. ----
+    if (mode === "consolidate") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      if (!env.PAINEL_API_KEY) {
+        return json({ error: "painel_not_configured" }, 500);
+      }
+      try {
+        const result = await runConsolidation(env, body.items || [], body.messages || [], body.hojeISO || todayLabelPtBR());
+        return json(result);
+      } catch (err) {
+        console.error("consolidate_failed:", String(err?.message || err));
+        return json(CONSOLIDATION_EMPTY_RESULT);
+      }
+    }
+
     // ---- notificações push: chave pública (não sensível) e subscription (protegida) ----
     if (mode === "vapid_public_key") {
       if (!env.VAPID_PUBLIC_KEY) return json({ error: "vapid_not_configured" }, 500);
@@ -2393,6 +2677,16 @@ export default {
         const logBatch = [];
         pushLogEvent(logBatch, { tipo: "conversa", origem: "usuario", resumo: lastUserText });
 
+        // F2-2: seleciona só os itens de memória relevantes pra ESSA mensagem (+ as 2
+        // anteriores), em vez de mandar a timeline inteira — menos tokens, mais focado.
+        const recentTexts = timestamped.slice(-3).map((m) => m.content);
+        const memItems = Array.isArray(companionState.items) ? companionState.items : [];
+        const selectedItems = selectRelevantItems(memItems, recentTexts, Date.now(), 10);
+        const selectedItemsText = itemsToPromptText(selectedItems);
+        if (memItems.length) {
+          pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo: `Selecionou ${selectedItems.length} de ${memItems.length} item(ns) de memória relevantes pra essa conversa.` });
+        }
+
         // Atalhos que a própria pessoa configurou no painel (mem.shortcuts) vencem antes
         // de qualquer chamada ao Groq — resposta instantânea, sem gastar cota de IA.
         const shortcutHit = matchUserShortcut(companionState.shortcuts, lastUserText);
@@ -2413,6 +2707,7 @@ export default {
         let parsed;
         let saveMemory = null;
         let saveLearned = null;
+        let saveMemoryItem = null;
         let callMetrics = null;
         // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
         // provedores configurados em cadeia com fallback internamente, e
@@ -2421,9 +2716,10 @@ export default {
         // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
         // segunda chamada ao LLM falhava.
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine), timestamped, 450, companionState, logBatch);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText), timestamped, 450, companionState, logBatch);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
+          saveMemoryItem = raw.saveMemoryItem;
           callMetrics = raw.metrics;
           const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
@@ -2450,6 +2746,7 @@ export default {
         if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
         if (saveMemory) parsed.save_memory = saveMemory;
         if (saveLearned) parsed.save_learned = saveLearned;
+        if (saveMemoryItem) parsed.save_memory_item = saveMemoryItem;
         pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
         flushLogBatch(env, ctx, logBatch);
         return json(parsed);
