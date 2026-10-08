@@ -5,6 +5,7 @@ import {
   gatilhoPermitidoAgora,
   isPrioritarioTipo,
   mergeFilaItem,
+  enqueuePushItem,
   upsertPushSubscription,
   removePushSubscriptionsByEndpoint,
   sendWebPushToAll,
@@ -18,7 +19,7 @@ const spDate = (dateStr, hhmm) => new Date(`${dateStr}T${hhmm}:00-03:00`);
 
 // ---------- isDormindo ----------
 {
-  // (b) dentro da janela, sem nenhuma atividade -> dormindo
+  // (regra ambiente) dentro da janela, sem nenhuma atividade -> dormindo
   assert.equal(
     isDormindo({ agora: spDate("2026-01-10", "02:00"), config: CONFIG, explicito: null, ultimaAtividade: null }),
     true,
@@ -53,40 +54,85 @@ const spDate = (dateStr, hhmm) => new Date(`${dateStr}T${hhmm}:00-03:00`);
     );
   }
 
-  // estado explícito "dormindo" de noite -> dormindo
-  assert.equal(
-    isDormindo({ agora: spDate("2026-01-10", "23:30"), config: CONFIG, explicito: "dormindo", ultimaAtividade: null }),
-    true,
-    "estado explícito dormindo -> dormindo"
-  );
   // estado explícito "acordado" encerra o sono mesmo dentro da janela
   assert.equal(
-    isDormindo({ agora: spDate("2026-01-10", "02:00"), config: CONFIG, explicito: "acordado", ultimaAtividade: null }),
+    isDormindo({ agora: spDate("2026-01-10", "02:00"), config: CONFIG, explicito: "acordado", explicitoDesde: spDate("2026-01-10", "01:00").toISOString(), ultimaAtividade: null }),
     false,
     "estado explícito acordado sempre vence"
   );
 
-  // atividade ÀS 03h (antes das 5h) não desperta quem está explicitamente dormindo —
-  // só atividade DEPOIS das 5h clareia o estado explícito.
-  {
-    const agora = spDate("2026-01-11", "03:00");
-    const usuarioAt = spDate("2026-01-11", "03:00").toISOString(); // atividade bem agora, mas é 3h
+  // ---- correção: "vou dormir" às 22:30 (sono DA NOITE) ----
+  // desde=22:30; a própria mensagem de "boa noite" já é a ultimaAtividade registrada.
+  const desdeNoite = spDate("2026-01-10", "22:30").toISOString();
+  const ultimaAtividadeNoite = { usuarioAt: desdeNoite, painelAt: null };
+  for (const hhmm of ["22:40", "23:10", "23:40", "00:30", "03:00"]) {
+    const dia = hhmm < "22:30" ? "2026-01-11" : "2026-01-10"; // 00:30/03:00 já são do dia seguinte
     assert.equal(
-      isDormindo({ agora, config: CONFIG, explicito: "dormindo", ultimaAtividade: { usuarioAt, painelAt: null } }),
+      isDormindo({ agora: spDate(dia, hhmm), config: CONFIG, explicito: "dormindo", explicitoDesde: desdeNoite, ultimaAtividade: ultimaAtividadeNoite }),
       true,
-      "atividade às 03h não conta — só depois das 5h"
+      `"vou dormir" às 22:30 -> dormindo às ${hhmm}`
     );
   }
-  // mas atividade depois das 5h (ex: 06h) já limpa o estado explícito
+  // atividade DE MADRUGADA (às 03:00, antes do limiar de 5h) não acorda
   {
-    const agora = spDate("2026-01-11", "08:00"); // fora da janela de sono (23-07h), só o explícito poderia manter dormindo
-    const usuarioAt = spDate("2026-01-11", "06:00").toISOString();
+    const usuarioAt = spDate("2026-01-11", "03:00").toISOString();
     assert.equal(
-      isDormindo({ agora, config: CONFIG, explicito: "dormindo", ultimaAtividade: { usuarioAt, painelAt: null } }),
-      false,
-      "atividade depois das 5h limpa o estado explícito de dormindo"
+      isDormindo({ agora: spDate("2026-01-11", "03:00"), config: CONFIG, explicito: "dormindo", explicitoDesde: desdeNoite, ultimaAtividade: { usuarioAt, painelAt: null } }),
+      true,
+      "atividade às 03:00 (antes do limiar de 5h) não acorda"
     );
   }
+  // atividade depois do limiar de 5h (às 05:20) acorda
+  {
+    const usuarioAt = spDate("2026-01-11", "05:20").toISOString();
+    assert.equal(
+      isDormindo({ agora: spDate("2026-01-11", "05:20"), config: CONFIG, explicito: "dormindo", explicitoDesde: desdeNoite, ultimaAtividade: { usuarioAt, painelAt: null } }),
+      false,
+      "atividade às 05:20 (depois do limiar de 5h) acorda"
+    );
+  }
+  // "bom dia" (acordado) acorda sempre, mesmo em plena janela de sono da noite
+  assert.equal(
+    isDormindo({ agora: spDate("2026-01-11", "01:00"), config: CONFIG, explicito: "acordado", explicitoDesde: spDate("2026-01-11", "01:00").toISOString(), ultimaAtividade: null }),
+    false,
+    '"bom dia" (acordado) acorda sempre'
+  );
+
+  // ---- correção: soneca (fora da janela da noite) ----
+  const desdeSoneca = spDate("2026-01-10", "15:00").toISOString();
+  // sem nenhuma atividade nova, a soneca continua dormindo (ex: 15:30)
+  assert.equal(
+    isDormindo({ agora: spDate("2026-01-10", "15:30"), config: CONFIG, explicito: "dormindo", explicitoDesde: desdeSoneca, ultimaAtividade: { usuarioAt: desdeSoneca, painelAt: null } }),
+    true,
+    "soneca às 15:00, sem atividade nova -> continua dormindo pouco depois"
+  );
+  // atividade às 16:00 (depois de desde+10min) encerra a soneca
+  {
+    const usuarioAt = spDate("2026-01-10", "16:00").toISOString();
+    assert.equal(
+      isDormindo({ agora: spDate("2026-01-10", "16:00"), config: CONFIG, explicito: "dormindo", explicitoDesde: desdeSoneca, ultimaAtividade: { usuarioAt, painelAt: null } }),
+      false,
+      "soneca às 15:00 -> atividade às 16:00 acorda"
+    );
+  }
+  // depois de 4h (19:00+), a soneca expira por conta própria mesmo sem atividade nova
+  assert.equal(
+    isDormindo({ agora: spDate("2026-01-10", "19:30"), config: CONFIG, explicito: "dormindo", explicitoDesde: desdeSoneca, ultimaAtividade: { usuarioAt: desdeSoneca, painelAt: null } }),
+    false,
+    "soneca às 15:00 expira depois de 4h (19:30), mesmo sem atividade nova"
+  );
+
+  // ---- sem `desde`: cai na regra ambiente (janela + 90min), nunca no mecanismo antigo ----
+  assert.equal(
+    isDormindo({ agora: spDate("2026-01-10", "02:00"), config: CONFIG, explicito: "dormindo", ultimaAtividade: null }),
+    true,
+    "sem desde, dentro da janela e sem atividade -> dormindo (regra ambiente)"
+  );
+  assert.equal(
+    isDormindo({ agora: spDate("2026-01-10", "14:00"), config: CONFIG, explicito: "dormindo", ultimaAtividade: null }),
+    false,
+    "sem desde, fora da janela -> acordado (regra ambiente, sem mecanismo antigo de 5h)"
+  );
 }
 console.log("isDormindo: OK");
 
@@ -127,24 +173,66 @@ console.log("gatilhoPermitidoAgora / isPrioritarioTipo: OK");
   let r = mergeFilaItem([], { tipo: "conta", texto: "Conta X vence hoje." });
   assert.equal(r.list.length, 1);
   assert.equal(r.descartados, 0);
+  assert.equal(r.adicionado, true, "item novo -> adicionado=true");
 
-  // dedupe: mesmo tipo+texto não duplica
+  // dedupe: mesmo tipo+texto não duplica NEM conta como "adicionado" (correção F2-3a:
+  // enqueuePushItem só deve gravar/logar quando adicionado=true — sem isso, o cron a
+  // cada 15min geraria dezenas de escritas/eventos idênticos pro mesmo gatilho).
   r = mergeFilaItem(r.list, { tipo: "conta", texto: "Conta X vence hoje." });
   assert.equal(r.list.length, 1, "não duplica o mesmo tipo+texto");
+  assert.equal(r.adicionado, false, "já estava na fila -> adicionado=false (nenhuma escrita deve acontecer)");
 
   // corte no limite (20): descarta os mais antigos
   let fila = [];
   for (let i = 0; i < 20; i++) {
-    fila = mergeFilaItem(fila, { tipo: "tarefa", texto: `Tarefa ${i}` }).list;
+    const res = mergeFilaItem(fila, { tipo: "tarefa", texto: `Tarefa ${i}` });
+    assert.equal(res.adicionado, true);
+    fila = res.list;
   }
   assert.equal(fila.length, 20);
   const r21 = mergeFilaItem(fila, { tipo: "tarefa", texto: "Tarefa 20" });
   assert.equal(r21.list.length, 20, "nunca passa de 20");
   assert.equal(r21.descartados, 1, "descartou 1 item mais antigo");
+  assert.equal(r21.adicionado, true);
   assert.equal(r21.list[0].texto, "Tarefa 1", "descartou o mais antigo (Tarefa 0), manteve o resto");
   assert.equal(r21.list[19].texto, "Tarefa 20", "o novo item fica no fim");
 }
 console.log("mergeFilaItem: OK");
+
+// ---------- enqueuePushItem: só grava no KV e loga quando o item é novo de verdade ----------
+{
+  const store = new Map();
+  const putCalls = [];
+  const env = {
+    COMPANION_KV: {
+      get: async (key) => (store.has(key) ? store.get(key) : null),
+      put: async (key, value) => { putCalls.push(key); store.set(key, value); },
+    },
+  };
+  const logBatch = [];
+  const item = { tipo: "conta", texto: "Conta Y venceu ontem.", criadoEm: new Date().toISOString() };
+
+  await enqueuePushItem(env, item, logBatch, "sono");
+  assert.equal(putCalls.length, 1, "primeira vez: grava no KV");
+  assert.equal(logBatch.length, 1, "primeira vez: registra no Diário");
+
+  // Mesmo gatilho de novo (simulando o próximo tick do cron, 15min depois, ainda não
+  // resolvido) — não deve gravar nem logar de novo.
+  await enqueuePushItem(env, { ...item, criadoEm: new Date().toISOString() }, logBatch, "sono");
+  assert.equal(putCalls.length, 1, "segunda vez (já na fila): nenhuma escrita nova no KV");
+  assert.equal(logBatch.length, 1, "segunda vez (já na fila): nenhum evento novo no Diário");
+
+  // Item de agenda carrega hhmm+dia (pra quem consumir a fila descartar horário já
+  // passado) — confere que enqueuePushItem persiste esses campos sem alterá-los.
+  const agendaItem = { tipo: "agenda", texto: 'Compromisso "Reunião" começa às 06:30.', hhmm: "06:30", dia: "2026-01-11", criadoEm: new Date().toISOString() };
+  await enqueuePushItem(env, agendaItem, logBatch, "sono");
+  const filaSalva = JSON.parse(store.get("push:fila"));
+  const salvo = filaSalva.find((f) => f.tipo === "agenda");
+  assert.ok(salvo, "item de agenda foi gravado na fila");
+  assert.equal(salvo.hhmm, "06:30");
+  assert.equal(salvo.dia, "2026-01-11");
+}
+console.log("enqueuePushItem (dedupe real): OK");
 
 // ---------- upsertPushSubscription / removePushSubscriptionsByEndpoint (vários aparelhos) ----------
 {

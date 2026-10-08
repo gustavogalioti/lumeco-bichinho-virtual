@@ -2397,18 +2397,28 @@ function dateStrSaoPauloFrom(date) {
 }
 
 // "Hoje às 05:00" no fuso de São Paulo (fixo UTC-3, sem horário de verão desde 2019),
-// no MESMO dia local de `agora`. Se `agora` for de madrugada (antes das 5h), esse
-// limiar ainda está no futuro — nenhuma atividade registrada (sempre <= agora) pode
-// alcançá-lo, e é exatamente assim que uma atividade de madrugada (ex: 03h) nunca
-// "acorda" o Jarbas que foi explicitamente dormir: só atividade DEPOIS das 5h conta.
+// no MESMO dia local de `agora`. Usado só como peça do cálculo de "próximo 05:00
+// depois de X" abaixo — não mais como limiar direto do estado explícito (ver
+// correção F2-3a: "vou dormir" à noite só valia depois da meia-noite).
 function limiar5hSaoPaulo(agora) {
   return new Date(`${dateStrSaoPauloFrom(agora)}T05:00:00-03:00`).getTime();
 }
 
-// isDormindo({agora, config, explicito, ultimaAtividade}) — pura, testável isolada.
-// explicito: "dormindo" | "acordado" | null (vem de sleep:state).
+// Primeiro 05:00 (São Paulo) que acontece DEPOIS de `desdeMs` — se `desde` já é de
+// madrugada antes das 5h (ex: 03h), o 05:00 daquele mesmo dia ainda serve; se `desde`
+// é de tarde/noite (ex: 22:30), o 05:00 daquele dia já passou, então é o do dia seguinte.
+function proximoLimiar5hAposSaoPaulo(desdeMs) {
+  let limiar = limiar5hSaoPaulo(new Date(desdeMs));
+  if (limiar <= desdeMs) limiar += 24 * 60 * 60 * 1000;
+  return limiar;
+}
+
+// isDormindo({agora, config, explicito, explicitoDesde, ultimaAtividade}) — pura,
+// testável isolada. explicito: "dormindo" | "acordado" | null (vem de sleep:state).
+// explicitoDesde: ISO string de sleep:state.desde (quando foi dito "vou dormir"/
+// "acordei") — opcional, por compatibilidade com chamadas antigas.
 // ultimaAtividade: { usuarioAt, painelAt } (ISO strings ou null) — vem de activity:last.
-export function isDormindo({ agora, config, explicito, ultimaAtividade }) {
+export function isDormindo({ agora, config, explicito, explicitoDesde, ultimaAtividade }) {
   if (explicito === "acordado") return false; // override: encerra o sono sempre
 
   const agoraDate = agora instanceof Date ? agora : new Date(agora);
@@ -2417,13 +2427,38 @@ export function isDormindo({ agora, config, explicito, ultimaAtividade }) {
   const painelMs = ultimaAtividade?.painelAt ? new Date(ultimaAtividade.painelAt).getTime() : 0;
   const ultimaAtividadeMs = Math.max(usuarioMs, painelMs, 0);
 
-  if (explicito === "dormindo") {
-    if (ultimaAtividadeMs < limiar5hSaoPaulo(agoraDate)) return true; // ainda não houve atividade depois das 5h
-  }
-
   const cfg = { ...SONO_DEFAULTS, ...(config || {}) };
   const startMin = parseHHMMToMinutes(cfg.sonoInicio);
   const endMin = parseHHMMToMinutes(cfg.sonoFim);
+
+  if (explicito === "dormindo" && explicitoDesde) {
+    const desdeMs = new Date(explicitoDesde).getTime();
+    if (Number.isFinite(desdeMs)) {
+      // "Sono da noite": `desde` cai perto do horário em que a pessoa costuma dormir
+      // (até 2h antes do início configurado até o fim da janela) — dura até 14h e só
+      // termina na primeira atividade depois de max(desde+10min, próximo 05:00 após
+      // desde). Os 10 min ignoram a própria mensagem de "boa noite"; o limiar de 5h
+      // ignora qualquer atividade de madrugada (ex: 03h) sem depender de "agora".
+      const noiteStartMin = startMin == null ? null : ((startMin - 120) % 1440 + 1440) % 1440;
+      const isSonoDaNoite = startMin != null && endMin != null
+        && isMinuteInWindow(minutesOfDaySaoPaulo(new Date(desdeMs)), noiteStartMin, endMin);
+
+      if (isSonoDaNoite) {
+        const limiteDuracao = desdeMs + 14 * 60 * 60 * 1000;
+        const limiarAtividade = Math.max(desdeMs + 10 * 60 * 1000, proximoLimiar5hAposSaoPaulo(desdeMs));
+        if (agoraMs < limiteDuracao && ultimaAtividadeMs < limiarAtividade) return true;
+      } else {
+        // "Soneca": `desde` fora do horário noturno (ex: tarde) — dura no máx 4h e
+        // termina na primeira atividade depois de desde+10min.
+        const limiteDuracao = desdeMs + 4 * 60 * 60 * 1000;
+        const limiarAtividade = desdeMs + 10 * 60 * 1000;
+        if (agoraMs < limiteDuracao && ultimaAtividadeMs < limiarAtividade) return true;
+      }
+      // Nem noite nem soneca ainda em vigor (expirou ou já teve atividade depois do
+      // limiar) — cai pra regra ambiente abaixo em vez de devolver false direto.
+    }
+  }
+
   if (isMinuteInWindow(minutesOfDaySaoPaulo(agoraDate), startMin, endMin)) {
     const minutosSemAtividade = ultimaAtividadeMs ? (agoraMs - ultimaAtividadeMs) / 60000 : Infinity;
     if (minutosSemAtividade >= 90) return true;
@@ -2466,15 +2501,18 @@ export function gatilhoPermitidoAgora({ tipo, hhmm, dormindo, orcamentoEsgotado,
 // Fila de avisos adiados (push:fila) — nunca grava de verdade aqui (isso é I/O, ver
 // enqueuePushItem); só decide o NOVO array, deduplicando por tipo+texto (um gatilho
 // que já está na fila não precisa ser adicionado de novo a cada tick) e descartando os
-// mais antigos quando passa do limite.
+// mais antigos quando passa do limite. `adicionado` diz ao chamador se algo realmente
+// mudou — se o item já estava lá (mesmo tipo+texto), não há motivo pra gravar no KV
+// nem logar de novo no Diário (evita dezenas de escritas/eventos idênticos por noite
+// com o cron rodando a cada 15min sobre o mesmo gatilho ainda não resolvido).
 export function mergeFilaItem(fila, item, max = PUSH_QUEUE_MAX) {
   const list = Array.isArray(fila) ? fila : [];
   if (list.some((f) => f.tipo === item.tipo && f.texto === item.texto)) {
-    return { list, descartados: 0 };
+    return { list, descartados: 0, adicionado: false };
   }
   const next = [...list, item];
-  if (next.length <= max) return { list: next, descartados: 0 };
-  return { list: next.slice(next.length - max), descartados: next.length - max };
+  if (next.length <= max) return { list: next, descartados: 0, adicionado: true };
+  return { list: next.slice(next.length - max), descartados: next.length - max, adicionado: true };
 }
 
 // Upsert por endpoint, capado em PUSH_SUBSCRIPTIONS_MAX — se já existe (mesmo
@@ -2636,10 +2674,14 @@ async function readPushQueue(env) {
 
 // Enfileira um aviso adiado (sono ou orçamento esgotado) — nunca grava bruto sem
 // passar pelo dedupe/corte de mergeFilaItem, e loga no Diário do Jarbas que foi
-// adiado (pra nunca ficar um mistério por que algo não chegou na hora).
-async function enqueuePushItem(env, item, logBatch, motivo) {
+// adiado (pra nunca ficar um mistério por que algo não chegou na hora). Se o item já
+// estava na fila (mesmo gatilho não resolvido, tick após tick), não grava nem loga de
+// novo — com o cron a cada 15min, uma conta atrasada sem isso geraria dezenas de
+// escritas e eventos idênticos por noite.
+export async function enqueuePushItem(env, item, logBatch, motivo) {
   const fila = await readPushQueue(env);
-  const { list, descartados } = mergeFilaItem(fila, item);
+  const { list, descartados, adicionado } = mergeFilaItem(fila, item);
+  if (!adicionado) return;
   await env.COMPANION_KV.put(PUSH_QUEUE_KEY, JSON.stringify(list));
   pushLogEvent(logBatch, {
     tipo: "acao_espontanea", origem: "cron",
@@ -2893,7 +2935,7 @@ async function runScheduledPush(env, ctx) {
         try {
           const agora = new Date();
           const [sleepState, ultimaAtividade] = await Promise.all([readSleepState(env), readActivityLast(env)]);
-          const dormindo = isDormindo({ agora, config, explicito: sleepState.explicito, ultimaAtividade });
+          const dormindo = isDormindo({ agora, config, explicito: sleepState.explicito, explicitoDesde: sleepState.desde, ultimaAtividade });
 
           const antecedencia = Number(config.antecedenciaCompromissoMin) || SONO_DEFAULTS.antecedenciaCompromissoMin;
           const agendaGatilhos = await checkAgendaProximosGatilhos(env, antecedencia);
@@ -2913,8 +2955,19 @@ async function runScheduledPush(env, ctx) {
           const permitidos = [];
           for (const g of candidatos) {
             const ok = gatilhoPermitidoAgora({ tipo: g.tipo, hhmm: g.hhmm, dormindo, orcamentoEsgotado, config });
-            if (ok) permitidos.push(g);
-            else await enqueuePushItem(env, { tipo: g.tipo, texto: g.texto, criadoEm: new Date().toISOString() }, logBatch, dormindo ? "sono" : "orcamento");
+            if (ok) {
+              permitidos.push(g);
+              continue;
+            }
+            // "agenda" leva hhmm+dia na fila pra quem consumir (F2-3b) poder descartar
+            // compromissos cujo horário já passou — checkAgendaProximosGatilhos só olha
+            // a agenda de "hoje", então a data é sempre a de hoje em São Paulo.
+            const filaItem = { tipo: g.tipo, texto: g.texto, criadoEm: new Date().toISOString() };
+            if (g.tipo === "agenda") {
+              filaItem.hhmm = g.hhmm;
+              filaItem.dia = dateStr;
+            }
+            await enqueuePushItem(env, filaItem, logBatch, dormindo ? "sono" : "orcamento");
           }
 
           // No máximo um push por tick: comentário espontâneo primeiro (se sobreviveu
@@ -3079,7 +3132,7 @@ export default {
       try {
         const config = env.PAINEL_API_KEY ? await loadJarbasConfigCached(env) : SONO_DEFAULTS;
         const [sleepState, ultimaAtividade] = await Promise.all([readSleepState(env), readActivityLast(env)]);
-        const dormindo = isDormindo({ agora: new Date(), config, explicito: sleepState.explicito, ultimaAtividade });
+        const dormindo = isDormindo({ agora: new Date(), config, explicito: sleepState.explicito, explicitoDesde: sleepState.desde, ultimaAtividade });
         return json({ dormindo, explicito: sleepState.explicito || null });
       } catch (err) {
         return json({ dormindo: false, explicito: null, error: String(err?.message || err) });
