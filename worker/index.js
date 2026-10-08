@@ -16,8 +16,10 @@
  *   { mode: "routine",          ingredients: [...], links: [...], companionState: {...} }
  *   { mode: "vapid_public_key" }
  *   { mode: "save_push_subscription", key: "...", subscription: {...} }
+ *   { mode: "estado_get",       key: "..." }                      // F2-3a: {dormindo, explicito}
+ *   { mode: "definir_sono",     key: "...", estado: "dormir"|"acordar" }
  *
- * memory_load / memory_save / save_push_subscription exigem `key` (uma senha
+ * memory_load / memory_save / save_push_subscription / estado_get / definir_sono exigem `key` (uma senha
  * simples que só você conhece) batendo com o secret SYNC_KEY.
  *
  * A memória do Jarbas (conhecimento, timeline, rotinas, localização) é guardada
@@ -609,7 +611,7 @@ ${timeAwarenessLine}
 ${learnedLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
 Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
-Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
+Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde. Se ela disser algo como "vou dormir", "boa noite", "to indo dormir" (estado=dormir) ou "acordei", "bom dia", "já levantei" (estado=acordar), use a ferramenta de definir sono — ao marcar que vai dormir, responda curto e carinhoso (uma "boa noite" de volta) e NÃO puxe assunto nem faça pergunta, deixe ela descansar.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
 Ao relatar a agenda de HOJE (nunca a de amanhã), compare o horário de cada compromisso com a hora atual informada acima: se todo mundo que estava marcado pra hoje já passou do horário, diga isso com naturalidade — algo como "por hoje você não tem mais nada marcado, seu único/último compromisso era às 10h, a reunião com X — inclusive, como foi?" — nomeando o compromisso e perguntando como foi, em vez de só recitar o horário como se ainda fosse acontecer. Se ainda tiver algo pela frente hoje, relate normalmente sem esse comentário.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
@@ -1166,6 +1168,24 @@ const ENSINAR_REGRA_TOOL = {
         regra: { type: "string", description: "A regra em 1 frase clara e objetiva, do jeito que deve ser seguida (ex: 'Quando ela perguntar sobre a agenda, responder só os compromissos, sem tarefas nem contas.')." },
       },
       required: ["regra"],
+    },
+  },
+};
+
+// F2-3a: "o Jarbas dorme quando o Gustavo dorme" — frases como "vou dormir"/"boa
+// noite" ou "acordei"/"bom dia" chamam isso pra gravar o estado explícito
+// (sleep:state no Worker). Sempre disponível (não depende de canPainel).
+const DEFINIR_SONO_TOOL = {
+  type: "function",
+  function: {
+    name: "definir_sono",
+    description: "Marca que a pessoa vai dormir ou que acabou de acordar — use quando ela disser algo como 'vou dormir', 'boa noite', 'to indo dormir' (estado=dormir) ou 'acordei', 'bom dia', 'já levantei' (estado=acordar). Enquanto 'dormindo', o Jarbas só avisa sobre compromissos/lembretes/alarmes marcados pra essa janela — o resto espera o Gustavo acordar.",
+    parameters: {
+      type: "object",
+      properties: {
+        estado: { type: "string", enum: ["dormir", "acordar"] },
+      },
+      required: ["estado"],
     },
   },
 };
@@ -1836,6 +1856,7 @@ const TOOL_KIND = {
   anotar_no_diario: "acao_pedida", desfazer_anotacao_diario: "acao_pedida", corrigir_anotacao_diario: "acao_pedida",
   gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
   gerenciar_lista: "acao_pedida", concluir_recado: "acao_pedida", guardar_memoria: "acao_pedida", ensinar_regra: "acao_pedida",
+  definir_sono: "acao_pedida",
 };
 
 async function runTool(env, call, canSearch, canPainel, companionState = {}) {
@@ -1921,6 +1942,12 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       if (!url) return { content: "Não veio nenhuma URL — peça pra pessoa repetir o endereço completo." };
       return { content: await fetchLinkExcerpt(url) };
     }
+    if (name === "definir_sono") {
+      const estado = args.estado === "dormir" ? "dormindo" : args.estado === "acordar" ? "acordado" : null;
+      if (!estado) return { content: "Não entendi se era pra dormir ou acordar." };
+      await writeSleepState(env, estado);
+      return { content: estado === "dormindo" ? "Boa noite registrada — vou ficar quieto, só te acordo se for importante de verdade." : "Bom dia registrado — tô de volta." };
+    }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
     console.error(`runTool_failed (${name}):`, String(err?.message || err));
@@ -1932,7 +1959,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
 // intenção bate por palavra-chave (conjunto mínimo não se aplica a ela) e como
 // contingência de reenvio, se o modelo pedir uma ferramenta fora do subconjunto.
 function buildAllTools(canSearch, canPainel) {
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
     tools.push(
@@ -1947,13 +1974,13 @@ function buildAllTools(canSearch, canPainel) {
 
 // Subconjunto de ferramentas por intenção, via regra simples de palavras-chave sobre o
 // último texto do usuário — evita mandar as ~20 ferramentas em toda chamada, mesmo em
-// papo casual. guardar_memoria/ensinar_regra sempre entram; se nada casar, conjunto
-// mínimo (memória/regra + consultar_painel). Isso é uma heurística, não entendimento
+// papo casual. guardar_memoria/ensinar_regra/definir_sono sempre entram; se nada casar,
+// conjunto mínimo (esses três + consultar_painel). Isso é uma heurística, não entendimento
 // de linguagem — por isso callGroqWithSearch reenvia com o conjunto completo se o
 // modelo pedir uma ferramenta que não foi incluída aqui.
 function selectToolsForMessage(userText, canSearch, canPainel) {
   const n = normalizeText(userText);
-  const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL]);
+  const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, DEFINIR_SONO_TOOL]);
   let matchedAny = false;
   const add = (...toolsToAdd) => { toolsToAdd.forEach((t) => selected.add(t)); matchedAny = true; };
 
@@ -2275,13 +2302,48 @@ async function sendWebPush(env, subscription, payloadObj, ttlSeconds = 60) {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`push_send_failed_${res.status}: ${detail.slice(0, 200)}`);
+    const err = new Error(`push_send_failed_${res.status}: ${detail.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
   }
 }
 
+// Envia pra TODAS as assinaturas (F2-3a: vários aparelhos) — uma falha numa nunca
+// impede as outras. 404/410 (RFC 8030: o navegador cancelou/expirou a inscrição) são
+// erro PERMANENTE, a assinatura é removida da lista; qualquer outro status (erro
+// transiente de rede, 5xx do serviço de push) nunca remove nada, só loga.
+export async function sendWebPushToAll(env, subscriptions, payloadObj, sendFn = sendWebPush) {
+  let entregues = 0;
+  const endpointsParaRemover = [];
+  for (const sub of subscriptions) {
+    try {
+      await sendFn(env, sub, payloadObj);
+      entregues++;
+    } catch (err) {
+      const status = err?.status;
+      if (status === 404 || status === 410) {
+        endpointsParaRemover.push(sub.endpoint);
+      } else {
+        console.error("push_send_failed (aparelho):", String(err?.message || err));
+      }
+    }
+  }
+  return { entregues, endpointsParaRemover };
+}
+
+// Chave antiga (uma assinatura só) — mantida só pra migração automática em
+// loadPushSubscriptions, nunca mais escrita depois da F2-3a.
 const PUSH_SUBSCRIPTION_KEY = "push:subscription";
+const PUSH_SUBSCRIPTIONS_KEY = "push:subscriptions";
+const PUSH_SUBSCRIPTIONS_MAX = 5;
 const PUSH_NOTIFY_STATE_KEY = "push:notify_state";
 const PUSH_DEDUPE_MS = 3 * 60 * 60 * 1000; // não repete o mesmo aviso por 3h
+const PUSH_QUEUE_KEY = "push:fila";
+const PUSH_QUEUE_MAX = 20;
+const SLEEP_STATE_KEY = "sleep:state";
+const ACTIVITY_LAST_KEY = "activity:last";
+const CONFIG_CACHE_KEY = "config:cache";
+const CONFIG_CACHE_TTL_MS = 60 * 60 * 1000; // lê mem.config via callPainelMemoryLoad no máx 1x/hora
 
 function saoPauloNow() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -2289,6 +2351,153 @@ function saoPauloNow() {
   }).formatToParts(new Date());
   const get = (t) => parts.find((p) => p.type === t)?.value;
   return { dateStr: `${get("year")}-${get("month")}-${get("day")}`, dayOfMonth: Number(get("day")), hour: Number(get("hour")), minute: Number(get("minute")) };
+}
+
+// ---------- F2-3a: sono (Jarbas "dorme quando o Gustavo dorme") ----------
+// Tudo abaixo até sendWebPushToAll é lógica PURA (sem KV, sem rede) — fácil de testar
+// isolada. Padrões editáveis em Configurações do app (mem.config); estes aqui só
+// entram quando a config ainda não tem o campo (primeira vez, ou leitura falhou).
+export const SONO_DEFAULTS = {
+  sonoInicio: "23:00",
+  sonoFim: "07:00",
+  maxAvisosDia: 5,
+  antecedenciaCompromissoMin: 30,
+  vigiaAtivo: true,
+};
+
+export function parseHHMMToMinutes(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || "").trim());
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// Janela [startMin, endMin) que pode "virar a noite" (ex: 23:00 -> 07:00 cruza a
+// meia-noite) — se start < end, janela normal; se start >= end, janela com wrap.
+export function isMinuteInWindow(min, startMin, endMin) {
+  if (startMin == null || endMin == null || min == null || startMin === endMin) return false;
+  return startMin < endMin ? (min >= startMin && min < endMin) : (min >= startMin || min < endMin);
+}
+
+function minutesOfDaySaoPaulo(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(date);
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  return get("hour") * 60 + get("minute");
+}
+
+function dateStrSaoPauloFrom(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+// "Hoje às 05:00" no fuso de São Paulo (fixo UTC-3, sem horário de verão desde 2019),
+// no MESMO dia local de `agora`. Se `agora` for de madrugada (antes das 5h), esse
+// limiar ainda está no futuro — nenhuma atividade registrada (sempre <= agora) pode
+// alcançá-lo, e é exatamente assim que uma atividade de madrugada (ex: 03h) nunca
+// "acorda" o Jarbas que foi explicitamente dormir: só atividade DEPOIS das 5h conta.
+function limiar5hSaoPaulo(agora) {
+  return new Date(`${dateStrSaoPauloFrom(agora)}T05:00:00-03:00`).getTime();
+}
+
+// isDormindo({agora, config, explicito, ultimaAtividade}) — pura, testável isolada.
+// explicito: "dormindo" | "acordado" | null (vem de sleep:state).
+// ultimaAtividade: { usuarioAt, painelAt } (ISO strings ou null) — vem de activity:last.
+export function isDormindo({ agora, config, explicito, ultimaAtividade }) {
+  if (explicito === "acordado") return false; // override: encerra o sono sempre
+
+  const agoraDate = agora instanceof Date ? agora : new Date(agora);
+  const agoraMs = agoraDate.getTime();
+  const usuarioMs = ultimaAtividade?.usuarioAt ? new Date(ultimaAtividade.usuarioAt).getTime() : 0;
+  const painelMs = ultimaAtividade?.painelAt ? new Date(ultimaAtividade.painelAt).getTime() : 0;
+  const ultimaAtividadeMs = Math.max(usuarioMs, painelMs, 0);
+
+  if (explicito === "dormindo") {
+    if (ultimaAtividadeMs < limiar5hSaoPaulo(agoraDate)) return true; // ainda não houve atividade depois das 5h
+  }
+
+  const cfg = { ...SONO_DEFAULTS, ...(config || {}) };
+  const startMin = parseHHMMToMinutes(cfg.sonoInicio);
+  const endMin = parseHHMMToMinutes(cfg.sonoFim);
+  if (isMinuteInWindow(minutesOfDaySaoPaulo(agoraDate), startMin, endMin)) {
+    const minutosSemAtividade = ultimaAtividadeMs ? (agoraMs - ultimaAtividadeMs) / 60000 : Infinity;
+    if (minutosSemAtividade >= 90) return true;
+  }
+
+  return false;
+}
+
+// Um compromisso/lembrete/alarme com horário `hhmm` "acorda" o Jarbas se cair dentro
+// da janela de sono OU até 60 min depois do fim dela (ex: sono até 07:00 -> aceita
+// até 08:00) — é esse horário que decide se o aviso pode furar o silêncio do sono.
+export function eventoAcordaNoSono(hhmm, config) {
+  const evMin = parseHHMMToMinutes(hhmm);
+  if (evMin == null) return false;
+  const cfg = { ...SONO_DEFAULTS, ...(config || {}) };
+  const startMin = parseHHMMToMinutes(cfg.sonoInicio);
+  const endMin = parseHHMMToMinutes(cfg.sonoFim);
+  if (startMin == null || endMin == null) return false;
+  const endEstendido = (endMin + 60) % 1440;
+  return isMinuteInWindow(evMin, startMin, endEstendido);
+}
+
+// Prioritários = isentos do orçamento diário E os únicos que podem furar o sono.
+// Hoje só "agenda" (compromissos) tem horário disponível no painel pra isso valer de
+// verdade — "lembrete" e "alarme" já entram classificados aqui, prontos pro dia em
+// que o painel passar a guardar horário de lembrete (ver observação no PR).
+export function isPrioritarioTipo(tipo) {
+  return tipo === "agenda" || tipo === "lembrete" || tipo === "alarme";
+}
+
+// Decide se UM gatilho específico pode ser enviado agora, dado o estado de sono e de
+// orçamento do tick — pura, reaproveitada tanto pra agenda/conta/tarefa quanto pro
+// comentário espontâneo (tratado como tipo "espontaneo" pelo chamador).
+export function gatilhoPermitidoAgora({ tipo, hhmm, dormindo, orcamentoEsgotado, config }) {
+  if (dormindo) return tipo === "agenda" && eventoAcordaNoSono(hhmm, config);
+  if (orcamentoEsgotado) return isPrioritarioTipo(tipo);
+  return true;
+}
+
+// Fila de avisos adiados (push:fila) — nunca grava de verdade aqui (isso é I/O, ver
+// enqueuePushItem); só decide o NOVO array, deduplicando por tipo+texto (um gatilho
+// que já está na fila não precisa ser adicionado de novo a cada tick) e descartando os
+// mais antigos quando passa do limite.
+export function mergeFilaItem(fila, item, max = PUSH_QUEUE_MAX) {
+  const list = Array.isArray(fila) ? fila : [];
+  if (list.some((f) => f.tipo === item.tipo && f.texto === item.texto)) {
+    return { list, descartados: 0 };
+  }
+  const next = [...list, item];
+  if (next.length <= max) return { list: next, descartados: 0 };
+  return { list: next.slice(next.length - max), descartados: next.length - max };
+}
+
+// Upsert por endpoint, capado em PUSH_SUBSCRIPTIONS_MAX — se já existe (mesmo
+// endpoint), atualiza no lugar (chaves podem ter rotacionado); se é novo e passaria do
+// limite, descarta a mais antiga (a lista é mantida em ordem de chegada).
+export function upsertPushSubscription(list, sub, max = PUSH_SUBSCRIPTIONS_MAX) {
+  const current = Array.isArray(list) ? list : [];
+  if (!sub?.endpoint) return current;
+  const idx = current.findIndex((s) => s.endpoint === sub.endpoint);
+  if (idx >= 0) {
+    const next = [...current];
+    next[idx] = sub;
+    return next;
+  }
+  const next = [...current, sub];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+export function removePushSubscriptionsByEndpoint(list, endpoints) {
+  const current = Array.isArray(list) ? list : [];
+  const toRemove = new Set(endpoints || []);
+  if (!toRemove.size) return current;
+  return current.filter((s) => !toRemove.has(s.endpoint));
 }
 
 // ---------- F2-1: gatilhos DETERMINÍSTICOS (sem IA) pro cron — só chama o LLM se algum
@@ -2324,7 +2533,7 @@ function computeDeterministicTriggers(mudancas) {
 // "próximos 30 min" reaproveita o endpoint de texto da agenda (já existia antes da F2-0,
 // não precisa de nenhuma mudança no painel) e faz um parse simples do formato conhecido
 // ("HH:MM Título; HH:MM Título"), em vez de inventar outro endpoint.
-async function checkAgendaProximosGatilhos(env) {
+async function checkAgendaProximosGatilhos(env, antecedenciaMin = SONO_DEFAULTS.antecedenciaCompromissoMin) {
   try {
     const texto = await callPainelAgenda(env, "hoje");
     const matches = [...texto.matchAll(/(\d{2}:\d{2})\s+([^;]+)/g)];
@@ -2336,14 +2545,150 @@ async function checkAgendaProximosGatilhos(env) {
       const titulo = tituloRaw.trim();
       const [h, m] = hhmm.split(":").map(Number);
       const diffMin = (h * 60 + m) - agoraMin;
-      if (diffMin >= 0 && diffMin <= 30) {
-        triggers.push({ tipo: "agenda", id: `${hhmm}-${titulo}`, texto: `Compromisso "${titulo}" começa às ${hhmm}.` });
+      if (diffMin >= 0 && diffMin <= antecedenciaMin) {
+        // hhmm vai junto pro chamador decidir se esse compromisso específico cai na
+        // janela de sono (ver eventoAcordaNoSono) — só isso pode furar o silêncio do sono.
+        triggers.push({ tipo: "agenda", id: `${hhmm}-${titulo}`, texto: `Compromisso "${titulo}" começa às ${hhmm}.`, hhmm });
       }
     }
     return triggers;
   } catch (err) {
     console.error("cron_agenda_check_failed:", String(err?.message || err));
     return [];
+  }
+}
+
+// ---------- F2-3a: I/O de KV (sono, atividade, fila, assinaturas, config em cache) ----------
+async function loadPushSubscriptions(env) {
+  const raw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTIONS_KEY);
+  if (raw) {
+    try {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) return list;
+    } catch {}
+  }
+  // Migração automática da chave antiga (uma assinatura só) — nunca apaga a antiga,
+  // só promove ela pra lista nova na primeira leitura depois do deploy.
+  const legacyRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
+  if (legacyRaw) {
+    try {
+      const legacy = JSON.parse(legacyRaw);
+      if (legacy?.endpoint) {
+        const migrated = [legacy];
+        await env.COMPANION_KV.put(PUSH_SUBSCRIPTIONS_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+    } catch {}
+  }
+  return [];
+}
+
+async function savePushSubscriptions(env, list) {
+  await env.COMPANION_KV.put(PUSH_SUBSCRIPTIONS_KEY, JSON.stringify(list));
+}
+
+async function readSleepState(env) {
+  const raw = await env.COMPANION_KV.get(SLEEP_STATE_KEY);
+  if (!raw) return { explicito: null, desde: null };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { explicito: null, desde: null };
+  }
+}
+
+async function writeSleepState(env, explicito) {
+  await env.COMPANION_KV.put(SLEEP_STATE_KEY, JSON.stringify({ explicito, desde: new Date().toISOString() }));
+}
+
+async function readActivityLast(env) {
+  const raw = await env.COMPANION_KV.get(ACTIVITY_LAST_KEY);
+  if (!raw) return { usuarioAt: null, painelAt: null };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { usuarioAt: null, painelAt: null };
+  }
+}
+
+// Nunca lança — chamada de "melhor esforço" (ctx.waitUntil no modo companion, ou
+// direto no tick do cron) que NUNCA pode quebrar a conversa nem o cron.
+async function recordActivity(env, field) {
+  try {
+    const current = await readActivityLast(env);
+    current[field] = new Date().toISOString();
+    await env.COMPANION_KV.put(ACTIVITY_LAST_KEY, JSON.stringify(current));
+  } catch (err) {
+    console.error("record_activity_failed:", String(err?.message || err));
+  }
+}
+
+async function readPushQueue(env) {
+  const raw = await env.COMPANION_KV.get(PUSH_QUEUE_KEY);
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+// Enfileira um aviso adiado (sono ou orçamento esgotado) — nunca grava bruto sem
+// passar pelo dedupe/corte de mergeFilaItem, e loga no Diário do Jarbas que foi
+// adiado (pra nunca ficar um mistério por que algo não chegou na hora).
+async function enqueuePushItem(env, item, logBatch, motivo) {
+  const fila = await readPushQueue(env);
+  const { list, descartados } = mergeFilaItem(fila, item);
+  await env.COMPANION_KV.put(PUSH_QUEUE_KEY, JSON.stringify(list));
+  pushLogEvent(logBatch, {
+    tipo: "acao_espontanea", origem: "cron",
+    resumo: `Aviso adiado (${motivo}): ${item.texto}`,
+    detalhes: { adiado: true, motivo, tipoOriginal: item.tipo },
+  });
+  if (descartados > 0) {
+    console.error(`push_fila_descartou ${descartados} item(ns) mais antigo(s) ao passar de ${PUSH_QUEUE_MAX}.`);
+  }
+}
+
+function dailyPushCountKey(dateStr) {
+  return `push:count:${dateStr}`;
+}
+
+async function getDailyPushCount(env, dateStr) {
+  const raw = await env.COMPANION_KV.get(dailyPushCountKey(dateStr));
+  return Number(raw) || 0;
+}
+
+async function incrementDailyPushCount(env, dateStr) {
+  const next = (await getDailyPushCount(env, dateStr)) + 1;
+  await env.COMPANION_KV.put(dailyPushCountKey(dateStr), String(next), { expirationTtl: 3 * 24 * 60 * 60 });
+  return next;
+}
+
+// mem.config (único escritor: o app) é lido pelo cron no máximo 1x/hora — guarda em
+// cache no KV (não só na memória do isolate, pra sobreviver entre ticks de
+// instâncias/isolates diferentes do Worker). Falha na leitura -> usa os padrões
+// (ou o último cache válido que existir, se houver), nunca quebra o tick.
+async function loadJarbasConfigCached(env) {
+  let cached = null;
+  try {
+    const raw = await env.COMPANION_KV.get(CONFIG_CACHE_KEY);
+    if (raw) cached = JSON.parse(raw);
+  } catch {}
+
+  if (cached && Date.now() - new Date(cached.cachedAt).getTime() < CONFIG_CACHE_TTL_MS) {
+    return { ...SONO_DEFAULTS, ...(cached.config || {}) };
+  }
+
+  try {
+    const mem = await callPainelMemoryLoad(env);
+    const config = { ...SONO_DEFAULTS, ...(mem?.config || {}) };
+    await env.COMPANION_KV.put(CONFIG_CACHE_KEY, JSON.stringify({ config, cachedAt: new Date().toISOString() }));
+    return config;
+  } catch (err) {
+    console.error("config_cache_refresh_failed, usando padrões ou cache antigo:", String(err?.message || err));
+    return { ...SONO_DEFAULTS, ...(cached?.config || {}) };
   }
 }
 
@@ -2368,8 +2713,11 @@ async function phraseNotification(env, gatilhos) {
 
 // Deterministic primeiro, LLM só se houver gatilho de verdade — é isso que zera o
 // gasto de cota em dias calmos (antes, chamava o LLM em TODO tick, sem condição nenhuma).
-async function decideNotification(env, logBatch, mudancas, cronMetrics) {
-  const gatilhos = [...computeDeterministicTriggers(mudancas), ...(await checkAgendaProximosGatilhos(env))];
+// F2-3a: `gatilhos` já vem FILTRADO pelo chamador (gatilhoPermitidoAgora) — só os que
+// podem ser enviados agora (sono/orçamento já decididos antes desta função).
+function cronMetricsIncLlm(cronMetrics) { if (cronMetrics) cronMetrics.llmCalls++; }
+
+async function decideNotification(env, logBatch, gatilhos, cronMetrics) {
   if (!gatilhos.length) return null;
 
   const signature = gatilhos.map((g) => `${g.tipo}:${g.id}`).sort().join("|");
@@ -2379,7 +2727,7 @@ async function decideNotification(env, logBatch, mudancas, cronMetrics) {
     return null;
   }
 
-  if (cronMetrics) cronMetrics.llmCalls++;
+  cronMetricsIncLlm(cronMetrics);
   const notification = await phraseNotification(env, gatilhos);
   await env.COMPANION_KV.put(PUSH_NOTIFY_STATE_KEY, JSON.stringify({ lastSignature: signature, notifiedAt: Date.now() }));
   pushLogEvent(logBatch, { tipo: "aviso_enviado", origem: "cron", resumo: notification.body, detalhes: { gatilhos: gatilhos.map((g) => g.tipo) } });
@@ -2399,7 +2747,12 @@ Se valer a pena comentar, responda em JSON puro, numa única linha, sem markdown
 
 Nunca invente informação que não esteja no que foi registrado abaixo.`;
 
-async function decideSpontaneousComment(env, logBatch, cronMetrics) {
+// Detecta novidade (ideia/compromisso novo) SEM gastar LLM — extraído de
+// decideSpontaneousComment pra que o caminho de sono/orçamento esgotado possa
+// enfileirar a novidade de forma crua (f2-3b decide o que fazer com ela depois) sem
+// pagar o custo de "arrumar a frase" só pra algo que nem vai ser mostrado agora.
+// Sempre marca como "já visto" (como antes) — cada novidade é considerada uma vez só.
+async function detectSpontaneousNovelty(env) {
   let novelty;
   try {
     novelty = await callPainelNovidades(env);
@@ -2417,17 +2770,18 @@ async function decideSpontaneousComment(env, logBatch, cronMetrics) {
 
   const newestIdeaId = Math.max(previous.lastIdeaId, 0, ...ideas.map((i) => i.id || 0));
   const newestEventId = Math.max(previous.lastEventId, 0, ...events.map((e) => e.id || 0));
-  // Atualiza o "já visto" antes de decidir — cada novidade é considerada uma vez só,
-  // comentada ou não, pra nunca repetir aviso sobre a mesma coisa.
   await env.COMPANION_KV.put(SPONTANEOUS_STATE_KEY, JSON.stringify({ lastIdeaId: newestIdeaId, lastEventId: newestEventId }));
 
   if (!newIdea && !newEvent) return null;
-  const content = newIdea
-    ? `Ideia nova registrada: "${newIdea.text}"`
-    : `Compromisso novo criado: "${newEvent.title}" em ${newEvent.date}`;
+  return newIdea
+    ? { kind: "ideia", content: `Ideia nova registrada: "${newIdea.text}"` }
+    : { kind: "compromisso", content: `Compromisso novo criado: "${newEvent.title}" em ${newEvent.date}` };
+}
 
-  if (cronMetrics) cronMetrics.llmCalls++;
-  const raw = await callGroq(env, SPONTANEOUS_COMMENT_PROMPT, [{ role: "user", content }], 200);
+async function decideSpontaneousComment(env, logBatch, cronMetrics, novelty) {
+  if (!novelty) return null;
+  cronMetricsIncLlm(cronMetrics);
+  const raw = await callGroq(env, SPONTANEOUS_COMMENT_PROMPT, [{ role: "user", content: novelty.content }], 200);
   const clean = raw.replace(/```json|```/g, "").trim();
   let parsed;
   try {
@@ -2436,7 +2790,7 @@ async function decideSpontaneousComment(env, logBatch, cronMetrics) {
     return null;
   }
   if (!parsed || !parsed.comment || !parsed.title || !parsed.body) return null;
-  pushLogEvent(logBatch, { tipo: "acao_espontanea", origem: "cron", resumo: parsed.body, detalhes: { sobre: newIdea ? "ideia" : "compromisso" } });
+  pushLogEvent(logBatch, { tipo: "acao_espontanea", origem: "cron", resumo: parsed.body, detalhes: { sobre: novelty.kind } });
   return { title: parsed.title, body: parsed.body };
 }
 
@@ -2495,6 +2849,11 @@ async function observePainelChanges(env, mudancas, logBatch) {
   const { isFirstRun, current, changedSources, events } = diffPainelDigest(previous, mudancas);
   for (const ev of events) pushLogEvent(logBatch, ev);
   await env.COMPANION_KV.put(PAINEL_DIGEST_KEY, JSON.stringify(current));
+  // F2-3a: uma mudança real no painel (nunca a primeira execução, que só estabelece a
+  // base) conta como "atividade do Gustavo" pro estado de sono.
+  if (!isFirstRun && changedSources.length) {
+    await recordActivity(env, "painelAt");
+  }
   return { isFirstRun, changedSources };
 }
 
@@ -2522,28 +2881,80 @@ async function runScheduledPush(env, ctx) {
 
   let notification = null;
   if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) {
-    const subRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
-    if (subRaw) {
-      let subscription = null;
-      try { subscription = JSON.parse(subRaw); } catch { subscription = null; }
-      if (subscription) {
+    const subscriptions = await loadPushSubscriptions(env);
+    if (subscriptions.length) {
+      const config = await loadJarbasConfigCached(env);
+
+      if (config.vigiaAtivo === false) {
+        // Vigia desligado (mem.config.vigiaAtivo=false) é um desliga-tudo da
+        // proatividade: nada de sono, orçamento, exceção ou fila neste tick.
+        console.log("cron_vigia_desligado: nenhum aviso proativo verificado neste tick.");
+      } else {
         try {
-          // No máximo um push por tick: prioriza um comentário espontâneo sobre
-          // novidade (ideia/compromisso novo) se houver; senão cai no aviso
-          // determinístico de agenda/tarefa/conta. Ambos só chamam o LLM se
-          // tiverem achado algo de verdade — em dia calmo, cronMetrics.llmCalls fica 0.
-          notification = (await decideSpontaneousComment(env, logBatch, cronMetrics))
-            || (await decideNotification(env, logBatch, mudancas, cronMetrics));
+          const agora = new Date();
+          const [sleepState, ultimaAtividade] = await Promise.all([readSleepState(env), readActivityLast(env)]);
+          const dormindo = isDormindo({ agora, config, explicito: sleepState.explicito, ultimaAtividade });
+
+          const antecedencia = Number(config.antecedenciaCompromissoMin) || SONO_DEFAULTS.antecedenciaCompromissoMin;
+          const agendaGatilhos = await checkAgendaProximosGatilhos(env, antecedencia);
+          const outrosGatilhos = computeDeterministicTriggers(mudancas);
+          const novelty = await detectSpontaneousNovelty(env);
+
+          const dateStr = saoPauloNow().dateStr;
+          const maxAvisosDia = Number(config.maxAvisosDia) || SONO_DEFAULTS.maxAvisosDia;
+          const orcamentoEsgotado = !dormindo && (await getDailyPushCount(env, dateStr)) >= maxAvisosDia;
+
+          const candidatos = [
+            ...agendaGatilhos,
+            ...outrosGatilhos,
+            ...(novelty ? [{ tipo: "espontaneo", id: "novelty", texto: novelty.content }] : []),
+          ];
+
+          const permitidos = [];
+          for (const g of candidatos) {
+            const ok = gatilhoPermitidoAgora({ tipo: g.tipo, hhmm: g.hhmm, dormindo, orcamentoEsgotado, config });
+            if (ok) permitidos.push(g);
+            else await enqueuePushItem(env, { tipo: g.tipo, texto: g.texto, criadoEm: new Date().toISOString() }, logBatch, dormindo ? "sono" : "orcamento");
+          }
+
+          // No máximo um push por tick: comentário espontâneo primeiro (se sobreviveu
+          // ao filtro acima), senão o aviso determinístico (agenda+conta+tarefa que
+          // sobraram). Só conta no orçamento o que for enviado de verdade E não for
+          // 100% prioritário (agenda pura nunca consome o orçamento, mesmo enviada).
+          const espontaneoPermitido = permitidos.find((g) => g.tipo === "espontaneo");
+          const deterministicosPermitidos = permitidos.filter((g) => g.tipo !== "espontaneo");
+          let consomeOrcamento = false;
+
+          if (espontaneoPermitido) {
+            notification = await decideSpontaneousComment(env, logBatch, cronMetrics, novelty);
+            if (notification) consomeOrcamento = true;
+          }
+          if (!notification && deterministicosPermitidos.length) {
+            notification = await decideNotification(env, logBatch, deterministicosPermitidos, cronMetrics);
+            if (notification) consomeOrcamento = deterministicosPermitidos.some((g) => !isPrioritarioTipo(g.tipo));
+          }
+          if (notification && !dormindo && consomeOrcamento) {
+            await incrementDailyPushCount(env, dateStr);
+          }
         } catch (err) {
           console.error("cron_decide_failed:", String(err?.message || err));
         }
-        if (notification) {
-          try {
-            await sendWebPush(env, subscription, notification);
-          } catch (err) {
-            console.error("push_send_failed", err);
-            pushLogEvent(logBatch, { tipo: "erro", origem: "cron", resumo: `Falha ao enviar push: ${String(err.message || err).slice(0, 200)}` });
+      }
+
+      if (notification) {
+        try {
+          const { entregues, endpointsParaRemover } = await sendWebPushToAll(env, subscriptions, notification);
+          if (endpointsParaRemover.length) {
+            await savePushSubscriptions(env, removePushSubscriptionsByEndpoint(subscriptions, endpointsParaRemover));
           }
+          pushLogEvent(logBatch, {
+            tipo: "aviso_enviado", origem: "cron",
+            resumo: `Push entregue a ${entregues} de ${subscriptions.length} aparelho(s).`,
+            detalhes: { aparelhosAtingidos: entregues, aparelhosTotal: subscriptions.length, removidos: endpointsParaRemover.length },
+          });
+        } catch (err) {
+          console.error("push_send_failed", err);
+          pushLogEvent(logBatch, { tipo: "erro", origem: "cron", resumo: `Falha ao enviar push: ${String(err.message || err).slice(0, 200)}` });
         }
       }
     }
@@ -2654,8 +3065,36 @@ export default {
       if (!env.COMPANION_KV) return json({ error: "kv_not_configured" }, 500);
       if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
       if (!body.subscription || !body.subscription.endpoint) return json({ error: "subscription_required" }, 400);
-      await env.COMPANION_KV.put(PUSH_SUBSCRIPTION_KEY, JSON.stringify(body.subscription));
+      // F2-3a: vários aparelhos — adiciona ou atualiza (mesmo endpoint) sem duplicar,
+      // nunca mais sobrescreve a lista inteira com uma assinatura só.
+      const current = await loadPushSubscriptions(env);
+      await savePushSubscriptions(env, upsertPushSubscription(current, body.subscription));
       return json({ ok: true });
+    }
+    // F2-3a: o app consulta ao abrir (e antes de falar um aviso recebido via push) se o
+    // Jarbas está "dormindo" — protegido pela mesma SYNC_KEY, nunca exposto sem senha.
+    if (mode === "estado_get") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.COMPANION_KV) return json({ dormindo: false, explicito: null });
+      try {
+        const config = env.PAINEL_API_KEY ? await loadJarbasConfigCached(env) : SONO_DEFAULTS;
+        const [sleepState, ultimaAtividade] = await Promise.all([readSleepState(env), readActivityLast(env)]);
+        const dormindo = isDormindo({ agora: new Date(), config, explicito: sleepState.explicito, ultimaAtividade });
+        return json({ dormindo, explicito: sleepState.explicito || null });
+      } catch (err) {
+        return json({ dormindo: false, explicito: null, error: String(err?.message || err) });
+      }
+    }
+    // F2-3a: os botões "Dormir agora"/"Acordar" nas Configurações chamam isso direto
+    // (sem passar pelo modelo) — a mesma frase dita por voz usa a ferramenta
+    // definir_sono no modo "companion", que grava exatamente aqui (setSleepState).
+    if (mode === "definir_sono") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.COMPANION_KV) return json({ error: "kv_not_configured" }, 500);
+      const estado = body.estado === "dormir" ? "dormindo" : body.estado === "acordar" ? "acordado" : null;
+      if (!estado) return json({ error: "estado_invalido" }, 400);
+      await writeSleepState(env, estado);
+      return json({ ok: true, explicito: estado });
     }
 
     // ---- base de conhecimento estruturada ----
@@ -2785,6 +3224,10 @@ export default {
         // quebra a conversa (flushLogBatch só loga erro, não propaga).
         const logBatch = [];
         pushLogEvent(logBatch, { tipo: "conversa", origem: "usuario", resumo: lastUserText });
+
+        // F2-3a: toda mensagem real do Gustavo é "atividade dele" pro estado de sono —
+        // melhor esforço (ctx.waitUntil), uma falha aqui nunca pode atrapalhar a conversa.
+        if (env.COMPANION_KV) ctx.waitUntil(recordActivity(env, "usuarioAt"));
 
         // F2-2: seleciona só os itens de memória relevantes pra ESSA mensagem (+ as 2
         // anteriores), em vez de mandar a timeline inteira — menos tokens, mais focado.

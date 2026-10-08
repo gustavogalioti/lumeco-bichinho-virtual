@@ -8,10 +8,21 @@ self.addEventListener('push', (event) => {
   try { data = event.data ? event.data.json() : {}; } catch (e) {}
   const title = data.title || 'Jarbas';
   const body = data.body || '';
+
+  // F2-3a: se o app já está aberto e visível em algum aparelho, o Jarbas FALA o aviso
+  // em vez de mandar notificação do sistema (ia ficar redundante com a tela acesa na
+  // cara da pessoa). Só cai pra notificação normal se nenhuma janela estiver visível.
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag: 'jarbas-notification',
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
+      const visible = clientsArr.filter((c) => c.visibilityState === 'visible');
+      if (visible.length) {
+        visible.forEach((c) => c.postMessage({ tipo: 'aviso', title, body }));
+        return;
+      }
+      return self.registration.showNotification(title, {
+        body,
+        tag: 'jarbas-notification',
+      });
     })
   );
 });

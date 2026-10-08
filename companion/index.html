@@ -150,6 +150,7 @@
     <h2>Configurações</h2>
     <button id="editProfileBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">🧠 Conhecimento &amp; Rotinas</button>
     <button id="memoryItemsBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">💭 O que o Jarbas lembra</button>
+    <button id="sleepRoutineBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🌙 Rotina do Jarbas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
     <div id="voiceProviderLabel" style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;"></div>
     <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
@@ -241,6 +242,38 @@
     </div>
     <div id="memoryItemsList"></div>
     <button id="memoryItemsCloseBtn" class="btn-secondary" style="margin-top:16px;">Fechar</button>
+  </div>
+</div>
+
+<div class="setup hidden" id="sleepRoutineEl">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
+    <h2>🌙 Rotina do Jarbas</h2>
+    <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">O Jarbas "dorme" quando você dorme — nessa janela, ele só avisa sobre compromissos marcados pra perto desse horário. Tudo o mais espera você acordar.</p>
+    <p id="sleepStatusLabel" style="font-size:13px; margin:0 0 14px; color:var(--text);"></p>
+    <div style="display:flex; gap:10px; margin-bottom:16px;">
+      <button id="sleepNowBtn" type="button" class="btn-secondary" style="flex:1; margin-top:0;">😴 Dormir agora</button>
+      <button id="wakeNowBtn" type="button" class="btn-secondary" style="flex:1; margin-top:0;">☀️ Acordar</button>
+    </div>
+    <div style="display:flex; gap:10px;">
+      <div style="flex:1;">
+        <label for="sleepStartInput">Início do sono</label>
+        <input type="time" id="sleepStartInput">
+      </div>
+      <div style="flex:1;">
+        <label for="sleepEndInput">Fim do sono</label>
+        <input type="time" id="sleepEndInput">
+      </div>
+    </div>
+    <label for="maxAvisosDiaInput">Máximo de avisos espontâneos por dia</label>
+    <input type="number" id="maxAvisosDiaInput" min="0" max="50">
+    <p style="color:var(--muted); font-size:11px; margin:-8px 0 14px;">Não conta compromissos, lembretes nem alarmes que você mesmo marcou.</p>
+    <label for="antecedenciaInput">Avisar compromisso com quantos minutos de antecedência</label>
+    <input type="number" id="antecedenciaInput" min="1" max="180">
+    <label class="routine-check" style="margin-top:14px; display:flex; align-items:center; gap:8px;">
+      <input type="checkbox" id="vigiaAtivoInput"> Vigia ligado (avisos proativos e observação do painel)
+    </label>
+    <button id="sleepRoutineSaveBtn" style="margin-top:18px;">Salvar</button>
+    <button id="sleepRoutineCancelBtn" class="btn-secondary">Cancelar</button>
   </div>
 </div>
 
@@ -598,6 +631,14 @@ function ensureKnowledge(){
   mem.knowledge = { ...emptyKnowledge(), ...(mem.knowledge || {}) };
 }
 
+// F2-3a: "Rotina do Jarbas" — mem.config é o ÚNICO lugar que escreve essas regras (o
+// Worker/cron só LÊ, via callPainelMemoryLoad, em cache de até 1h). Mesmos padrões do
+// cron (SONO_DEFAULTS em worker/index.js) — se mudar aqui, mudar lá também.
+const SLEEP_CONFIG_DEFAULTS = { sonoInicio: '23:00', sonoFim: '07:00', maxAvisosDia: 5, antecedenciaCompromissoMin: 30, vigiaAtivo: true };
+function ensureConfig(){
+  mem.config = { ...SLEEP_CONFIG_DEFAULTS, ...(mem.config || {}) };
+}
+
 // Migração única: se existir o antigo mem.profile (textarea livre) e ainda não existir
 // mem.knowledge, manda pro Worker classificar o texto antigo nas categorias novas.
 // Se a classificação falhar por qualquer motivo, o texto inteiro cai em "outros" —
@@ -668,6 +709,7 @@ async function syncMemoryFromServer(workerUrl){
     if(data){
       mem = data;
       ensureItemsMigrated();
+      ensureConfig();
       history = mem.history || [];
       saveMemoryState();
     }
@@ -688,6 +730,7 @@ async function pushMemoryToServer(workerUrl){
 
 let mem = loadMemoryState();
 ensureItemsMigrated();
+ensureConfig();
 let history = mem.history || [];
 renderHistoryPanel();
 
@@ -2107,6 +2150,112 @@ document.getElementById('memoryItemsCloseBtn').addEventListener('click', ()=>{
 memoryItemsSearchEl.addEventListener('input', renderMemoryItemsList);
 memoryItemsTypeFilterEl.addEventListener('change', renderMemoryItemsList);
 memoryItemsStatusFilterEl.addEventListener('change', renderMemoryItemsList);
+
+/* ---------- F2-3a: Rotina do Jarbas (sono, orçamento de avisos, vigia) ---------- */
+const sleepRoutineEl = document.getElementById('sleepRoutineEl');
+const sleepStartInput = document.getElementById('sleepStartInput');
+const sleepEndInput = document.getElementById('sleepEndInput');
+const maxAvisosDiaInput = document.getElementById('maxAvisosDiaInput');
+const antecedenciaInput = document.getElementById('antecedenciaInput');
+const vigiaAtivoInput = document.getElementById('vigiaAtivoInput');
+const sleepStatusLabel = document.getElementById('sleepStatusLabel');
+
+async function callWorkerSyncMode(mode, extra){
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  const syncKey = getSyncKey();
+  if(!workerUrl || !syncKey) return null;
+  try{
+    const r = await fetch(workerUrl, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode, key: syncKey, ...(extra||{}) }) });
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){ return null; }
+}
+
+async function refreshSleepStatusLabel(){
+  const d = await callWorkerSyncMode('estado_get');
+  if(!d){ sleepStatusLabel.textContent = ''; return; }
+  sleepStatusLabel.textContent = d.dormindo ? '😴 O Jarbas está dormindo agora.' : '☀️ O Jarbas está acordado agora.';
+}
+
+document.getElementById('sleepRoutineBtn').addEventListener('click', ()=>{
+  settingsMenu.classList.add('hidden');
+  ensureConfig();
+  sleepStartInput.value = mem.config.sonoInicio;
+  sleepEndInput.value = mem.config.sonoFim;
+  maxAvisosDiaInput.value = mem.config.maxAvisosDia;
+  antecedenciaInput.value = mem.config.antecedenciaCompromissoMin;
+  vigiaAtivoInput.checked = mem.config.vigiaAtivo !== false;
+  sleepRoutineEl.classList.remove('hidden');
+  refreshSleepStatusLabel();
+});
+document.getElementById('sleepRoutineCancelBtn').addEventListener('click', ()=>{
+  sleepRoutineEl.classList.add('hidden');
+});
+document.getElementById('sleepRoutineSaveBtn').addEventListener('click', async ()=>{
+  ensureConfig();
+  mem.config.sonoInicio = sleepStartInput.value || SLEEP_CONFIG_DEFAULTS.sonoInicio;
+  mem.config.sonoFim = sleepEndInput.value || SLEEP_CONFIG_DEFAULTS.sonoFim;
+  mem.config.maxAvisosDia = Math.max(0, parseInt(maxAvisosDiaInput.value, 10) || 0);
+  mem.config.antecedenciaCompromissoMin = Math.max(1, parseInt(antecedenciaInput.value, 10) || SLEEP_CONFIG_DEFAULTS.antecedenciaCompromissoMin);
+  mem.config.vigiaAtivo = !!vigiaAtivoInput.checked;
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) await pushMemoryToServer(workerUrl);
+  sleepRoutineEl.classList.add('hidden');
+});
+document.getElementById('sleepNowBtn').addEventListener('click', async ()=>{
+  await callWorkerSyncMode('definir_sono', { estado: 'dormir' });
+  refreshSleepStatusLabel();
+});
+document.getElementById('wakeNowBtn').addEventListener('click', async ()=>{
+  await callWorkerSyncMode('definir_sono', { estado: 'acordar' });
+  refreshSleepStatusLabel();
+});
+
+/* ---------- F2-3a: Jarbas fala o aviso na hora quando o app está aberto e visível
+   (sw.js manda isso via postMessage em vez de notificação do sistema nesse caso). ---------- */
+function showTapToHearCard(text){
+  const card = document.createElement('div');
+  card.textContent = '🔔 O Jarbas tem um aviso — toque para ouvir';
+  card.style.cssText = 'position:fixed; left:50%; bottom:100px; transform:translateX(-50%); background:rgba(0,224,255,0.14); border:1px solid rgba(0,224,255,0.4); color:var(--text); padding:12px 18px; border-radius:14px; font-size:13px; cursor:pointer; z-index:50; text-align:center; max-width:80vw;';
+  card.addEventListener('click', ()=>{
+    card.remove();
+    speak(text).catch(()=>{});
+  });
+  document.body.appendChild(card);
+}
+
+async function handleProactivePush(data){
+  const text = (data && (data.body || data.title)) || '';
+  if(!text) return;
+
+  // Defesa em profundidade: o cron já deveria ter bloqueado isso dormindo, mas o
+  // estado pode ter mudado entre a decisão do cron e a entrega — nunca fala dormindo.
+  const estado = await callWorkerSyncMode('estado_get');
+  if(estado && estado.dormindo) return;
+
+  history.push({ role:'assistant', content: text, at: new Date().toISOString() });
+  mem.history = history;
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) pushMemoryToServer(workerUrl);
+
+  setEmotion('confirmado');
+  setCaption('jarbas', text);
+  try{
+    await speak(text);
+    setEmotion('neutro');
+  }catch(e){
+    showTapToHearCard(text);
+  }
+}
+
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message', (event)=>{
+    const data = event.data || {};
+    if(data.tipo === 'aviso') handleProactivePush(data);
+  });
+}
 
 const voiceModeBtn = document.getElementById('voiceModeBtn');
 function updateVoiceModeBtn(){
