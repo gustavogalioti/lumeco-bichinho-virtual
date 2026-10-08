@@ -16,7 +16,9 @@ self.addEventListener('push', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
       const visible = clientsArr.filter((c) => c.visibilityState === 'visible');
       if (visible.length) {
-        visible.forEach((c) => c.postMessage({ tipo: 'aviso', title, body }));
+        // F2-3b: o briefing matinal leva esse sinal pra o app marcar como lido (e
+        // esvaziar push:fila) só depois de realmente falado, nunca por qualquer aviso.
+        visible.forEach((c) => c.postMessage({ tipo: 'aviso', title, body, briefing: !!data.briefing }));
         return;
       }
       return self.registration.showNotification(title, {

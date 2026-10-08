@@ -272,6 +272,17 @@
     <label class="routine-check" style="margin-top:14px; display:flex; align-items:center; gap:8px;">
       <input type="checkbox" id="vigiaAtivoInput"> Vigia ligado (avisos proativos e observação do painel)
     </label>
+    <hr style="border-color:var(--border); margin:18px 0;">
+    <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">Todo dia, nesse horário, o Jarbas te cumprimenta sem você chamar — com clima, agenda, tarefas, contas e pendências do dia.</p>
+    <label for="briefingHoraInput">Horário do resumo matinal</label>
+    <input type="time" id="briefingHoraInput">
+    <label class="routine-check" style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+      <input type="checkbox" id="briefingAtivoInput"> Resumo matinal ligado
+    </label>
+    <label class="routine-check" style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+      <input type="checkbox" id="pendenciasAtivasInput"> Lembrar de coisas que eu disse que ia fazer
+    </label>
+    <button id="briefingNowBtn" type="button" class="btn-secondary" style="margin-top:14px;">🔊 Ouvir o resumo de hoje agora</button>
     <button id="sleepRoutineSaveBtn" style="margin-top:18px;">Salvar</button>
     <button id="sleepRoutineCancelBtn" class="btn-secondary">Cancelar</button>
   </div>
@@ -623,6 +634,21 @@ function addMemoryItem(data, source){
   return item;
 }
 
+// F2-3b: aplica o resultado da ferramenta atualizar_pendencia (vinda do Worker como
+// parsed.pendencia_update) — o app é o ÚNICO escritor de mem.items, o Worker só
+// sinaliza a intenção. "feito"/"cancelado" arquiva (sai das pendências ativas); "adiado"
+// só troca a data de retorno, continua ativa.
+function applyPendenciaUpdate(update){
+  if(!update || !update.id) return;
+  const item = (mem.items || []).find(i => i.id === update.id);
+  if(!item) return;
+  if(update.status === 'adiado' && /^\d{4}-\d{2}-\d{2}$/.test(update.novaData || '')){
+    item.followUpAt = update.novaData;
+  } else if(update.status === 'feito' || update.status === 'cancelado'){
+    item.status = 'arquivado';
+  }
+}
+
 const KNOWLEDGE_CATEGORIES = ['identidade','pessoas','rotina','trabalho','outros'];
 function emptyKnowledge(){
   return { identidade:'', pessoas:'', rotina:'', trabalho:'', sobre_jarbas:'', outros:'' };
@@ -635,8 +661,10 @@ function ensureKnowledge(){
 // Worker/cron só LÊ, via callPainelMemoryLoad, em cache de até 1h). Mesmos padrões do
 // cron (SONO_DEFAULTS em worker/index.js) — se mudar aqui, mudar lá também.
 const SLEEP_CONFIG_DEFAULTS = { sonoInicio: '23:00', sonoFim: '07:00', maxAvisosDia: 5, antecedenciaCompromissoMin: 30, vigiaAtivo: true };
+// F2-3b: mesmos padrões do cron (BRIEFING_DEFAULTS em worker/index.js) — se mudar aqui, mudar lá também.
+const BRIEFING_CONFIG_DEFAULTS = { briefingHora: '07:30', briefingAtivo: true, pendenciasAtivas: true };
 function ensureConfig(){
-  mem.config = { ...SLEEP_CONFIG_DEFAULTS, ...(mem.config || {}) };
+  mem.config = { ...SLEEP_CONFIG_DEFAULTS, ...BRIEFING_CONFIG_DEFAULTS, ...(mem.config || {}) };
 }
 
 // Migração única: se existir o antigo mem.profile (textarea livre) e ainda não existir
@@ -1440,6 +1468,9 @@ async function askRaiz(userText, isRetry){
       if(!Array.isArray(mem.learned)) mem.learned = [];
       mem.learned.push({ id: Date.now(), text: parsed.save_learned, at: new Date().toISOString() });
     }
+    if(parsed.pendencia_update){
+      applyPendenciaUpdate(parsed.pendencia_update);
+    }
     saveMemoryState();
     pushMemoryToServer(workerUrl);
 
@@ -1509,7 +1540,7 @@ async function runRoutine(routine){
         mode:'routine',
         ingredients: routine.ingredients || [],
         links: routine.links || [],
-        companionState: { location: mem.location || null, now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { location: mem.location || null, items: mem.items || [], now: formatNowPtBR(), hojeISO: todayISO() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -1894,6 +1925,7 @@ async function completeStartup(url, syncKey){
     resumeHandsFreeListening();
     setupErr.style.display = 'none';
     setupEl.classList.add('hidden');
+    checkBriefingOnOpen(); // F2-3b: nunca atrasa o início do app, roda em segundo plano
     return true;
   }catch(e){
     setupErr.textContent = 'Precisamos da permissão do microfone para continuar.';
@@ -2159,6 +2191,10 @@ const maxAvisosDiaInput = document.getElementById('maxAvisosDiaInput');
 const antecedenciaInput = document.getElementById('antecedenciaInput');
 const vigiaAtivoInput = document.getElementById('vigiaAtivoInput');
 const sleepStatusLabel = document.getElementById('sleepStatusLabel');
+const briefingHoraInput = document.getElementById('briefingHoraInput');
+const briefingAtivoInput = document.getElementById('briefingAtivoInput');
+const pendenciasAtivasInput = document.getElementById('pendenciasAtivasInput');
+const briefingNowBtn = document.getElementById('briefingNowBtn');
 
 async function callWorkerSyncMode(mode, extra){
   const workerUrl = localStorage.getItem('raiz_worker_url');
@@ -2185,6 +2221,9 @@ document.getElementById('sleepRoutineBtn').addEventListener('click', ()=>{
   maxAvisosDiaInput.value = mem.config.maxAvisosDia;
   antecedenciaInput.value = mem.config.antecedenciaCompromissoMin;
   vigiaAtivoInput.checked = mem.config.vigiaAtivo !== false;
+  briefingHoraInput.value = mem.config.briefingHora;
+  briefingAtivoInput.checked = mem.config.briefingAtivo !== false;
+  pendenciasAtivasInput.checked = mem.config.pendenciasAtivas !== false;
   sleepRoutineEl.classList.remove('hidden');
   refreshSleepStatusLabel();
 });
@@ -2198,10 +2237,38 @@ document.getElementById('sleepRoutineSaveBtn').addEventListener('click', async (
   mem.config.maxAvisosDia = Math.max(0, parseInt(maxAvisosDiaInput.value, 10) || 0);
   mem.config.antecedenciaCompromissoMin = Math.max(1, parseInt(antecedenciaInput.value, 10) || SLEEP_CONFIG_DEFAULTS.antecedenciaCompromissoMin);
   mem.config.vigiaAtivo = !!vigiaAtivoInput.checked;
+  mem.config.briefingHora = briefingHoraInput.value || BRIEFING_CONFIG_DEFAULTS.briefingHora;
+  mem.config.briefingAtivo = !!briefingAtivoInput.checked;
+  mem.config.pendenciasAtivas = !!pendenciasAtivasInput.checked;
   saveMemoryState();
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) await pushMemoryToServer(workerUrl);
   sleepRoutineEl.classList.add('hidden');
+});
+briefingNowBtn.addEventListener('click', async ()=>{
+  briefingNowBtn.disabled = true;
+  briefingNowBtn.textContent = 'ouvindo...';
+  try{
+    const workerUrl = localStorage.getItem('raiz_worker_url');
+    const syncKey = getSyncKey();
+    const resp = await fetch(workerUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'briefing_now', key: syncKey, companionState: { location: mem.location || null, items: mem.items || [] } })
+    });
+    const data = await resp.json();
+    if(!resp.ok || !data.body) throw new Error(data.error || 'briefing_failed');
+    sleepRoutineEl.classList.add('hidden');
+    setEmotion('confirmado');
+    setCaption('jarbas', data.body);
+    await speak(data.body).catch(()=>{ showTapToHearCard(data.body); });
+    setEmotion('neutro');
+  }catch(e){
+    alert('Não consegui montar o resumo agora. Tenta de novo em um instante.');
+  }finally{
+    briefingNowBtn.disabled = false;
+    briefingNowBtn.textContent = '🔊 Ouvir o resumo de hoje agora';
+  }
 });
 document.getElementById('sleepNowBtn').addEventListener('click', async ()=>{
   await callWorkerSyncMode('definir_sono', { estado: 'dormir' });
@@ -2214,13 +2281,13 @@ document.getElementById('wakeNowBtn').addEventListener('click', async ()=>{
 
 /* ---------- F2-3a: Jarbas fala o aviso na hora quando o app está aberto e visível
    (sw.js manda isso via postMessage em vez de notificação do sistema nesse caso). ---------- */
-function showTapToHearCard(text){
+function showTapToHearCard(text, onSpoken){
   const card = document.createElement('div');
   card.textContent = '🔔 O Jarbas tem um aviso — toque para ouvir';
   card.style.cssText = 'position:fixed; left:50%; bottom:100px; transform:translateX(-50%); background:rgba(0,224,255,0.14); border:1px solid rgba(0,224,255,0.4); color:var(--text); padding:12px 18px; border-radius:14px; font-size:13px; cursor:pointer; z-index:50; text-align:center; max-width:80vw;';
   card.addEventListener('click', ()=>{
     card.remove();
-    speak(text).catch(()=>{});
+    speak(text).catch(()=>{}).then(()=>{ if(onSpoken) onSpoken(); });
   });
   document.body.appendChild(card);
 }
@@ -2240,13 +2307,18 @@ async function handleProactivePush(data){
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) pushMemoryToServer(workerUrl);
 
+  // F2-3b: se for o briefing matinal (sinalizado pelo próprio push/consulta), marca
+  // como lido só depois de realmente falado — isso também esvazia push:fila no Worker.
+  const marcarBriefingLidoSeNecessario = ()=>{ if(data.briefing) callWorkerSyncMode('briefing_lido'); };
+
   setEmotion('confirmado');
   setCaption('jarbas', text);
   try{
     await speak(text);
     setEmotion('neutro');
+    marcarBriefingLidoSeNecessario();
   }catch(e){
-    showTapToHearCard(text);
+    showTapToHearCard(text, marcarBriefingLidoSeNecessario);
   }
 }
 
@@ -2255,6 +2327,23 @@ if('serviceWorker' in navigator){
     const data = event.data || {};
     if(data.tipo === 'aviso') handleProactivePush(data);
   });
+}
+
+// F2-3b: no primeiro open do dia (ou qualquer volta de foco antes de ser lido), busca
+// o último briefing ainda não falado — cobre o caso de o push não ter chegado (app
+// fechado, permissão negada) ou o Jarbas ainda não ter sido aberto hoje. Guarda contra
+// chamadas concorrentes (startup + foco quase simultâneos) pra nunca falar 2x.
+let checkingBriefing = false;
+async function checkBriefingOnOpen(){
+  if(checkingBriefing) return;
+  checkingBriefing = true;
+  try{
+    const d = await callWorkerSyncMode('briefing_get');
+    if(!d || !d.briefing || !d.briefing.body) return;
+    await handleProactivePush({ title: d.briefing.title, body: d.briefing.body, briefing: true });
+  }finally{
+    checkingBriefing = false;
+  }
 }
 
 const voiceModeBtn = document.getElementById('voiceModeBtn');
@@ -2337,9 +2426,15 @@ async function resyncMemoryOnFocus(){
   }catch(e){}
 }
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'visible') resyncMemoryOnFocus();
+  if(document.visibilityState === 'visible'){
+    resyncMemoryOnFocus();
+    checkBriefingOnOpen();
+  }
 });
-window.addEventListener('focus', resyncMemoryOnFocus);
+window.addEventListener('focus', ()=>{
+  resyncMemoryOnFocus();
+  checkBriefingOnOpen();
+});
 requestAnimationFrame(loop);
 </script>
 </body>
