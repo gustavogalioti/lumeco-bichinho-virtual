@@ -1087,6 +1087,57 @@ async function fetchPainelJson(url, opts) {
   throw lastErr;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// F2-1 — Diário do Jarbas: registro de atividade. Usa a F2-0 (painel): grava
+// via POST ?action=log_append, em lote, por fora da resposta (ctx.waitUntil)
+// pra nunca atrasar a conversa. Uma falha ao registrar NUNCA pode quebrar
+// nada — só console.error.
+// ─────────────────────────────────────────────────────────────────────────
+const LOG_BATCH_MAX = 50; // mesmo teto que o painel aceita por chamada (F2-0)
+
+// `batch` é um array simples passado por referência entre as funções de uma
+// mesma requisição/tick — cada chamada só empilha, nada é enviado até flushLogBatch.
+function pushLogEvent(batch, { tipo, origem, resumo, detalhes, at }) {
+  if (!Array.isArray(batch) || !tipo || !origem || !resumo) return;
+  batch.push({
+    at: at || new Date().toISOString(),
+    tipo,
+    origem,
+    resumo: String(resumo).slice(0, 500),
+    detalhes: detalhes && typeof detalhes === "object" ? detalhes : {},
+  });
+}
+
+async function flushLogBatch(env, ctx, batch) {
+  if (!Array.isArray(batch) || !batch.length || !env.PAINEL_API_KEY) return;
+  const eventos = batch.splice(0, batch.length).slice(0, LOG_BATCH_MAX);
+  const send = async () => {
+    try {
+      await fetchPainelJson(`${PAINEL_API_URL}?action=log_append`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-jarbas-key": env.PAINEL_API_KEY },
+        body: JSON.stringify({ eventos }),
+      });
+    } catch (err) {
+      console.error("log_append_failed:", String(err?.message || err));
+    }
+  };
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(send());
+  else await send(); // scheduled() sempre tem ctx; isso é só rede de segurança
+}
+
+// Resumo curto e seguro dos argumentos de uma ferramenta, pro log — nunca o conteúdo
+// bruto do resultado (que pode ter trecho de e-mail, texto de página etc.).
+function summarizeToolArgs(args) {
+  if (!args || typeof args !== "object") return "";
+  try {
+    const json = JSON.stringify(args);
+    return json.length > 200 ? json.slice(0, 200) + "…" : json;
+  } catch {
+    return "";
+  }
+}
+
 async function callPainelSnapshot(env, dia) {
   const params = new URLSearchParams({ action: "snapshot" });
   if (dia) params.set("dia", dia);
@@ -1364,6 +1415,115 @@ async function runRoutine(env, ingredients, links, companionState) {
   return parsed;
 }
 
+// ---------- F2-1: compressão de observações (resultado de ferramenta grande demais) ----------
+// Ideia inspirada no OpenJarvis (Apache 2.0, reimplementada do zero, não copiada): corte
+// determinístico sempre disponível; resumo por LLM só pra ferramentas de texto longo, e só
+// se passar de um limiar bem maior — nunca pra dados estruturados curtos tipo agenda/tarefas.
+const COMPRESS_CUT_AT = 1500;
+const COMPRESS_SUMMARIZE_AT = 4000;
+const LONG_TEXT_TOOLS = new Set(["resumir_link", "buscar_na_web", "consultar_email"]);
+const COMPRESS_SUMMARY_PROMPT = "Resuma o texto abaixo em português, mantendo os fatos, nomes e números mais importantes, em até 6 frases curtas. Não invente nada que não esteja no texto.";
+
+function deterministicCut(text, limit = COMPRESS_CUT_AT) {
+  if (text.length <= limit) return text;
+  const omitido = text.length - limit;
+  return `${text.slice(0, limit)}\n[+${omitido} caracteres omitidos]`;
+}
+
+// Devolve { content, compressed, method, originalLength } — content é o que vai pro
+// modelo; os outros campos só alimentam o log (acao_pedida/leitura), nunca a fala.
+async function compressObservation(env, toolName, text) {
+  if (typeof text !== "string" || text.length <= COMPRESS_CUT_AT) {
+    return { content: text, compressed: false };
+  }
+  if (text.length > COMPRESS_SUMMARIZE_AT && LONG_TEXT_TOOLS.has(toolName)) {
+    try {
+      const summary = (await callGroq(env, COMPRESS_SUMMARY_PROMPT, [{ role: "user", content: text.slice(0, 12000) }], 400)).trim();
+      if (summary) return { content: summary, compressed: true, method: "resumo_llm", originalLength: text.length };
+    } catch (err) {
+      console.error(`compress_llm_summarize_failed (${toolName}):`, String(err?.message || err));
+      // cai pro corte determinístico abaixo
+    }
+  }
+  return { content: deterministicCut(text), compressed: true, method: "corte", originalLength: text.length };
+}
+
+// ---------- F2-1: guarda de laço (ideia do loop_guard do OpenJarvis, Apache 2.0,
+// reimplementada do zero) — dentro de UMA requisição, nunca deixa a mesma ferramenta
+// virar um loop: mesma chamada exata 2+ vezes, orçamento de 3 por nome de ferramenta,
+// e padrão de "ping-pong" A-B-A-B entre duas chamadas distintas. ----------
+class LoopGuard {
+  constructor() {
+    this.sigCounts = new Map();   // "nome|args" -> quantas vezes já tentou
+    this.nameCounts = new Map();  // nome da ferramenta -> quantas vezes já executou
+    this.sequence = [];           // ordem das assinaturas realmente executadas
+    this.blockedOnce = new Set(); // nomes que já geraram um bloqueio (pra distinguir reincidência)
+    this.events = [];             // { nivel: "guard"|"erro", motivo, ferramenta }
+  }
+
+  _pingPong() {
+    const n = this.sequence.length;
+    if (n < 4) return false;
+    const [a, b, c, d] = this.sequence.slice(-4);
+    return a === c && b === d && a !== b;
+  }
+
+  // Chamado ANTES de executar de verdade. "execute" = pode rodar; "block" = não roda,
+  // devolve um conteúdo padrão no lugar pro modelo seguir em frente.
+  check(name, argsStr) {
+    const sig = `${name}|${argsStr}`;
+    const sigCount = this.sigCounts.get(sig) || 0;
+    if (sigCount >= 2) {
+      this.events.push({ nivel: "guard", motivo: "mesma_chamada_repetida", ferramenta: name });
+      return { action: "block", reason: "mesma_chamada_repetida", sig };
+    }
+    const nameCount = this.nameCounts.get(name) || 0;
+    if (nameCount >= 3) {
+      const reincidencia = this.blockedOnce.has(name);
+      this.blockedOnce.add(name);
+      this.events.push({ nivel: reincidencia ? "erro" : "guard", motivo: "orcamento_ferramenta_excedido", ferramenta: name });
+      return { action: "block", reason: "orcamento_excedido", sig };
+    }
+    if (this._pingPong()) {
+      this.events.push({ nivel: "erro", motivo: "padrao_a_b_a_b", ferramenta: name });
+      return { action: "block", reason: "padrao_a_b_a_b", sig };
+    }
+    return { action: "execute", reason: null, sig };
+  }
+
+  // Chamado DEPOIS de uma execução real (nunca pra uma chamada bloqueada).
+  record(name, argsStr) {
+    const sig = `${name}|${argsStr}`;
+    this.sigCounts.set(sig, (this.sigCounts.get(sig) || 0) + 1);
+    this.nameCounts.set(name, (this.nameCounts.get(name) || 0) + 1);
+    this.sequence.push(sig);
+  }
+}
+
+// ---------- F2-1: registro mínimo de agentes (estrutura pronta pra "vigia" e "briefing"
+// entrarem depois, modo "agendado" — sem mudar nada do comportamento atual). ----------
+const AGENTS = {
+  conversa: {
+    id: "conversa",
+    modo: "sob_demanda",
+    ferramentasPermitidas: null, // null = decidido dinamicamente (selectToolsForMessage/buildAllTools), como hoje
+    maxChamadasLLM: 3,
+    maxFerramentas: 3,
+  },
+};
+
+// Classifica cada ferramenta como "leitura" (consulta) ou "acao_pedida" (muda algo),
+// pro tipo certo no log de atividade.
+const TOOL_KIND = {
+  previsao_do_tempo: "leitura", buscar_na_web: "leitura", consultar_painel: "leitura",
+  consultar_agenda: "leitura", consultar_tarefas: "leitura", consultar_ideias: "leitura",
+  consultar_lembretes: "leitura", consultar_listas: "leitura", consultar_recados: "leitura",
+  consultar_email: "leitura", resumir_link: "leitura",
+  gerenciar_tarefa: "acao_pedida", gerenciar_conta: "acao_pedida", gerenciar_compromisso: "acao_pedida",
+  anotar_no_diario: "acao_pedida", gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
+  gerenciar_lista: "acao_pedida", concluir_recado: "acao_pedida", guardar_memoria: "acao_pedida", ensinar_regra: "acao_pedida",
+};
+
 async function runTool(env, call, canSearch, canPainel, companionState = {}) {
   const name = call.function.name;
   let args = {};
@@ -1469,7 +1629,7 @@ function selectToolsForMessage(userText, canSearch, canPainel) {
   return Array.from(selected);
 }
 
-async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}) {
+async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}, logBatch = null) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
@@ -1478,15 +1638,26 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   let tools = selectToolsForMessage(lastUserText, canSearch, canPainel);
   let callCount = 0;
   let providerUsed = null;
+  let totalLatencyMs = 0;
   // Dedupe de ferramenta de escrita por assinatura (nome+args), válido pra requisição
   // inteira (não só dentro de uma resposta) — nenhuma retentativa aqui re-executa uma
   // ferramenta já executada, só reaproveita o resultado guardado.
   const executed = new Map();
+  const guard = new LoopGuard();
+  const toolsUsed = [];
 
+  const timedGroqRequest = async (msgs, tok, tls) => {
+    const t0 = Date.now();
+    const res = await groqRequest(env, msgs, tok, tls);
+    totalLatencyMs += Date.now() - t0;
+    return res;
+  };
+
+  const metrics = () => ({ llmCalls: callCount, provider: providerUsed, latencyMs: totalLatencyMs, toolsUsed, guardEvents: guard.events });
   const logCalls = (extra = "") => console.log(`companion_llm_calls total=${callCount} provider=${providerUsed}${extra}`);
 
   callCount++;
-  let first = await groqRequest(env, baseMessages, maxTokens, tools);
+  let first = await timedGroqRequest(baseMessages, maxTokens, tools);
   providerUsed = first._provider;
   let msg = first.choices?.[0]?.message;
 
@@ -1499,7 +1670,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     if (needsFullSet) {
       tools = buildAllTools(canSearch, canPainel);
       callCount++;
-      first = await groqRequest(env, baseMessages, maxTokens, tools);
+      first = await timedGroqRequest(baseMessages, maxTokens, tools);
       providerUsed = first._provider;
       msg = first.choices?.[0]?.message;
     }
@@ -1515,16 +1686,58 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       if (seen.has(sig)) return false;
       seen.add(sig);
       return true;
-    }).slice(0, 3);
+    }).slice(0, AGENTS.conversa.maxFerramentas);
     const toolMessages = [];
     let saveMemory = null;
     let saveLearned = null;
     for (const call of calls) {
-      const sig = call.function.name + "|" + call.function.arguments;
+      const name = call.function.name;
+      const argsStr = call.function.arguments;
+      const sig = name + "|" + argsStr;
       let result = executed.get(sig);
       if (!result) {
-        result = await runTool(env, call, canSearch, canPainel, companionState);
+        const verdict = guard.check(name, argsStr);
+        if (verdict.action === "block") {
+          result = { content: "Você já tentou isso algumas vezes nesta conversa sem sucesso — não tente de novo, use o que já sabe." };
+          pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: `Guarda de laço bloqueou "${name}" (${verdict.reason}).`, detalhes: { ferramenta: name, motivo: verdict.reason } });
+        } else {
+          result = await runTool(env, call, canSearch, canPainel, companionState);
+          guard.record(name, argsStr);
+        }
         executed.set(sig, result);
+
+        if (verdict?.action !== "block") {
+          const ok = !String(result.content || "").startsWith("A consulta falhou:");
+          // Comprime o resultado ANTES de guardar/mandar pro modelo — nunca o bruto
+          // se passar do limite (corte determinístico, ou resumo por LLM nos casos de
+          // texto longo). O que entra no log é só o resumo do que a ferramenta fez.
+          const compressedResult = await compressObservation(env, name, result.content);
+          result = { ...result, content: compressedResult.content };
+          executed.set(sig, result);
+
+          const kind = TOOL_KIND[name] || "acao_pedida";
+          toolsUsed.push(name);
+          if (name === "consultar_email") {
+            // Nunca loga o conteúdo retornado (pode ter trecho do e-mail) — só os
+            // parâmetros da busca, como pedido ("somente remetente e assunto").
+            let args = {}; try { args = JSON.parse(argsStr); } catch {}
+            pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo: `Consultou e-mails (filtro: ${args.filtro || "recentes"}${args.remetente ? `, de ${args.remetente}` : ""}${args.assunto ? `, assunto: ${args.assunto}` : ""}).` });
+          } else if (name === "resumir_link") {
+            let args = {}; try { args = JSON.parse(argsStr); } catch {}
+            // "Título" aproximado: primeiro trecho do conteúdo já buscado (sem título de
+            // verdade disponível) — só isso vai pro log, nunca o conteúdo completo da página.
+            const tituloAprox = String(result.content || "").replace(/^Conteúdo de [^:]+:\s*/, "").slice(0, 80).trim();
+            pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo: `Resumiu link: ${args.url || ""}${tituloAprox ? ` — "${tituloAprox}…"` : ""}` });
+          } else {
+            let parsedArgs = {};
+            try { parsedArgs = JSON.parse(argsStr || "{}"); } catch { /* args malformado — loga sem detalhe */ }
+            pushLogEvent(logBatch, {
+              tipo: kind, origem: "jarbas",
+              resumo: `${kind === "leitura" ? "Consultou" : "Executou"} "${name}" (${summarizeToolArgs(parsedArgs)}).`,
+              detalhes: { ferramenta: name, ok, comprimido: compressedResult.compressed, metodo: compressedResult.method, tamanho_original: compressedResult.originalLength },
+            });
+          }
+        }
       }
       toolMessages.push({ role: "tool", tool_call_id: call.id, content: result.content });
       if (result.memoryFact) saveMemory = result.memoryFact;
@@ -1542,7 +1755,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     // toolMessages. Ferramenta de escrita nunca roda de novo nesta requisição.
     const retrySpeech = async () => {
       callCount++;
-      const retry = await groqRequest(env, [
+      const retry = await timedGroqRequest([
         ...followUp,
         { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
       ], Math.max(maxTokens, 400));
@@ -1552,27 +1765,28 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
 
     try {
       callCount++;
-      const second = await groqRequest(env, followUp, Math.max(maxTokens, 400));
+      const second = await timedGroqRequest(followUp, Math.max(maxTokens, 400));
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
         logCalls();
-        return { text: secondContent, saveMemory, saveLearned };
+        return { text: secondContent, saveMemory, saveLearned, metrics: metrics() };
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
       logCalls();
-      return { text, saveMemory, saveLearned };
+      return { text, saveMemory, saveLearned, metrics: metrics() };
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
+      pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
       logCalls();
-      return { text, saveMemory, saveLearned };
+      return { text, saveMemory, saveLearned, metrics: metrics() };
     }
   }
 
   logCalls();
-  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null };
+  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null, metrics: metrics() };
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -1695,44 +1909,112 @@ const PUSH_SUBSCRIPTION_KEY = "push:subscription";
 const PUSH_NOTIFY_STATE_KEY = "push:notify_state";
 const PUSH_DEDUPE_MS = 3 * 60 * 60 * 1000; // não repete o mesmo aviso por 3h
 
-const NOTIFICATION_DECISION_PROMPT = `Você é o sistema de avisos proativos do Jarbas, um companheiro de voz. Você recebe abaixo o snapshot atual da agenda, tarefas e contas da pessoa. Decida se HÁ ALGO que mereça um aviso AGORA (um compromisso começando em breve, uma conta vencendo hoje ou já vencida, uma tarefa importante parada há muito tempo). Seja conservador — só avise algo que realmente faça sentido avisar proativamente agora, não liste tudo que existe.
+function saoPauloNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return { dateStr: `${get("year")}-${get("month")}-${get("day")}`, dayOfMonth: Number(get("day")), hour: Number(get("hour")), minute: Number(get("minute")) };
+}
 
-Se não houver nada que mereça aviso agora, responda exatamente: {"notify":false}
+// ---------- F2-1: gatilhos DETERMINÍSTICOS (sem IA) pro cron — só chama o LLM se algum
+// destes já apontou que há algo real pra avisar. ----------
+function computeDeterministicTriggers(mudancas) {
+  const triggers = [];
+  if (!mudancas) return triggers;
+  const { dayOfMonth } = saoPauloNow();
 
-Se houver algo, responda em JSON puro, numa única linha, sem markdown, exatamente neste formato:
-{"notify":true,"signature":"identificador curto e estável do que está sendo avisado","title":"título curto pra notificação","body":"texto curto e natural, no máximo 1 frase, como o Jarbas falaria"}
-
-Nunca invente informação que não esteja no snapshot abaixo.`;
-
-async function decideNotification(env) {
-  let snapshot;
-  try {
-    snapshot = await callPainelSnapshot(env);
-  } catch {
-    return null;
+  for (const c of (mudancas.contas?.itens || [])) {
+    if (c.status !== "pendente" || !c.data) continue;
+    const dueDay = parseInt(c.data, 10);
+    if (!Number.isFinite(dueDay)) continue;
+    if (dueDay <= dayOfMonth) {
+      triggers.push({ tipo: "conta", id: String(c.id), texto: `Conta "${c.titulo}" ${dueDay < dayOfMonth ? "está atrasada" : "vence hoje"}.` });
+    }
   }
 
-  const raw = await callGroq(env, NOTIFICATION_DECISION_PROMPT, [{ role: "user", content: snapshot }], 250);
-  const clean = raw.replace(/```json|```/g, "").trim();
-  let parsed;
-  try {
-    parsed = JSON.parse(clean);
-  } catch {
-    return null;
+  const umDiaAtrasMs = Date.now() - 24 * 60 * 60 * 1000;
+  for (const t of (mudancas.tarefas?.itens || [])) {
+    // "parada" é aproximado pela data de CRIAÇÃO da tarefa, já que o painel não guarda
+    // quando ela entrou na coluna "now" — melhor sinal disponível sem mexer no painel.
+    if (t.status !== "now" || !t.data) continue;
+    const criadaMs = new Date(t.data).getTime();
+    if (Number.isFinite(criadaMs) && criadaMs < umDiaAtrasMs) {
+      triggers.push({ tipo: "tarefa", id: String(t.id), texto: `Tarefa "${t.titulo}" está parada em Para Agora.` });
+    }
   }
-  if (!parsed || !parsed.notify || !parsed.signature || !parsed.title || !parsed.body) return null;
+  return triggers;
+}
 
+// A ação "mudancas" (F2-0) não traz o horário dos compromissos (só a data), então pra
+// "próximos 30 min" reaproveita o endpoint de texto da agenda (já existia antes da F2-0,
+// não precisa de nenhuma mudança no painel) e faz um parse simples do formato conhecido
+// ("HH:MM Título; HH:MM Título"), em vez de inventar outro endpoint.
+async function checkAgendaProximosGatilhos(env) {
+  try {
+    const texto = await callPainelAgenda(env, "hoje");
+    const matches = [...texto.matchAll(/(\d{2}:\d{2})\s+([^;]+)/g)];
+    if (!matches.length) return [];
+    const { hour, minute } = saoPauloNow();
+    const agoraMin = hour * 60 + minute;
+    const triggers = [];
+    for (const [, hhmm, tituloRaw] of matches) {
+      const titulo = tituloRaw.trim();
+      const [h, m] = hhmm.split(":").map(Number);
+      const diffMin = (h * 60 + m) - agoraMin;
+      if (diffMin >= 0 && diffMin <= 30) {
+        triggers.push({ tipo: "agenda", id: `${hhmm}-${titulo}`, texto: `Compromisso "${titulo}" começa às ${hhmm}.` });
+      }
+    }
+    return triggers;
+  } catch (err) {
+    console.error("cron_agenda_check_failed:", String(err?.message || err));
+    return [];
+  }
+}
+
+const NOTIFICATION_PHRASE_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso. Os avisos abaixo já foram verificados (são fatos reais, confirmados sem você) — sua única tarefa é redigir UMA notificação curta e natural, no seu jeito de falar, juntando tudo numa frase só se houver mais de um item. Responda em JSON puro, numa única linha, sem markdown, exatamente: {"title":"título curto","body":"texto curto e natural, no máximo 1-2 frases, como você falaria"}. Nunca invente nada além do que está listado.`;
+
+async function phraseNotification(env, gatilhos) {
+  const listaTexto = gatilhos.map((g) => `- ${g.texto}`).join("\n");
+  try {
+    const raw = await callGroq(env, NOTIFICATION_PHRASE_PROMPT, [{ role: "user", content: listaTexto }], 200);
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    if (parsed?.title && parsed?.body) return { title: parsed.title, body: parsed.body };
+  } catch (err) {
+    console.error("cron_phrase_llm_failed, usando texto padrão:", String(err?.message || err));
+  }
+  // Fallback determinístico (sem LLM) — a pessoa nunca fica sem o aviso só porque o
+  // modelo falhou na hora de deixá-lo mais bonito.
+  const primeiro = gatilhos[0];
+  const body = gatilhos.length === 1 ? primeiro.texto : `${gatilhos.length} coisas pra você ver: ${gatilhos.map((g) => g.texto).join(" ")}`;
+  return { title: "Jarbas", body };
+}
+
+// Deterministic primeiro, LLM só se houver gatilho de verdade — é isso que zera o
+// gasto de cota em dias calmos (antes, chamava o LLM em TODO tick, sem condição nenhuma).
+async function decideNotification(env, logBatch, mudancas, cronMetrics) {
+  const gatilhos = [...computeDeterministicTriggers(mudancas), ...(await checkAgendaProximosGatilhos(env))];
+  if (!gatilhos.length) return null;
+
+  const signature = gatilhos.map((g) => `${g.tipo}:${g.id}`).sort().join("|");
   const previousRaw = await env.COMPANION_KV.get(PUSH_NOTIFY_STATE_KEY);
   const previous = previousRaw ? JSON.parse(previousRaw) : { lastSignature: "", notifiedAt: 0 };
-  if (previous.lastSignature === parsed.signature && Date.now() - previous.notifiedAt < PUSH_DEDUPE_MS) {
+  if (previous.lastSignature === signature && Date.now() - previous.notifiedAt < PUSH_DEDUPE_MS) {
     return null;
   }
 
-  await env.COMPANION_KV.put(PUSH_NOTIFY_STATE_KEY, JSON.stringify({ lastSignature: parsed.signature, notifiedAt: Date.now() }));
-  return { title: parsed.title, body: parsed.body };
+  if (cronMetrics) cronMetrics.llmCalls++;
+  const notification = await phraseNotification(env, gatilhos);
+  await env.COMPANION_KV.put(PUSH_NOTIFY_STATE_KEY, JSON.stringify({ lastSignature: signature, notifiedAt: Date.now() }));
+  pushLogEvent(logBatch, { tipo: "aviso_enviado", origem: "cron", resumo: notification.body, detalhes: { gatilhos: gatilhos.map((g) => g.tipo) } });
+  return notification;
 }
 
 // ---------- Item 5: comentário espontâneo sobre Ideias/Compromissos novos ----------
+// Já era econômico antes (só chama o LLM se achar novidade de verdade) — mantido, só
+// ganhou logging de atividade e o contador compartilhado de chamadas do tick.
 const SPONTANEOUS_STATE_KEY = "push:spontaneous_state";
 
 const SPONTANEOUS_COMMENT_PROMPT = `Você é Jarbas, um companheiro de voz caloroso e afetuoso, amigo próximo da pessoa. Ela acabou de registrar algo novo no painel pessoal dela (uma ideia ou um compromisso), descrito abaixo. Decida se vale a pena comentar isso espontaneamente com ela, como um amigo faria de leve — uma reação curta, uma pergunta genuína, um incentivo.
@@ -1743,7 +2025,7 @@ Se valer a pena comentar, responda em JSON puro, numa única linha, sem markdown
 
 Nunca invente informação que não esteja no que foi registrado abaixo.`;
 
-async function decideSpontaneousComment(env) {
+async function decideSpontaneousComment(env, logBatch, cronMetrics) {
   let novelty;
   try {
     novelty = await callPainelNovidades(env);
@@ -1770,6 +2052,7 @@ async function decideSpontaneousComment(env) {
     ? `Ideia nova registrada: "${newIdea.text}"`
     : `Compromisso novo criado: "${newEvent.title}" em ${newEvent.date}`;
 
+  if (cronMetrics) cronMetrics.llmCalls++;
   const raw = await callGroq(env, SPONTANEOUS_COMMENT_PROMPT, [{ role: "user", content }], 200);
   const clean = raw.replace(/```json|```/g, "").trim();
   let parsed;
@@ -1779,34 +2062,140 @@ async function decideSpontaneousComment(env) {
     return null;
   }
   if (!parsed || !parsed.comment || !parsed.title || !parsed.body) return null;
+  pushLogEvent(logBatch, { tipo: "acao_espontanea", origem: "cron", resumo: parsed.body, detalhes: { sobre: newIdea ? "ideia" : "compromisso" } });
   return { title: parsed.title, body: parsed.body };
 }
 
-async function runScheduledPush(env) {
-  if (!env.COMPANION_KV || !env.PAINEL_API_KEY || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
-  const subRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
-  if (!subRaw) return;
-  let subscription;
-  try {
-    subscription = JSON.parse(subRaw);
-  } catch {
-    return;
+// ---------- F2-1: observação do painel, sem IA — compara o snapshot compacto (F2-0,
+// ?action=mudancas) com o último "digest" conhecido (id -> hash por fonte, guardado no
+// KV existente). Primeira execução: só grava o estado, nunca gera uma avalanche de
+// eventos. Dali em diante, cada novo/alterado/removido vira um evento "observacao_painel". ----------
+const PAINEL_DIGEST_KEY = "painel:digest:v1";
+const FONTE_LABELS = { tarefas: "Tarefa", contas: "Conta", agenda: "Compromisso", ideias: "Ideia", lembretes: "Lembrete", listas: "Lista", diario: "Diário", recados: "Recado" };
+
+// Pura (sem KV, sem rede) — fácil de testar isolada. `previous` é o digest salvo da
+// última vez (ou null na primeira execução) e `mudancas` é a resposta de
+// ?action=mudancas (F2-0). Devolve o novo digest + um evento por item novo/
+// alterado/removido (vazio na primeira execução, de propósito).
+function diffPainelDigest(previous, mudancas) {
+  const isFirstRun = !previous;
+  const current = {};
+  const changedSources = [];
+  const events = [];
+
+  for (const fonte of Object.keys(FONTE_LABELS)) {
+    const itens = mudancas?.[fonte]?.itens || [];
+    const prevMap = previous?.[fonte] || {};
+    const curMap = {};
+    for (const item of itens) curMap[String(item.id)] = item.hash;
+    current[fonte] = curMap;
+    if (isFirstRun) continue;
+
+    let sourceChanged = false;
+    for (const item of itens) {
+      const prevHash = prevMap[String(item.id)];
+      if (prevHash === undefined) {
+        sourceChanged = true;
+        events.push({ tipo: "observacao_painel", origem: "painel", resumo: `${FONTE_LABELS[fonte]} nova: "${item.titulo}"${item.status ? ` (${item.status})` : ""}` });
+      } else if (prevHash !== item.hash) {
+        sourceChanged = true;
+        events.push({ tipo: "observacao_painel", origem: "painel", resumo: `${FONTE_LABELS[fonte]} alterada: "${item.titulo}"${item.status ? ` → ${item.status}` : ""}` });
+      }
+    }
+    const curIds = new Set(itens.map((i) => String(i.id)));
+    for (const id of Object.keys(prevMap)) {
+      if (!curIds.has(id)) {
+        sourceChanged = true;
+        events.push({ tipo: "observacao_painel", origem: "painel", resumo: `${FONTE_LABELS[fonte]} removida (id ${id}).` });
+      }
+    }
+    if (sourceChanged) changedSources.push(fonte);
   }
 
-  // No máximo um push por tick: prioriza um comentário espontâneo sobre novidade
-  // (ideia/compromisso novo) se houver; senão cai no aviso de agenda/tarefa/conta.
-  const notification = (await decideSpontaneousComment(env)) || (await decideNotification(env));
-  if (!notification) return;
+  return { isFirstRun, current, changedSources, events };
+}
 
+async function observePainelChanges(env, mudancas, logBatch) {
+  const previousRaw = await env.COMPANION_KV.get(PAINEL_DIGEST_KEY);
+  const previous = previousRaw ? JSON.parse(previousRaw) : null;
+  const { isFirstRun, current, changedSources, events } = diffPainelDigest(previous, mudancas);
+  for (const ev of events) pushLogEvent(logBatch, ev);
+  await env.COMPANION_KV.put(PAINEL_DIGEST_KEY, JSON.stringify(current));
+  return { isFirstRun, changedSources };
+}
+
+async function runScheduledPush(env, ctx) {
+  if (!env.COMPANION_KV || !env.PAINEL_API_KEY) return;
+
+  const logBatch = [];
+  const cronMetrics = { llmCalls: 0 };
+
+  // Observação do painel (item 2, sem IA) — roda sempre que o painel estiver
+  // configurado, mesmo sem push ainda, pra já alimentar o Diário do Jarbas.
+  let mudancas = null;
   try {
-    await sendWebPush(env, subscription, notification);
+    mudancas = await fetchPainelJson(`${PAINEL_API_URL}?action=mudancas`, { headers: { "x-jarbas-key": env.PAINEL_API_KEY } });
   } catch (err) {
-    console.error("push_send_failed", err);
+    console.error("cron_mudancas_failed:", String(err?.message || err));
   }
+  if (mudancas) {
+    try {
+      await observePainelChanges(env, mudancas, logBatch);
+    } catch (err) {
+      console.error("cron_observe_failed:", String(err?.message || err));
+    }
+  }
+
+  let notification = null;
+  if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) {
+    const subRaw = await env.COMPANION_KV.get(PUSH_SUBSCRIPTION_KEY);
+    if (subRaw) {
+      let subscription = null;
+      try { subscription = JSON.parse(subRaw); } catch { subscription = null; }
+      if (subscription) {
+        try {
+          // No máximo um push por tick: prioriza um comentário espontâneo sobre
+          // novidade (ideia/compromisso novo) se houver; senão cai no aviso
+          // determinístico de agenda/tarefa/conta. Ambos só chamam o LLM se
+          // tiverem achado algo de verdade — em dia calmo, cronMetrics.llmCalls fica 0.
+          notification = (await decideSpontaneousComment(env, logBatch, cronMetrics))
+            || (await decideNotification(env, logBatch, mudancas, cronMetrics));
+        } catch (err) {
+          console.error("cron_decide_failed:", String(err?.message || err));
+        }
+        if (notification) {
+          try {
+            await sendWebPush(env, subscription, notification);
+          } catch (err) {
+            console.error("push_send_failed", err);
+            pushLogEvent(logBatch, { tipo: "erro", origem: "cron", resumo: `Falha ao enviar push: ${String(err.message || err).slice(0, 200)}` });
+          }
+        }
+      }
+    }
+  }
+
+  // Visibilidade de quanto o cron gastou de LLM hoje (meta: perto de zero em dia
+  // calmo) — contador simples por dia no mesmo KV, sem inventar um tipo de evento
+  // novo no Diário (o enum do painel não tem "métrica"; os eventos de aviso/ação já
+  // carregam o detalhe de quantas chamadas custaram, no campo `detalhes`).
+  try {
+    const dayKey = `cron:llm_usage:${saoPauloNow().dateStr}`;
+    const prev = Number(await env.COMPANION_KV.get(dayKey)) || 0;
+    const total = prev + cronMetrics.llmCalls;
+    if (cronMetrics.llmCalls > 0) {
+      await env.COMPANION_KV.put(dayKey, String(total), { expirationTtl: 3 * 24 * 60 * 60 });
+    }
+    console.log(`cron_llm_usage tick=${cronMetrics.llmCalls} today=${total}`);
+  } catch (err) {
+    console.error("cron_llm_usage_record_failed:", String(err?.message || err));
+  }
+
+  await flushLogBatch(env, ctx, logBatch);
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
@@ -1943,12 +2332,18 @@ export default {
           return json({ audio_b64, provider: "azure" });
         } catch (err) {
           console.error("azure_tts_failed, caindo pro Edge TTS:", String(err?.message || err));
+          const ttsLog = [];
+          pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pro Edge TTS (Azure falhou).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
+          flushLogBatch(env, ctx, ttsLog);
         }
       }
       try {
         const audio_b64 = await synthesizeEdgeTts(body.text);
         return json({ audio_b64, provider: "edge" });
       } catch (err) {
+        const ttsLog = [];
+        pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pra reserva do navegador (Azure e Edge TTS falharam).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
+        flushLogBatch(env, ctx, ttsLog);
         return json({ error: "tts_failed", detail: String(err.message || err) }, 502);
       }
     }
@@ -1992,13 +2387,23 @@ export default {
         const timeGapLine = formatTimeGapLine(prevAt, Date.now());
         const lastUserText = timestamped[timestamped.length - 1]?.content || "";
 
+        // F2-1 (Diário do Jarbas): um lote só por requisição, enviado em segundo plano
+        // (ctx.waitUntil) no fim — nunca atrasa a resposta, e uma falha aqui nunca
+        // quebra a conversa (flushLogBatch só loga erro, não propaga).
+        const logBatch = [];
+        pushLogEvent(logBatch, { tipo: "conversa", origem: "usuario", resumo: lastUserText });
+
         // Atalhos que a própria pessoa configurou no painel (mem.shortcuts) vencem antes
         // de qualquer chamada ao Groq — resposta instantânea, sem gastar cota de IA.
         const shortcutHit = matchUserShortcut(companionState.shortcuts, lastUserText);
         if (shortcutHit) {
           try {
             const shortcutReply = await resolveUserShortcut(env, shortcutHit);
-            if (shortcutReply) return json({ emotion: "neutro", reply: shortcutReply });
+            if (shortcutReply) {
+              pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: shortcutReply, detalhes: { via: "atalho" } });
+              flushLogBatch(env, ctx, logBatch);
+              return json({ emotion: "neutro", reply: shortcutReply });
+            }
           } catch (err) {
             console.error("shortcut_resolve_failed:", String(err?.message || err));
             // segue pro fluxo normal com o Groq se o atalho falhar
@@ -2008,6 +2413,7 @@ export default {
         let parsed;
         let saveMemory = null;
         let saveLearned = null;
+        let callMetrics = null;
         // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
         // provedores configurados em cadeia com fallback internamente, e
         // callGroqWithSearch já retenta a chamada que gera a FALA sem re-executar
@@ -2015,9 +2421,10 @@ export default {
         // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
         // segunda chamada ao LLM falhava.
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine), timestamped, 450, companionState);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine), timestamped, 450, companionState, logBatch);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
+          callMetrics = raw.metrics;
           const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
             parsed = JSON.parse(clean);
@@ -2027,6 +2434,7 @@ export default {
           }
         } catch (err) {
           console.error("companion_mode_failed:", String(err?.message || err));
+          pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Falha ao gerar resposta (LLM indisponível).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
         }
         if (!parsed) {
           // Antes de virar "engasgada", tenta os padrões mais comuns direto no painel
@@ -2042,6 +2450,8 @@ export default {
         if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
         if (saveMemory) parsed.save_memory = saveMemory;
         if (saveLearned) parsed.save_learned = saveLearned;
+        pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
+        flushLogBatch(env, ctx, logBatch);
         return json(parsed);
       }
       const reply = await callGroq(env, chatSystemPrompt(petState), trimmed.map(({ role, content }) => ({ role, content })), 120);
@@ -2054,7 +2464,7 @@ export default {
   // Cron Trigger nativo do Cloudflare (ver [triggers] no wrangler.toml) — roda a cada
   // 15 min, consulta o painel e dispara notificação push se houver algo pra avisar.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runScheduledPush(env));
+    ctx.waitUntil(runScheduledPush(env, ctx));
   },
 };
 // deploy automatico testado em 2026-08-19T18:56:14Z
