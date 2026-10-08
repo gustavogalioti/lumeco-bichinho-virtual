@@ -608,9 +608,10 @@ ${locationLine}
 ${timeAwarenessLine}
 ${learnedLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas de hoje/pra agora, pendentes, ou em andamento, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir explicitamente pra registrar algo no diário, use essa ferramenta além de responder normalmente — isso é silencioso, não fale que anotou. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
+Ao relatar a agenda de HOJE (nunca a de amanhã), compare o horário de cada compromisso com a hora atual informada acima: se todo mundo que estava marcado pra hoje já passou do horário, diga isso com naturalidade — algo como "por hoje você não tem mais nada marcado, seu único/último compromisso era às 10h, a reunião com X — inclusive, como foi?" — nomeando o compromisso e perguntando como foi, em vez de só recitar o horário como se ainda fosse acontecer. Se ainda tiver algo pela frente hoje, relate normalmente sem esse comentário.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
@@ -1008,11 +1009,11 @@ const CONSULTAR_TAREFAS_TOOL = {
   type: "function",
   function: {
     name: "consultar_tarefas",
-    description: "Consulta as tarefas do painel filtradas por coluna real. Use quando a pessoa pedir especificamente 'tarefas de hoje/pra agora', 'tarefas pendentes' ou 'tarefas em andamento' — pra pergunta genérica sobre tarefas, use consultar_painel em vez disso.",
+    description: "Consulta as tarefas do painel filtradas por coluna real. Use quando a pessoa pedir especificamente 'tarefas de agora/pra agora', 'tarefas de hoje', 'tarefas pendentes' ou 'tarefas em andamento' — pra pergunta genérica sobre tarefas, use consultar_painel em vez disso.",
     parameters: {
       type: "object",
       properties: {
-        filtro: { type: "string", enum: ["hoje", "pendentes", "andamento"], description: "hoje = Para Agora + De Hoje; pendentes = coluna Pendente; andamento = coluna Em Andamento." },
+        filtro: { type: "string", enum: ["agora", "hoje", "pendentes", "andamento"], description: "agora = SÓ a coluna Para Agora (use quando ela disser 'de agora'/'pra agora' especificamente); hoje = Para Agora + De Hoje juntas (visão geral do dia); pendentes = coluna Pendente; andamento = coluna Em Andamento." },
       },
       required: ["filtro"],
     },
@@ -1348,6 +1349,19 @@ function normalizeText(text) {
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+// Detecta um pedido explícito de registrar algo no diário ("anota/adiciona/registra/
+// escreve no diário que X") e extrai o texto X — usado tanto pelo fallback determinístico
+// (Groq fora do ar) quanto pela rede de segurança em callGroqWithSearch (Groq respondeu,
+// mas "esqueceu" de chamar a ferramenta e só confirmou de boca).
+function extractDiaryWriteText(userText) {
+  const n = normalizeText(userText);
+  if (!n) return null;
+  if (!/\bdiario\b/.test(n) || !/\b(anota|anote|adiciona|adicione|registra|registre|escreve|escreva)\b/.test(n)) return null;
+  const m = userText.match(/(?:anota|anote|adiciona|adicione|registra|registre|escreve|escreva)[^,:]*?(?:que|:)\s*(.+)/i);
+  const texto = (m ? m[1] : userText).trim();
+  return texto || null;
+}
+
 // Rede de segurança: quando o Groq falha de vez (rate limit, instabilidade), tenta
 // responder os pedidos mais comuns direto no painel, sem precisar do LLM — mesma
 // ideia do fallback por palavra-chave que o Pedro já usa. Só cobre os padrões que a
@@ -1359,13 +1373,10 @@ async function tryDeterministicFallback(env, userText) {
   if (!n) return null;
 
   try {
-    if (/\bdiario\b/.test(n) && /\b(anota|anote|adiciona|adicione|registra|registre|escreve|escreva)\b/.test(n)) {
-      const m = userText.match(/(?:anota|anote|adiciona|adicione|registra|registre|escreve|escreva)[^,:]*?(?:que|:)\s*(.+)/i);
-      const texto = (m ? m[1] : userText).trim();
-      if (texto) {
-        await callPainelCommand(env, "anotar_diario", { texto });
-        return "Anotei no diário.";
-      }
+    const diaryTexto = extractDiaryWriteText(userText);
+    if (diaryTexto) {
+      await callPainelCommand(env, "anotar_diario", { texto: diaryTexto });
+      return "Anotei no diário.";
     }
     if (/\bagenda\b|\bcompromisso/.test(n)) {
       const dia = /\bamanha\b/.test(n) ? "amanha" : "hoje";
@@ -1374,7 +1385,8 @@ async function tryDeterministicFallback(env, userText) {
     if (/\btarefa/.test(n)) {
       let filtro = "";
       if (/\bandamento\b/.test(n)) filtro = "andamento";
-      else if (/\bhoje\b|\bagora\b/.test(n)) filtro = "hoje";
+      else if (/\bagora\b/.test(n)) filtro = "agora";
+      else if (/\bhoje\b/.test(n)) filtro = "hoje";
       else if (/\bpendente/.test(n)) filtro = "pendentes";
       return await callPainelTasks(env, filtro);
     }
@@ -1919,6 +1931,31 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const metrics = () => ({ llmCalls: callCount, provider: providerUsed, latencyMs: totalLatencyMs, toolsUsed, guardEvents: guard.events });
   const logCalls = (extra = "") => console.log(`companion_llm_calls total=${callCount} provider=${providerUsed}${extra}`);
 
+  // Rede de segurança: se a pessoa pediu explicitamente pra anotar algo no diário, a
+  // escrita precisa acontecer de verdade nesta requisição — não basta o modelo "lembrar"
+  // de chamar a ferramenta, porque ele às vezes confirma de boca sem chamar nada (ver
+  // instrução "nunca diga que fez" no prompt de personalidade, que nem sempre é seguida).
+  // Checado só na hora de devolver a resposta final, depois de ver se algum tool_call
+  // desta mesma resposta já cobriu isso.
+  const diaryTexto = extractDiaryWriteText(lastUserText);
+  const finish = async (text, saveMemory, saveLearned, saveMemoryItem) => {
+    if (diaryTexto && canPainel && !toolsUsed.includes("anotar_no_diario")) {
+      try {
+        await callPainelCommand(env, "anotar_diario", { texto: diaryTexto });
+        toolsUsed.push("anotar_no_diario");
+        pushLogEvent(logBatch, {
+          tipo: "acao_pedida", origem: "jarbas",
+          resumo: `Executou "anotar_no_diario" (rede de segurança: pedido explícito não gerou chamada de ferramenta do modelo).`,
+          detalhes: { ferramenta: "anotar_no_diario", ok: true, redeSeguranca: true },
+        });
+      } catch (err) {
+        console.error("diary_safety_net_failed:", String(err?.message || err));
+      }
+    }
+    logCalls();
+    return { text, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
+  };
+
   callCount++;
   let first = await timedGroqRequest(baseMessages, maxTokens, tools);
   providerUsed = first._provider;
@@ -2034,24 +2071,20 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
-        logCalls();
-        return { text: secondContent, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
+        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem);
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
-      logCalls();
-      return { text, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
+      return finish(text, saveMemory, saveLearned, saveMemoryItem);
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
       pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
-      logCalls();
-      return { text, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
+      return finish(text, saveMemory, saveLearned, saveMemoryItem);
     }
   }
 
-  logCalls();
-  return { text: msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", saveMemory: null, saveLearned: null, saveMemoryItem: null, metrics: metrics() };
+  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null);
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
