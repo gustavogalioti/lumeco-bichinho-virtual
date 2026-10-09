@@ -36,8 +36,12 @@
   }
   /* ---------- FACE-1a: rosto em tela cheia (padrão) ---------- */
   .stage{
-    position:fixed; inset:0; z-index:0; background:var(--bg);
+    position:fixed; inset:0; z-index:0;
+    /* degradê escuro estático: é o que se vê quando o fundo animado (FACE-1b) está
+       desligado ou ainda não carregou — nunca uma tela preta lisa */
+    background:radial-gradient(circle at 50% 28%, #0c1620, var(--bg) 72%);
   }
+  #gl{ position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none; }
   #face{ position:absolute; inset:0; width:100%; height:100%; display:block; }
   /* moldura antiga (motor "classic") — fica oculta no modo padrão */
   .classic-only{ display:none; }
@@ -83,12 +87,21 @@
   .mic-btn svg{ width:28px; height:28px; }
   .hint{ font-size:13px; color:var(--muted); text-align:center; }
 
+  /* ---------- FACE-1b: painel de teste "Aparência" ---------- */
+  .test-grid{ display:flex; flex-wrap:wrap; gap:8px; }
+  .setup-card button.test-chip{
+    width:auto; background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text);
+    border-radius:20px; padding:6px 14px; font-weight:600; font-size:12.5px; cursor:pointer;
+  }
+  .test-chip:active{ transform:scale(0.96); }
+
   /* ---------- reversão: motor/layout "classic" (localStorage.raiz_face_engine==='classic') ---------- */
   body.classic-face .stage{
     position:relative; inset:auto; z-index:2; background:none;
     flex:1; display:flex; align-items:center; justify-content:center; width:100%;
   }
   body.classic-face #face{ display:none; }
+  body.classic-face #gl{ display:none; }
   body.classic-face .classic-only{
     display:block; position:relative;
     background:linear-gradient(165deg, var(--panel-1), var(--panel-2));
@@ -160,6 +173,7 @@
 </div>
 
 <div class="stage">
+  <canvas id="gl"></canvas>
   <canvas id="face"></canvas>
   <div class="classic-only"><div class="visor"><div class="eye-wrap"><canvas id="eyeClassic"></canvas></div></div></div>
 </div>
@@ -192,8 +206,7 @@
     <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
     <button id="interruptSensitivityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">sensibilidade: média</button>
     <div style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;">Toque na tela ou no microfone sempre interrompe o Jarbas enquanto ele fala.</div>
-    <button id="faceQualityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">efeitos: automático</button>
-    <div style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;">Só deste aparelho. "Leve" reduz brilhos extras e quadros por segundo — útil em telas menores ou aparelhos mais fracos.</div>
+    <button id="aparenciaTestBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🎨 Aparência (teste)</button>
     <button id="connectionBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔌 Conexão</button>
     <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
   </div>
@@ -323,6 +336,23 @@
     <button id="briefingNowBtn" type="button" class="btn-secondary" style="margin-top:14px;">🔊 Ouvir o resumo de hoje agora</button>
     <button id="sleepRoutineSaveBtn" style="margin-top:18px;">Salvar</button>
     <button id="sleepRoutineCancelBtn" class="btn-secondary">Cancelar</button>
+  </div>
+</div>
+
+<div class="setup hidden" id="aparenciaTestEl">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
+    <h2>🎨 Aparência (teste)</h2>
+    <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">Pra testar nos seus aparelhos — nada aqui é decidido pela IA ainda, isso vem depois.</p>
+    <button id="faceQualityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:0;">efeitos: automático</button>
+    <div style="font-size:11px; opacity:0.6; margin:4px 0 16px; padding-left:2px;">Só deste aparelho. "Leve" reduz brilhos extras, desliga o fundo animado e as brasas, e corta partículas — útil em telas menores ou aparelhos mais fracos.</div>
+    <label style="display:block; margin-bottom:6px; color:var(--muted); font-size:13px;">Expressões</label>
+    <div class="test-grid" id="testExprGrid"></div>
+    <label style="display:block; margin:16px 0 6px; color:var(--muted); font-size:13px;">Formas</label>
+    <div class="test-grid" id="testShapeGrid"></div>
+    <label style="display:block; margin:16px 0 6px; color:var(--muted); font-size:13px;">Cenas</label>
+    <div class="test-grid" id="testSceneGrid"></div>
+    <button id="testDissolveBtn" type="button" class="btn-secondary" style="width:100%; margin-top:16px;">Dissolver</button>
+    <button id="aparenciaTestCloseBtn" style="margin-top:18px;">Fechar</button>
   </div>
 </div>
 
@@ -484,8 +514,17 @@ function listenLevel(now){
 
 /* ---------- layout: rosto centrado em ~42% da altura livre, sem painel lateral (sem WebGL/lab UI nesta etapa) ---------- */
 function geom(){
-  const aw=W, ah=H, rob=G.rob.x;
-  return { cx:vcx.x, S: vS.x*(1-.46*rob), gap: vS.x*(1-.46*rob)*.8, cy: lerp(vcy.x, ah*.15, clamp(rob,0,1.2)) };
+  const aw=W, ah=availHeight(), rob=G.rob.x;
+  return {
+    cx:vcx.x, S: vS.x*(1-.46*rob), gap: vS.x*(1-.46*rob)*.8, cy: lerp(vcy.x, ah*.15, clamp(rob,0,1.2)),
+    oy: ah*.6, sc: Math.min(aw*.78, ah*.5)/310
+  };
+}
+// FACE-1b: posição dos olhos em espaço de mundo do THREE.js (origem no centro da tela,
+// Y pra cima) — de onde as partículas saem e pra onde voltam.
+function eyeWorld(){
+  const g = geom();
+  return { lx:(g.cx-g.gap)-W/2, ly:H/2-g.cy, rx:(g.cx+g.gap)-W/2, ry:H/2-g.cy, S:g.S };
 }
 
 /* ---------- 2D: olhos e boca (idêntico ao laboratório) ---------- */
@@ -616,17 +655,19 @@ document.addEventListener('pointerdown', markInteraction, true);
 document.addEventListener('keydown', markInteraction, true);
 
 function targetFrameInterval(now){
-  const idleMs = now - lastInteractionAt;
-  const activelyTalking = (typeof isSpeaking!=='undefined' && isSpeaking) || AU.level>.03 || (typeof listening!=='undefined' && listening) || G.listen.x>.05;
-  if(!activelyTalking){
-    if(idleMs > 300000) return 1000/10;
-    if(idleMs > 60000) return 1000/24;
-  }
+  const band = idleBand(now); // FACE-1b: mesma classificação usada pelo renderGL
+  if(band==='deep') return 1000/10;
+  if(band==='idle') return 1000/24;
   return effectiveQuality()==='leve' ? 1000/30 : 0;
 }
 
 /* ---------- aplica mem.config.aparencia (painel, aba Aparência) ---------- */
-const APARENCIA_DEFAULTS = { velocidade:1, elasticidade:.5, intensidadeExpressoes:1, olharVivo:true, piscadas:true, voltarAoNeutro:true, expressoesAtivas:null };
+const APARENCIA_DEFAULTS = {
+  velocidade:1, elasticidade:.5, intensidadeExpressoes:1, olharVivo:true, piscadas:true, voltarAoNeutro:true, expressoesAtivas:null,
+  // FACE-1b: cenário animado e materialização
+  fundoIntensidade:.3, fundoSegueHumor:true, particulas:12000, tamanhoTriangulos:4.5, girar:.5,
+  manterSegundos:9, manterAteDissolver:false, coresMateriais:'neon', qualidadeAutomatica:true, efeitosReduzidos:false
+};
 function applyAparencia(){
   const ap = { ...APARENCIA_DEFAULTS, ...((typeof mem!=='undefined' && mem && mem.config && mem.config.aparencia) || {}) };
   tune.speed = Number(ap.velocidade) || 1;
@@ -638,6 +679,16 @@ function applyAparencia(){
   opts.autoReturn = ap.voltarAoNeutro !== false;
   const ativas = Array.isArray(ap.expressoesAtivas) ? ap.expressoesAtivas.map(canonicalExpr).filter(Boolean) : null;
   opts.expressoesAtivas = (ativas && ativas.length) ? ativas : Object.keys(EXPR);
+  opts.fundoIntensidade = Number(ap.fundoIntensidade); if(!Number.isFinite(opts.fundoIntensidade)) opts.fundoIntensidade = APARENCIA_DEFAULTS.fundoIntensidade;
+  opts.fundoSegueHumor = ap.fundoSegueHumor !== false;
+  opts.particulas = Number(ap.particulas) || APARENCIA_DEFAULTS.particulas;
+  opts.tamanhoTriangulos = Number(ap.tamanhoTriangulos) || APARENCIA_DEFAULTS.tamanhoTriangulos;
+  opts.girar = Number(ap.girar); if(!Number.isFinite(opts.girar)) opts.girar = APARENCIA_DEFAULTS.girar;
+  opts.manterSegundos = Number(ap.manterSegundos) || APARENCIA_DEFAULTS.manterSegundos;
+  opts.manterAteDissolver = !!ap.manterAteDissolver;
+  opts.coresMateriais = ap.coresMateriais === 'reais' ? 'reais' : 'neon';
+  opts.qualidadeAutomatica = ap.qualidadeAutomatica !== false;
+  opts.efeitosReduzidos = !!ap.efeitosReduzidos;
 }
 
 function resizeFace(){
@@ -645,6 +696,7 @@ function resizeFace(){
   dpr = Math.min(devicePixelRatio||1, 2);
   needSnap = true;
   face.width = Math.round(W*dpr); face.height = Math.round(H*dpr);
+  resizeGL(); // FACE-1b: redimensiona o canvas WebGL junto (no-op se ainda não carregou)
 }
 let needSnap = true, lastFrameAt = performance.now();
 const bottomUiEl = document.querySelector('.bottom-ui');
@@ -664,14 +716,535 @@ function faceFrameBody(now){
   for(const k in G) G[k].step(dt);
   blinkL.step(dt); blinkR.step(dt);
   behaviors(now);
+  if(P.mode==='holding' || P.mode==='forming'){ gazeTarget=[0,.7]; } // FACE-1b: olha pra criação
   G.gx.t=gazeTarget[0]; G.gy.t=gazeTarget[1];
   readAudio(dt);
   const ah = availHeight();
   vcx.t = W/2; vcy.t = ah*.42; vS.t = Math.max(46, Math.min(W*.30, ah*.34));
   if(needSnap){ vcx.x=vcx.t; vcy.x=vcy.t; vS.x=vS.t; vcx.v=vcy.v=vS.v=0; needSnap=false; }
   vcx.step(dt); vcy.step(dt); vS.step(dt);
+  // FACE-1b: fundo animado e materialização — carregados sob demanda, nunca bloqueiam o resto
+  maybeStartGL();
+  renderGL(now, t, dt, idleBand(now));
   drawFace(now, t, effectiveQuality()==='leve');
 }
+
+/* ========== FACE-1b: cenário animado (fundo) + materialização (partículas) ==========
+   Tudo aqui é carregado SOB DEMANDA: o Three.js só é injetado (via cdnjs, mesmo r128
+   do laboratório) quando o fundo animado vai mesmo rodar ou na primeira materialização.
+   Sem WebGL ou falha de rede, o app continua exatamente como na FACE-1a — nunca quebra
+   a conversa por causa disso. Ainda sem IA decidindo nada: só API + painel de teste. */
+const MAXN = 20000;
+const PAL = { // [cor1, cor2, intensidade, velocidade] do fundo, por expressão
+  neutro:[[0,.62,.8],[.15,.35,.95],.5,1], feliz:[[0,.78,.66],[.2,.55,1],.6,1.1], pensando:[[.5,.32,1],[0,.7,.9],.55,1.2],
+  surpreso:[[0,.8,1],[.8,.3,.95],.7,1.6], focado:[[0,.55,.85],[.1,.3,1],.5,.8], confirmado:[[0,.75,.8],[.2,.5,1],.55,1],
+  dormindo:[[.2,.14,.55],[.38,.2,.72],.32,.3], alerta:[[.95,.25,.65],[0,.7,1],.75,1.8], curioso:[[.35,.5,1],[0,.75,.85],.55,1.1],
+  piscadinha:[[0,.78,.7],[.5,.35,1],.6,1.1], 'empático':[[.12,.28,.75],[.42,.22,.7],.38,.5],
+  bravo:[[0,.55,.85],[.1,.3,1],.5,.8], muito_bravo:[[1,.22,.04],[1,.6,.1],.9,2.4], acordando:[[0,.62,.8],[.15,.35,.95],.5,1]
+};
+const bg = { c1:[0,.62,.8], c2:[.15,.35,.95], i:.5, s:1 };
+const SHAPES = {
+  bola:()=>genShape([{w:1,fn:()=>{ const u=rndRange(-1,1), a=rndRange(0,TAU), s=Math.sqrt(1-u*u), x=s*Math.cos(a), z=s*Math.sin(a); const band=Math.floor((u+1)*3)%2; const seam=Math.abs(Math.sin(Math.atan2(z,x)*3))<.1; const c=seam?[.15,.2,.35]:(band?[.96,.98,1]:[.1,.78,1]); return [x*118,u*118,z*118,c]; }}]),
+  bolo:()=>genShape([
+    {w:24,fn:()=>{ const p=cylPt(112,52,-62,.48); p[3]=[1,.55,.75]; return p; }},
+    {w:19,fn:()=>{ const p=cylPt(82,48,-10,.5); p[3]=[1,.93,.8]; return p; }},
+    {w:14,fn:()=>{ const p=cylPt(54,42,36,.55); p[3]=[1,.4,.65]; return p; }},
+    {w:10,fn:()=>{ const d=disc(136,-96+rndRange(-2,2)); d[3]=[.85,.95,1]; return d; }},
+    {w:6,fn:()=>{ const a=rndRange(0,TAU); return [Math.cos(a)*82,16+rndRange(-3,3),Math.sin(a)*82,[1,1,1]]; }},
+    {w:9,fn:()=>{ const cx=[-20,0,20][(Math.random()*3)|0]; const a=rndRange(0,TAU); return [cx+Math.cos(a)*3.2,rndRange(57,92),Math.sin(a)*3.2,[.4,.8,1]]; }},
+    {w:6,fn:()=>{ const cx=[-20,0,20][(Math.random()*3)|0]; const r=Math.random(); return [cx+rndRange(-1,1)*5*(1-r),94+r*18,rndRange(-1,1)*4*(1-r),[1,.72,.2]]; }}
+  ]),
+  'coração':()=>genShape([{w:1,fn:()=>{ const t=rndRange(0,TAU), hx=16*Math.pow(Math.sin(t),3), hy=13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t); const f=Math.random()<.35?rndRange(.92,1):Math.sqrt(Math.random()); return [hx*f*7.4,(hy+1)*f*7.4+8,rndRange(-1,1)*(1-f*f)*34,[1,.22+rndRange(0,.15),.42+rndRange(0,.25)]]; }}]),
+  sol:()=>genShape([
+    {w:46,fn:()=>{ const d=disc(64,0); return [d[0],d[2],rndRange(-6,6),[1,.82,.2]]; }},
+    {w:44,fn:()=>{ const k=(Math.random()*12)|0, a=k*TAU/12, ca=Math.cos(a), sa=Math.sin(a); const q=triPt([0,82,0],[-13,128,0],[13,128,0]); return [q[0]*ca-q[1]*sa,q[0]*sa+q[1]*ca,rndRange(-5,5),[1,.6,.15]]; }},
+    {w:10,fn:()=>{ const a=rndRange(0,TAU), r=rndRange(68,76); return [Math.cos(a)*r,Math.sin(a)*r,rndRange(-3,3),[1,.95,.6]]; }}
+  ]),
+  casa:()=>{
+    function box(c,wd,hg,dp,cy){ const A=[hg*dp,wd*dp,wd*hg]; return ()=>{ const r=Math.random()*(A[0]*2+A[1]*2+A[2]*2); const x=rndRange(-wd/2,wd/2), y=rndRange(-hg/2,hg/2), z=rndRange(-dp/2,dp/2);
+      if(r<A[0]) return [wd/2,cy+y,z,c]; if(r<A[0]*2) return [-wd/2,cy+y,z,c]; if(r<A[0]*2+A[1]) return [x,cy+hg/2,z,c]; if(r<A[0]*2+A[1]*2) return [x,cy-hg/2,z,c]; if(r<A[0]*2+A[1]*2+A[2]) return [x,cy+y,dp/2,c]; return [x,cy+y,-dp/2,c]; }; }
+    const roofC=[.9,.32,.28], ap=[0,92,0], b1=[-95,22,70], b2=[95,22,70], b3=[95,22,-70], b4=[-95,22,-70];
+    return genShape([
+      {w:40,fn:box([.96,.9,.8],150,100,110,-30)},
+      {w:26,fn:()=>{ const k=(Math.random()*4)|0; const t=k===0?triPt(ap,b1,b2):k===1?triPt(ap,b2,b3):k===2?triPt(ap,b3,b4):triPt(ap,b4,b1); t[3]=roofC; return t; }},
+      {w:6,fn:()=>[rndRange(-15,15),rndRange(-82,-30),56,[.55,.35,.2]]},
+      {w:5,fn:()=>[rndRange(35,62),rndRange(-22,6),56,[.6,.85,1]]},
+      {w:3,fn:()=>[rndRange(-70,-40),rndRange(-22,6),56,[.6,.85,1]]}
+    ]);
+  },
+  flor:()=>genShape([
+    {w:12,fn:()=>{ const d=disc(26,0); return [d[0],40+d[2],rndRange(-4,4),[1,.82,.2]]; }},
+    {w:58,fn:()=>{ const k=(Math.random()*8)|0, a=k*TAU/8, u=rndRange(0,TAU), r=Math.sqrt(Math.random()); const px=Math.cos(u)*r*34+56, py=Math.sin(u)*r*17; const ca=Math.cos(a), sa=Math.sin(a); return [px*ca-py*sa,40+px*sa+py*ca,rndRange(-4,4),k%2?[1,.62,.85]:[.82,.55,1]]; }},
+    {w:14,fn:()=>[rndRange(-1,1)*4,rndRange(-135,12),rndRange(-1,1)*4,[.3,.85,.45]]},
+    {w:16,fn:()=>{ const s=Math.random()<.5?-1:1, u=rndRange(0,TAU), r=Math.sqrt(Math.random()); return [s*(34+Math.cos(u)*r*26),-70+Math.sin(u)*r*11+(s<0?4:-4),rndRange(-3,3),[.35,.9,.5]]; }}
+  ])
+};
+const SCENES = {
+  'praia':[{e:'🏖️',x:0,y:10,s:210},{e:'☀️',x:105,y:-105,s:80},{e:'🦀',x:-95,y:105,s:70},{e:'🌊',x:100,y:108,s:75},{e:'🐚',x:-135,y:55,s:48}],
+  'aniversário':[{e:'🎂',x:0,y:22,s:190},{e:'🎈',x:-108,y:-72,s:84},{e:'🎈',x:112,y:-84,s:78},{e:'🎉',x:0,y:-118,s:70}],
+  'gol':[{e:'🏟️',x:0,y:-28,s:200},{e:'⚽',x:-62,y:102,s:84},{e:'🎉',x:104,y:-112,s:72},{e:'🔥',x:-116,y:-96,s:60}],
+  'mirão':[{e:'🍗',x:-76,y:28,s:128},{e:'🍟',x:78,y:34,s:124},{e:'🍹',x:0,y:-84,s:112}],
+  'conquista':[{e:'🏆',x:0,y:18,s:176},{e:'🎆',x:-102,y:-86,s:90},{e:'🎆',x:108,y:-92,s:84},{e:'👏',x:0,y:128,s:62}],
+  'chuva':[{e:'🌧️',x:0,y:-62,s:170},{e:'☂️',x:-6,y:84,s:116},{e:'🥀',x:112,y:112,s:60}]
+};
+
+/* ---------- carregamento sob demanda do Three.js (mesmo r128 do laboratório) ---------- */
+let threeLoadPromise = null;
+function ensureThree(){
+  if(window.THREE) return Promise.resolve(window.THREE);
+  if(threeLoadPromise) return threeLoadPromise;
+  threeLoadPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s.async = true;
+    s.onload = ()=>{ window.THREE ? resolve(window.THREE) : reject(new Error('three_missing_after_load')); };
+    s.onerror = ()=> reject(new Error('three_load_failed'));
+    document.head.appendChild(s);
+  });
+  return threeLoadPromise;
+}
+
+/* ---------- partículas: arrays típicos só alocados quando algo realmente vai usar WebGL ---------- */
+let particlesInited = false;
+let pos, vel, col, cT, seed, delay, kk, side, lo;
+const EMN = 380;
+let emPos, emCol, emSeed, emLife, emVel;
+function initParticleArrays(){
+  if(particlesInited) return;
+  particlesInited = true;
+  pos=new Float32Array(MAXN*3); vel=new Float32Array(MAXN*3); col=new Float32Array(MAXN*4); cT=new Float32Array(MAXN*3);
+  seed=new Float32Array(MAXN); delay=new Float32Array(MAXN); kk=new Float32Array(MAXN); side=new Uint8Array(MAXN); lo=new Float32Array(MAXN*2);
+  for(let pi=0; pi<MAXN; pi++){
+    seed[pi]=Math.random(); kk[pi]=rndRange(.65,1.35); side[pi]=pi&1;
+    lo[pi*2]=rndRange(-.45,.45); lo[pi*2+1]=rndRange(-.45,.45);
+    col[pi*4]=0; col[pi*4+1]=.9; col[pi*4+2]=1; col[pi*4+3]=0;
+  }
+  emPos=new Float32Array(EMN*3); emCol=new Float32Array(EMN*4); emSeed=new Float32Array(EMN); emLife=new Float32Array(EMN); emVel=new Float32Array(EMN*2);
+}
+
+const P = { n:12000, mode:'home', shape:null, holdUntil:0, formedAt:0, k:52, zeta:.52, swirl:1 };
+let offA, colA, emGeo, emOff, emColA, emMat;
+let renderer, scene, cam, bgScene, bgCam, bgMat, geo, partMat;
+let glReady = false, glFailed = false, glInitPromise = null;
+const glCanvas = document.getElementById('gl');
+
+function initGL(THREE){
+  try{
+    renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias:false, alpha:false, powerPreference:'high-performance' });
+  }catch(e){ return false; }
+  renderer.autoClear = false; renderer.setClearColor(0x04070b, 1);
+  bgScene = new THREE.Scene(); bgCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  bgMat = new THREE.ShaderMaterial({
+    uniforms:{ uTime:{value:0}, uRes:{value:new THREE.Vector2(1,1)}, uC1:{value:new THREE.Vector3()}, uC2:{value:new THREE.Vector3()}, uInt:{value:.5}, uSpd:{value:1}, uFire:{value:0} },
+    vertexShader:'void main(){gl_Position=vec4(position,1.0);}',
+    fragmentShader:[
+      'precision highp float;uniform float uTime,uInt,uSpd,uFire;uniform vec2 uRes;uniform vec3 uC1,uC2;',
+      'float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}',
+      'float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}',
+      'float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*n(p);p*=2.02;a*=.5;}return v;}',
+      'void main(){vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y;float t=uTime*uSpd*.06;vec2 q=uv*2.3;',
+      'vec2 w=vec2(fbm(q+vec2(0.,t)),fbm(q+vec2(5.2,1.3)-t));float f=fbm(q+2.*w+t*.7);',
+      'float ridge=pow(1.-abs(f*2.-1.),7.);float vig=smoothstep(1.25,.15,length(uv*vec2(.9,1.)));',
+      'vec3 c=mix(uC1,uC2,w.x)*ridge*uInt*(.25+.75*vig);',
+      'vec2 g=uv*7.+vec2(t*2.,0.);vec2 id=floor(g);vec2 fp=fract(g)-.5;float nd=h(id);float node=smoothstep(.07,0.,length(fp-(vec2(h(id+3.1),h(id+7.7))-.5)*.5))*step(.82,nd)*(.5+.5*sin(uTime*1.3+nd*40.));',
+      'c+=mix(uC1,uC2,.5)*node*uInt*.55*vig;c+=uC1*.02*vig;',
+      'if(uFire>.01){float fl=fbm(vec2(uv.x*2.3,uv.y*1.3-uTime*1.7)),fl2=fbm(vec2(uv.x*5.+3.1,uv.y*2.6-uTime*2.6));',
+      'float hb=smoothstep(.25,-.55,uv.y);float f=clamp((fl*.62+fl2*.38)*1.2+hb*.95-.72,0.,1.);f=f*f*(3.-2.*f);',
+      'vec3 fc=vec3(1.7*f,.95*f*f,.25*f*f*f);c=c*(1.-.5*clamp(uFire,0.,1.))+fc*clamp(uFire,0.,1.)*.95;}',
+      'gl_FragColor=vec4(c,1.);}'
+    ].join('\n'), depthTest:false, depthWrite:false
+  });
+  bgScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), bgMat));
+  scene = new THREE.Scene(); cam = new THREE.PerspectiveCamera(45,1,1,4000);
+  geo = new THREE.InstancedBufferGeometry();
+  const tri = new Float32Array([0,1,0,.866,-.5,0,-.866,-.5,0]);
+  geo.setAttribute('position', new THREE.BufferAttribute(tri,3));
+  offA = new THREE.InstancedBufferAttribute(pos,3); offA.setUsage(THREE.DynamicDrawUsage);
+  colA = new THREE.InstancedBufferAttribute(col,4); colA.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('offset', offA); geo.setAttribute('iColor', colA); geo.setAttribute('iSeed', new THREE.InstancedBufferAttribute(seed,1));
+  geo.instanceCount = 0;
+  partMat = new THREE.ShaderMaterial({
+    uniforms:{ uTime:{value:0}, uSize:{value:4.5} },
+    vertexShader:[
+      'uniform float uTime,uSize;attribute vec3 offset;attribute vec4 iColor;attribute float iSeed;varying vec4 vC;',
+      'void main(){float t=uTime*(.6+iSeed*1.4)+iSeed*20.;vec3 ax=normalize(vec3(sin(iSeed*91.),cos(iSeed*57.),sin(iSeed*33.)+.01));float c=cos(t),s=sin(t);',
+      'vec3 p=position*uSize*(.7+iSeed*.8);p=p*c+cross(ax,p)*s+ax*dot(ax,p)*(1.-c);',
+      'vC=iColor;gl_Position=projectionMatrix*modelViewMatrix*vec4(offset+p,1.);}'
+    ].join('\n'),
+    fragmentShader:'precision mediump float;varying vec4 vC;void main(){gl_FragColor=vec4(vC.rgb,vC.a*.9);}',
+    transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geo, partMat); mesh.frustumCulled=false; scene.add(mesh);
+  for(let e=0;e<EMN;e++){ emSeed[e]=Math.random(); emLife[e]=rndRange(0,3); }
+  emGeo = new THREE.InstancedBufferGeometry(); emGeo.setAttribute('position', new THREE.BufferAttribute(tri,3));
+  emOff = new THREE.InstancedBufferAttribute(emPos,3); emOff.setUsage(THREE.DynamicDrawUsage);
+  emColA = new THREE.InstancedBufferAttribute(emCol,4); emColA.setUsage(THREE.DynamicDrawUsage);
+  emGeo.setAttribute('offset', emOff); emGeo.setAttribute('iColor', emColA); emGeo.setAttribute('iSeed', new THREE.InstancedBufferAttribute(emSeed,1));
+  emGeo.instanceCount = 0;
+  emMat = partMat.clone(); emMat.uniforms = { uTime:{value:0}, uSize:{value:2.6} };
+  const emMesh = new THREE.Mesh(emGeo, emMat); emMesh.frustumCulled=false; scene.add(emMesh);
+  return true;
+}
+
+function ensureGL(){
+  if(glReady) return Promise.resolve(true);
+  if(glFailed) return Promise.reject(new Error('webgl_unavailable'));
+  if(glInitPromise) return glInitPromise;
+  glInitPromise = ensureThree().then((THREE)=>{
+    initParticleArrays();
+    if(!initGL(THREE)) throw new Error('webgl_init_failed');
+    glReady = true;
+    resizeGL();
+  }).catch((err)=>{
+    console.error('face_gl_init_failed:', String((err && err.message) || err));
+    glFailed = true;
+    throw err;
+  }).finally(()=>{ glInitPromise = null; });
+  return glInitPromise;
+}
+function resizeGL(){
+  if(!glReady) return;
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1, (innerWidth<760)?1.5:2));
+  renderer.setSize(W, H, false);
+  bgMat.uniforms.uRes.value.set(W*renderer.getPixelRatio(), H*renderer.getPixelRatio());
+  cam.aspect = W/H; cam.position.z = (H/2)/Math.tan(22.5*Math.PI/180); cam.updateProjectionMatrix();
+}
+
+/* ---------- aviso discreto (falha de materialização/WebGL) — nunca uma exceção visível ---------- */
+let faceToastTimer = 0;
+function showFaceToast(msg){
+  let el = document.getElementById('faceToast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'faceToast';
+    el.style.cssText = 'position:fixed; left:50%; top:calc(env(safe-area-inset-top,0px) + 70px); transform:translateX(-50%); background:rgba(7,14,22,0.88); border:1px solid rgba(0,224,255,0.3); color:var(--text); padding:9px 16px; border-radius:12px; font-size:12.5px; z-index:6; opacity:0; pointer-events:none; transition:opacity .25s; text-align:center; max-width:80vw;';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(faceToastTimer);
+  faceToastTimer = setTimeout(()=>{ el.style.opacity = '0'; }, 2600);
+}
+
+/* ---------- formas (portado do laboratório, mesma lógica) ---------- */
+function neonOf(y){ const t=clamp((y+150)/300,0,1), b=rndRange(.6,1); if(Math.random()<.05) return [.88*b+.12,1,1]; return [lerp(0,.62,t*.9)*b, lerp(.9,.42,t*.9)*b, b]; }
+function genShape(parts){
+  let total=0; for(const p of parts) total+=p.w;
+  const ps=new Float32Array(MAXN*3), rl=new Float32Array(MAXN*3); let n=0;
+  for(const p of parts){
+    const cnt=Math.round(MAXN*p.w/total);
+    for(let j=0;j<cnt && n<MAXN; j++,n++){ const r=p.fn(), c=r[3]||p.c||[1,1,1]; ps[n*3]=r[0]; ps[n*3+1]=r[1]; ps[n*3+2]=r[2]; rl[n*3]=c[0]; rl[n*3+1]=c[1]; rl[n*3+2]=c[2]; }
+  }
+  while(n<MAXN){ const s=(Math.random()*n)|0; ps[n*3]=ps[s*3]+rndRange(-1,1); ps[n*3+1]=ps[s*3+1]+rndRange(-1,1); ps[n*3+2]=ps[s*3+2]+rndRange(-1,1); rl[n*3]=rl[s*3]; rl[n*3+1]=rl[s*3+1]; rl[n*3+2]=rl[s*3+2]; n++; }
+  for(n=MAXN-1;n>0;n--){ const m=(Math.random()*(n+1))|0; for(let k2=0;k2<3;k2++){ let a=ps[n*3+k2]; ps[n*3+k2]=ps[m*3+k2]; ps[m*3+k2]=a; a=rl[n*3+k2]; rl[n*3+k2]=rl[m*3+k2]; rl[m*3+k2]=a; } }
+  const ne=new Float32Array(MAXN*3); for(n=0;n<MAXN;n++){ const c2=neonOf(ps[n*3+1]); ne[n*3]=c2[0]; ne[n*3+1]=c2[1]; ne[n*3+2]=c2[2]; }
+  return { pos:ps, real:rl, neon:ne };
+}
+function disc(r,y){ const a=rndRange(0,TAU), d=Math.sqrt(Math.random())*r; return [Math.cos(a)*d, y, Math.sin(a)*d]; }
+function cylPt(r,h,yc,sideP){ if(Math.random()<sideP){ const a=rndRange(0,TAU); return [Math.cos(a)*r, yc+rndRange(-h/2,h/2), Math.sin(a)*r]; } return disc(r, yc+h/2); }
+function triPt(a,b,c){ let u=Math.random(), v=Math.random(); if(u+v>1){ u=1-u; v=1-v; } return [a[0]+u*(b[0]-a[0])+v*(c[0]-a[0]), a[1]+u*(b[1]-a[1])+v*(c[1]-a[1]), a[2]+u*(b[2]-a[2])+v*(c[2]-a[2])]; }
+function emojiShape(txt){
+  try{
+    const c=document.createElement('canvas'); c.width=c.height=300; const x=c.getContext('2d',{willReadFrequently:true});
+    x.textAlign='center'; x.textBaseline='middle';
+    let isEmoji=false; try{ isEmoji=/\p{Extended_Pictographic}/u.test(txt); }catch(e){}
+    if(isEmoji){ x.font='230px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif'; }
+    else{ x.font='700 150px "Chakra Petch",sans-serif'; const wd=x.measureText(txt).width; if(wd>270) x.font='700 '+Math.floor(150*270/wd)+'px "Chakra Petch",sans-serif'; x.fillStyle='#fff'; }
+    x.fillText(txt, 150, isEmoji?160:155);
+    const d=x.getImageData(0,0,300,300).data, idx=[];
+    for(let i=3;i<d.length;i+=4) if(d[i]>60) idx.push((i-3)/4);
+    if(idx.length<60) return null;
+    const ps=new Float32Array(MAXN*3), rl=new Float32Array(MAXN*3), ne=new Float32Array(MAXN*3);
+    for(let n=0;n<MAXN;n++){
+      const q=idx[(Math.random()*idx.length)|0], px=q%300, py=(q/300)|0, o=q*4;
+      ps[n*3]=px-150+rndRange(-.7,.7); ps[n*3+1]=-(py-150)+rndRange(-.7,.7); ps[n*3+2]=rndRange(-9,9);
+      if(isEmoji){ rl[n*3]=d[o]/255; rl[n*3+1]=d[o+1]/255; rl[n*3+2]=d[o+2]/255; } else { rl[n*3]=.7; rl[n*3+1]=.95; rl[n*3+2]=1; }
+      const nc=neonOf(ps[n*3+1]); ne[n*3]=nc[0]; ne[n*3+1]=nc[1]; ne[n*3+2]=nc[2];
+    }
+    return { pos:ps, real:rl, neon:ne };
+  }catch(e){ return null; }
+}
+function canvasShape(c, colored){
+  try{
+    const n=c.width, x=c.getContext('2d',{willReadFrequently:true}), d=x.getImageData(0,0,n,n).data, idx=[];
+    for(let i=3;i<d.length;i+=4) if(d[i]>60) idx.push((i-3)/4);
+    if(idx.length<60) return null;
+    const k=300/n, ps=new Float32Array(MAXN*3), rl=new Float32Array(MAXN*3), ne=new Float32Array(MAXN*3);
+    for(let q=0;q<MAXN;q++){
+      const id=idx[(Math.random()*idx.length)|0], px=id%n, py=(id/n)|0, o=id*4;
+      ps[q*3]=(px-n/2)*k+rndRange(-.7,.7); ps[q*3+1]=-(py-n/2)*k+rndRange(-.7,.7); ps[q*3+2]=rndRange(-9,9);
+      if(colored){ rl[q*3]=d[o]/255; rl[q*3+1]=d[o+1]/255; rl[q*3+2]=d[o+2]/255; } else { rl[q*3]=.7; rl[q*3+1]=.95; rl[q*3+2]=1; }
+      const nc=neonOf(ps[q*3+1]); ne[q*3]=nc[0]; ne[q*3+1]=nc[1]; ne[q*3+2]=nc[2];
+    }
+    return { pos:ps, real:rl, neon:ne };
+  }catch(e){ return null; }
+}
+function sceneShape(items){
+  const c=document.createElement('canvas'); c.width=c.height=360; const x=c.getContext('2d'); x.textAlign='center'; x.textBaseline='middle';
+  (items||[]).forEach((it)=>{ const s=clamp(+it.s||100,20,330); x.font=s+'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif'; x.fillText(String(it.e||'').slice(0,12), 180+(+it.x||0), 180+(+it.y||0)+s*.07); });
+  return canvasShape(c, true);
+}
+function svgShape(svgText){
+  return new Promise((resolve)=>{
+    try{
+      const doc=new DOMParser().parseFromString(svgText,'image/svg+xml'), el=doc.documentElement;
+      if(!el || el.nodeName.toLowerCase()!=='svg' || doc.querySelector('parsererror')){ resolve(null); return; }
+      if(!el.getAttribute('viewBox') && !el.getAttribute('width')) el.setAttribute('viewBox','0 0 100 100');
+      el.setAttribute('width','340'); el.setAttribute('height','340');
+      if(!el.getAttribute('xmlns')) el.setAttribute('xmlns','http://www.w3.org/2000/svg'); // sem isso a <img> não decodifica o data URI
+      const img=new Image();
+      img.onload=()=>{ const c=document.createElement('canvas'); c.width=c.height=360; c.getContext('2d').drawImage(img,10,10,340,340); resolve(canvasShape(c,true)); };
+      img.onerror=()=>resolve(null);
+      img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(new XMLSerializer().serializeToString(el));
+    }catch(e){ resolve(null); }
+  });
+}
+
+/* ---------- validação do que entra (cenas e SVG) — qualquer coisa inválida vira aviso
+   discreto, nunca exceção; limites: até 8 itens/cena, "e" até 12 caracteres, "s" 20–330,
+   SVG até 6KB sem <script>/<foreignObject>/<image> externa/atributos on*. ---------- */
+function validateSceneItems(items){
+  if(!Array.isArray(items) || !items.length) return null;
+  const clean = items.slice(0,8).map((it)=>({
+    e: String((it && it.e) || '').slice(0,12),
+    x: Number(it && it.x) || 0,
+    y: Number(it && it.y) || 0,
+    s: clamp(Number(it && it.s) || 100, 20, 330),
+  })).filter((it)=>it.e);
+  return clean.length ? clean : null;
+}
+function validateSvg(svgText){
+  if(typeof svgText !== 'string' || !svgText.trim()) return null;
+  if(new TextEncoder().encode(svgText).length > 6000) return null;
+  if(/<\s*script/i.test(svgText)) return null;
+  if(/<\s*foreignObject/i.test(svgText)) return null;
+  if(/\son[a-z]+\s*=/i.test(svgText)) return null;
+  const imgHrefRe = /<\s*image\b[^>]*\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']/gi;
+  let m;
+  while((m = imgHrefRe.exec(svgText))){
+    if(/^(?:[a-z]+:)?\/\//i.test(m[1].trim())) return null;
+  }
+  return svgText;
+}
+
+/* ---------- materialização: partículas saem dos olhos, formam a figura, voltam ---------- */
+function setColorTargets(){
+  if(!P.shape) return;
+  const real = opts.coresMateriais === 'reais';
+  const src = real ? P.shape.real : P.shape.neon;
+  cT.set(src);
+  if(P.shape.flat){ const f = real?.5:.75; for(let i=0;i<cT.length;i++) cT[i]*=f; }
+}
+function spawnFromEyes(){
+  const E = eyeWorld();
+  for(let i=0;i<MAXN;i++){
+    const sx=side[i]?E.rx:E.lx, sy=side[i]?E.ry:E.ly;
+    pos[i*3]=sx+rndRange(-.4,.4)*E.S; pos[i*3+1]=sy+rndRange(-.4,.4)*E.S; pos[i*3+2]=rndRange(-10,10);
+    const a=rndRange(0,TAU), sp=rndRange(40,200);
+    vel[i*3]=Math.cos(a)*sp; vel[i*3+1]=Math.sin(a)*sp+60; vel[i*3+2]=rndRange(-40,40); col[i*4+3]=0;
+  }
+}
+function effectiveParticleCount(){
+  const configured = Math.max(500, Math.min(MAXN, Number(opts.particulas) || 12000));
+  return effectiveQuality()==='leve' ? Math.min(configured, 6000) : configured;
+}
+function notifyMaterialized(meta){
+  if(meta.replay) return;
+  const cb = window.Jarbas && window.Jarbas.onMaterialized;
+  if(typeof cb !== 'function') return;
+  try{
+    cb({
+      title: meta.title || 'criação',
+      kind: meta.kind || 'forma',
+      data: typeof meta.data === 'string' ? meta.data.slice(0,6000) : meta.data,
+      origin: meta.origin || 'pedido',
+      at: new Date().toISOString(),
+    });
+  }catch(e){ console.error('onMaterialized_callback_failed:', e); }
+}
+function startMaterialize(spec, meta){
+  meta = meta || {};
+  if(meta.kind==='cena' || meta.kind==='svg' || meta.kind==='emoji') spec.flat = true;
+  notifyMaterialized(meta);
+  P.n = effectiveParticleCount();
+  P.shape = spec; setColorTargets();
+  if(P.mode==='home'){ spawnFromEyes(); for(let i=0;i<MAXN;i++) delay[i]=rndRange(0,.55); }
+  else { for(let i=0;i<MAXN;i++) delay[i]=rndRange(0,.3); }
+  P.mode='forming'; P.formedAt=performance.now(); G.rob.t=1;
+  gazeTarget=[0,.7]; gazeHold=performance.now()+99999;
+  if(state.expr==='dormindo') applyExpression('neutro');
+  G.pulse.kick(4);
+  markInteraction();
+}
+function materialize(key){
+  key = String(key||'').trim();
+  if(!key) return;
+  ensureGL().then(()=>{
+    const spec = SHAPES[key] ? SHAPES[key]() : emojiShape(key);
+    if(!spec){ showFaceToast(`Não consegui desenhar "${key}" neste aparelho.`); return; }
+    startMaterialize(spec, { title:key, kind: SHAPES[key]?'forma':'emoji', data:key });
+  }).catch(()=>{ showFaceToast('Efeitos visuais indisponíveis neste aparelho agora.'); });
+}
+function materializeScene(items, title, origin){
+  const clean = validateSceneItems(items);
+  if(!clean){ showFaceToast('Cena inválida — nada pra mostrar.'); return; }
+  ensureGL().then(()=>{
+    const spec = sceneShape(clean);
+    if(!spec){ showFaceToast('Não consegui compor essa cena.'); return; }
+    startMaterialize(spec, { title: title||'cena', kind:'cena', data: clean, origin: origin||'pedido' });
+  }).catch(()=>{ showFaceToast('Efeitos visuais indisponíveis neste aparelho agora.'); });
+}
+function materializeSVG(svgText, title, origin){
+  const clean = validateSvg(svgText);
+  if(!clean){ showFaceToast('Desenho SVG inválido ou não permitido.'); return; }
+  ensureGL().then(()=>svgShape(clean)).then((spec)=>{
+    if(!spec){ showFaceToast('Não consegui desenhar esse SVG.'); return; }
+    startMaterialize(spec, { title: title||'desenho', kind:'svg', data: clean, origin: origin||'pedido' });
+  }).catch(()=>{ showFaceToast('Efeitos visuais indisponíveis neste aparelho agora.'); });
+}
+function dissolve(){
+  if(!glReady || P.mode==='home' || P.mode==='returning') return;
+  P.mode='returning';
+  for(let i=0;i<MAXN;i++) delay[i]=rndRange(0,.35);
+  G.rob.t=0; gazeHold=0; gazeTarget=[0,0];
+}
+function stepParticles(dt,t,now){
+  if(!glReady) return;
+  if(P.mode==='home'){ geo.instanceCount=0; return; }
+  const n=P.n; geo.instanceCount=n;
+  const g=geom(), sc=g.sc, ocx=g.cx-W/2, ocy=H/2-g.oy, E=eyeWorld();
+  const returning=P.mode==='returning', sh=P.shape, k0=P.k, cz=P.zeta;
+  const rot = opts.girar>0 ? ((sh && sh.flat) ? Math.sin(now*.0012*opts.girar)*.42 : now*.001*opts.girar) : 0;
+  const cr=Math.cos(rot), sr=Math.sin(rot);
+  let arrived=0, sampled=0;
+  if(P.mode==='forming' && now-P.formedAt>1700){ P.mode='holding'; P.holdUntil=now+opts.manterSegundos*1000; }
+  if(P.mode==='holding' && !opts.manterAteDissolver && now>P.holdUntil) dissolve();
+  for(let i=0;i<n;i++){
+    const i3=i*3;
+    if(delay[i]>0){ delay[i]-=dt; continue; }
+    let tx,ty,tz;
+    if(!returning && sh){
+      const lx=sh.pos[i3], ly=sh.pos[i3+1], lz=sh.pos[i3+2];
+      tx=ocx+(cr*lx+sr*lz)*sc+Math.sin(t*.0017+seed[i]*40)*1.1; ty=ocy+ly*sc+Math.cos(t*.0013+seed[i]*31)*1.1; tz=(-sr*lx+cr*lz)*sc;
+    } else {
+      tx=(side[i]?E.rx:E.lx)+lo[i*2]*E.S*.8; ty=(side[i]?E.ry:E.ly)+lo[i*2+1]*E.S*.8; tz=0;
+    }
+    const dx=tx-pos[i3], dy=ty-pos[i3+1], dz=tz-pos[i3+2], d=Math.sqrt(dx*dx+dy*dy+dz*dz)+.001;
+    const k=k0*kk[i], c=2*Math.sqrt(k)*cz;
+    const sw=P.swirl*(reduceMotion?.3:1)*Math.min(d,260)/260*k*.55*(seed[i]-.5)*2.2;
+    const ax=k*dx-c*vel[i3]-dy/d*sw, ay=k*dy-c*vel[i3+1]+dx/d*sw, az=k*dz-c*vel[i3+2];
+    vel[i3]+=ax*dt; vel[i3+1]+=ay*dt; vel[i3+2]+=az*dt;
+    pos[i3]+=vel[i3]*dt; pos[i3+1]+=vel[i3+1]*dt; pos[i3+2]+=vel[i3+2]*dt;
+    const ci=i*4; let aT=1;
+    if(returning){
+      aT = d<16 ? 0 : 1;
+      col[ci]+=(.2-col[ci])*Math.min(1,dt*5); col[ci+1]+=(.9-col[ci+1])*Math.min(1,dt*5); col[ci+2]+=(1-col[ci+2])*Math.min(1,dt*5);
+    } else {
+      const cc=i*3;
+      col[ci]+=(cT[cc]-col[ci])*Math.min(1,dt*5); col[ci+1]+=(cT[cc+1]-col[ci+1])*Math.min(1,dt*5); col[ci+2]+=(cT[cc+2]-col[ci+2])*Math.min(1,dt*5);
+    }
+    col[ci+3]+=(aT-col[ci+3])*Math.min(1,dt*7);
+    if(returning && (i&7)===0){ sampled++; if(col[ci+3]<.08 && delay[i]<=0) arrived++; }
+  }
+  if(returning && sampled>0 && arrived/sampled>.93){ P.mode='home'; geo.instanceCount=0; G.pulse.kick(5); G.size.kick(1.6); }
+  offA.needsUpdate=true; colA.needsUpdate=true;
+}
+function stepEmbers(dt,t){
+  const f = glReady ? clamp(G.fire.x,0,1) : 0;
+  if(!glReady || !emGeo) return;
+  if(f<.03){ emGeo.instanceCount=0; return; }
+  emGeo.instanceCount=EMN; const hw=W/2, hh=H/2;
+  for(let i=0;i<EMN;i++){
+    const i3=i*3; emLife[i]-=dt;
+    if(emLife[i]<=0){ emLife[i]=rndRange(1.4,3.2); emPos[i3]=rndRange(-hw,hw); emPos[i3+1]=-hh-10; emPos[i3+2]=rndRange(-30,30); emVel[i*2]=rndRange(-18,18); emVel[i*2+1]=rndRange(90,270); }
+    emPos[i3]+=(emVel[i*2]+Math.sin(t*.002+emSeed[i]*30)*34)*dt; emPos[i3+1]+=emVel[i*2+1]*dt;
+    const k=clamp(emLife[i]/3.2,0,1), a=Math.sin(clamp(1-k,0,1)*Math.PI)*f;
+    emCol[i*4]=1; emCol[i*4+1]=lerp(.2,.8,k); emCol[i*4+2]=.05; emCol[i*4+3]=a*.9;
+  }
+  emOff.needsUpdate=true; emColA.needsUpdate=true; emMat.uniforms.uTime.value=t/1000;
+}
+
+/* ---------- fundo animado: liga por padrão (fundoIntensidade>0), desliga em "leve",
+   efeitosReduzidos, prefers-reduced-motion, ou modo classic; pausa total parado 5min,
+   reduz resolução parado 1min — reusa a mesma política de energia da FACE-1a. ---------- */
+function wantsBackground(){
+  if(CLASSIC_FACE) return false;
+  if(effectiveQuality()==='leve') return false;
+  if(opts.efeitosReduzidos) return false;
+  if(reduceMotion) return false;
+  return (Number(opts.fundoIntensidade) || 0) > 0;
+}
+function shouldRunBackground(){ return glReady && wantsBackground(); }
+function maybeStartGL(){
+  if(CLASSIC_FACE || glReady || glFailed || glInitPromise) return;
+  if(!wantsBackground()) return;
+  ensureGL().catch(()=>{});
+}
+let lastGLBand = null;
+function applyGLQualityForBand(band){
+  if(!glReady || band===lastGLBand) return;
+  lastGLBand = band;
+  const pr = band==='idle' ? 1 : Math.min(devicePixelRatio||1, (innerWidth<760)?1.5:2);
+  renderer.setPixelRatio(pr);
+  renderer.setSize(W, H, false);
+}
+function idleBand(now){
+  const idleMs = now - lastInteractionAt;
+  const activelyTalking = (typeof isSpeaking!=='undefined' && isSpeaking) || AU.level>.03 || (typeof listening!=='undefined' && listening) || G.listen.x>.05;
+  if(activelyTalking) return 'active';
+  if(idleMs > 300000) return 'deep';
+  if(idleMs > 60000) return 'idle';
+  return 'active';
+}
+let fpsAcc=0, fpsN=0, fpsShow=0, lowFor=0, baseFps=0;
+function trackAdaptiveQuality(dt){
+  if(!opts.qualidadeAutomatica) return;
+  fpsAcc+=dt; fpsN++;
+  if(fpsAcc<=.5) return;
+  fpsShow=fpsN/fpsAcc; fpsAcc=0; fpsN=0;
+  if(P.mode==='home'){ baseFps = baseFps ? lerp(baseFps,fpsShow,.25) : fpsShow; lowFor=0; return; }
+  if(baseFps>0 && fpsShow < Math.min(baseFps*.72,45)){
+    lowFor+=.5;
+    if(lowFor>=2.5 && P.n>3500){ P.n = Math.max(3000, Math.round(P.n*.8/500)*500); lowFor=0; }
+  } else lowFor=0;
+}
+function renderGL(now, t, dt, band){
+  if(!glReady || band==='deep') return;
+  applyGLQualityForBand(band);
+  const bgOn = shouldRunBackground();
+  const activeParticles = P.mode !== 'home';
+  if(!bgOn && !activeParticles) return;
+  if(bgOn){
+    const pal = PAL[opts.fundoSegueHumor ? state.expr : 'neutro'] || PAL.neutro;
+    const f = clamp(dt*2.2, 0, 1);
+    for(let q=0;q<3;q++){ bg.c1[q]=lerp(bg.c1[q],pal[0][q],f); bg.c2[q]=lerp(bg.c2[q],pal[1][q],f); }
+    bg.i = lerp(bg.i, pal[2], f); bg.s = lerp(bg.s, pal[3], f);
+    bgMat.uniforms.uTime.value = t/1000;
+    bgMat.uniforms.uC1.value.set(bg.c1[0],bg.c1[1],bg.c1[2]);
+    bgMat.uniforms.uC2.value.set(bg.c2[0],bg.c2[1],bg.c2[2]);
+    bgMat.uniforms.uInt.value = bg.i * opts.fundoIntensidade * 2;
+    bgMat.uniforms.uSpd.value = bg.s * (reduceMotion ? .3 : 1);
+    bgMat.uniforms.uFire.value = clamp(G.fire.x, 0, 1);
+  }
+  partMat.uniforms.uTime.value = t/1000;
+  partMat.uniforms.uSize.value = opts.tamanhoTriangulos;
+  stepParticles(Math.min(dt,.033), t, now);
+  if(bgOn) stepEmbers(Math.min(dt,.05), t); else if(emGeo) emGeo.instanceCount = 0;
+  trackAdaptiveQuality(dt);
+  renderer.clear();
+  if(bgOn) renderer.render(bgScene, bgCam);
+  renderer.render(scene, cam);
+}
+
+/* API pública estável pra FACE-2 e pro painel de teste. onMaterialized é setável por
+   fora (window.Jarbas.onMaterialized = function(registro){...}); nada aqui grava em
+   mem.creations — isso é FACE-2. */
+window.Jarbas = window.Jarbas || {};
+window.Jarbas.materialize = materialize;
+window.Jarbas.materializeScene = materializeScene;
+window.Jarbas.materializeSVG = materializeSVG;
+window.Jarbas.dissolve = dissolve;
+if(typeof window.Jarbas.onMaterialized !== 'function') window.Jarbas.onMaterialized = null;
 
 /* ========== Motor "classic" — desenho original, preservado como reversão ========== */
 const eyeClassicCanvas = document.getElementById('eyeClassic');
@@ -903,6 +1476,7 @@ function drawMouthClassic(cx, my, size, t){
 function setEmotion(e){
   markInteraction();
   if(CLASSIC_FACE){ setEmotionClassic(e); return; }
+  dissolve(); // FACE-1b: falar/pedir algo dissolve com elegância o que estava materializado
   let canonical = canonicalExpr(e) || 'neutro';
   if(opts.expressoesAtivas.indexOf(canonical) === -1) canonical = 'neutro';
   applyExpression(canonical);
@@ -2251,6 +2825,7 @@ async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
 }
 
 micBtn.addEventListener('click', ()=>{
+  dissolve(); // FACE-1b: tocar no microfone dissolve com elegância o que estava materializado
   if(interruptNow()){
     if(!handsFree) startTapRecording();
     return;
@@ -2849,6 +3424,29 @@ faceQualityBtn.addEventListener('click', ()=>{
   updateFaceQualityBtn();
 });
 updateFaceQualityBtn();
+
+/* ---------- FACE-1b: painel de teste "Aparência" (sem IA — só pra testar nos aparelhos) ---------- */
+const aparenciaTestEl = document.getElementById('aparenciaTestEl');
+document.getElementById('aparenciaTestBtn').addEventListener('click', ()=>{
+  settingsMenu.classList.add('hidden');
+  aparenciaTestEl.classList.remove('hidden');
+});
+document.getElementById('aparenciaTestCloseBtn').addEventListener('click', ()=>{
+  aparenciaTestEl.classList.add('hidden');
+});
+function buildTestChip(label, onClick){
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'test-chip'; b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+const testExprGrid = document.getElementById('testExprGrid');
+Object.keys(EXPR).forEach((name)=>{ testExprGrid.appendChild(buildTestChip(name, ()=> setEmotion(name))); });
+const testShapeGrid = document.getElementById('testShapeGrid');
+Object.keys(SHAPES).forEach((name)=>{ testShapeGrid.appendChild(buildTestChip(name, ()=> materialize(name))); });
+const testSceneGrid = document.getElementById('testSceneGrid');
+Object.keys(SCENES).forEach((name)=>{ testSceneGrid.appendChild(buildTestChip(name, ()=> materializeScene(SCENES[name], name, 'teste'))); });
+document.getElementById('testDissolveBtn').addEventListener('click', dissolve);
 
 if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
   navigator.mediaDevices.addEventListener('devicechange', ()=>{ detectHeadphones(); });
