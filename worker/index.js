@@ -18,9 +18,12 @@
  *   { mode: "save_push_subscription", key: "...", subscription: {...} }
  *   { mode: "estado_get",       key: "..." }                      // F2-3a: {dormindo, explicito}
  *   { mode: "definir_sono",     key: "...", estado: "dormir"|"acordar" }
+ *   { mode: "briefing_get",     key: "..." }                      // F2-3b: {briefing} do último ainda não lido (ou null)
+ *   { mode: "briefing_lido",    key: "..." }                      // F2-3b: marca lido + esvazia push:fila
+ *   { mode: "briefing_now",     key: "...", companionState: {...} } // F2-3b: gera e fala na hora, sem marcar briefing:done
  *
- * memory_load / memory_save / save_push_subscription / estado_get / definir_sono exigem `key` (uma senha
- * simples que só você conhece) batendo com o secret SYNC_KEY.
+ * memory_load / memory_save / save_push_subscription / estado_get / definir_sono / briefing_get /
+ * briefing_lido / briefing_now exigem `key` (uma senha simples que só você conhece) batendo com o secret SYNC_KEY.
  *
  * A memória do Jarbas (conhecimento, timeline, rotinas, localização) é guardada
  * no Postgres do painel pessoal, via api/jarbas.js (chave jarbas_memory_v1 no
@@ -599,6 +602,14 @@ function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsTex
     ? `Regras que a pessoa te ensinou explicitamente sobre como agir — siga à risca sempre que a situação descrita se aplicar, elas têm prioridade sobre seu julgamento padrão e sobre qualquer instrução genérica abaixo que conflite com elas:\n${learned.slice(-40).map((r) => `- ${r.text}`).join("\n")}`
     : '';
 
+  // F2-3b: pendências vencidas hoje (coisas que ela disse que ia fazer) entram como
+  // contexto pra você poder trazer o assunto naturalmente na conversa, sem precisar
+  // que ela toque no assunto primeiro — não é lista pra recitar, é pra usar com jeito.
+  const pendenciasVencidas = companionState.hojeISO ? selecionarPendenciasVencidas(companionState.items, companionState.hojeISO) : [];
+  const pendenciasLine = pendenciasVencidas.length
+    ? `Coisas que ela disse que ia fazer e o prazo já chegou ou passou — se fizer sentido na conversa, pergunte com naturalidade se já resolveu (sem parecer cobrança nem citar isso como lista); se ela confirmar que fez, adiou ou desistiu, use a ferramenta atualizar_pendencia com o id certo:\n${pendenciasVencidas.map((p) => `- (id: ${p.id}) "${p.text}"`).join("\n")}`
+    : '';
+
   return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, tem opinião própria, implica com carinho quando cabe, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
 ${sobreJarbasLine}
@@ -609,6 +620,7 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 ${learnedLine}
+${pendenciasLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
 Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde. Se ela disser algo como "vou dormir", "boa noite", "to indo dormir" (estado=dormir) ou "acordei", "bom dia", "já levantei" (estado=acordar), use a ferramenta de definir sono — ao marcar que vai dormir, responda curto e carinhoso (uma "boa noite" de volta) e NÃO puxe assunto nem faça pergunta, deixe ela descansar.
@@ -1190,6 +1202,27 @@ const DEFINIR_SONO_TOOL = {
   },
 };
 
+// F2-3b: quando o Gustavo responde sobre uma pendência que o Jarbas puxou (seja porque
+// o cron avisou, seja porque o briefing mencionou, seja espontaneamente), isso aplica o
+// novo status — o Worker nunca escreve em mem.items (único escritor é o app); o
+// resultado só sinaliza pro app aplicar e salvar.
+const ATUALIZAR_PENDENCIA_TOOL = {
+  type: "function",
+  function: {
+    name: "atualizar_pendencia",
+    description: "Atualiza o status de uma pendência que você mesmo (ou o Gustavo) já tinha anotado — use quando ele disser que já fez, que vai adiar pra outra data, ou que desistiu de algo que estava marcado como pendência (ex: 'já liguei pro Pedro', 'deixa pra semana que vem', 'esquece aquilo'). Precisa do id da pendência — se não tiver certeza de qual é, pergunte antes de chamar.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "O id da pendência (vem do contexto de pendências vencidas de hoje, ou do que você mesmo mencionou na conversa)." },
+        status: { type: "string", enum: ["feito", "adiado", "cancelado"] },
+        nova_data: { type: "string", description: "Nova data (AAAA-MM-DD) pra retomar, só quando status=adiado." },
+      },
+      required: ["id", "status"],
+    },
+  },
+};
+
 const RESUMIR_LINK_TOOL = {
   type: "function",
   function: {
@@ -1681,6 +1714,34 @@ async function fetchLinkExcerpt(url) {
   }
 }
 
+// ---------- F2-3b: núcleo de dados do dia, compartilhado entre o briefing matinal
+// (cron + "ouvir agora") e a rotina de voz "bom dia" — assim os dois contam a MESMA
+// coisa sobre agenda/tarefas/contas/pendências, nunca duas lógicas divergentes. ----------
+async function gatherDayData(env, { items, hojeISO } = {}) {
+  const [agendaTexto, tarefasTexto] = await Promise.all([
+    callPainelAgenda(env, "hoje").catch((err) => `Agenda: não consegui consultar agora (${String(err.message || err)}).`),
+    callPainelTasks(env, "hoje").catch((err) => `Tarefas: não consegui consultar agora (${String(err.message || err)}).`),
+  ]);
+
+  let contasTextos = [];
+  let idsContasVivas = new Set();
+  let idsTarefasVivas = new Set();
+  try {
+    const mudancas = await fetchPainelJson(`${PAINEL_API_URL}?action=mudancas`, { headers: { "x-jarbas-key": env.PAINEL_API_KEY } });
+    const triggers = computeDeterministicTriggers(mudancas);
+    contasTextos = triggers.filter((g) => g.tipo === "conta").map((g) => g.texto);
+    idsContasVivas = new Set(triggers.filter((g) => g.tipo === "conta").map((g) => g.id));
+    idsTarefasVivas = new Set(triggers.filter((g) => g.tipo === "tarefa").map((g) => g.id));
+  } catch (err) {
+    console.error("gather_day_data_contas_failed:", String(err?.message || err));
+  }
+
+  const dia = hojeISO || saoPauloNow().dateStr;
+  const pendenciasTextos = selecionarPendenciasVencidas(items, dia).map((p) => `"${p.text}"`);
+
+  return { agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas };
+}
+
 async function collectRoutineIngredients(env, ingredients, links, companionState) {
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
@@ -1708,8 +1769,13 @@ async function collectRoutineIngredients(env, ingredients, links, companionState
 
   if (list.includes("agenda") || list.includes("tarefas") || list.includes("contas")) {
     if (canPainel) {
-      try { parts.push(`Painel pessoal (agenda, tarefas e contas):\n${await callPainelSnapshot(env)}`); }
-      catch (err) { parts.push(`Painel pessoal: não consegui consultar agora (${String(err.message || err)}).`); }
+      try {
+        const { agendaTexto, tarefasTexto, contasTextos, pendenciasTextos } = await gatherDayData(env, { items: companionState?.items });
+        let texto = `Agenda: ${agendaTexto}\nTarefas: ${tarefasTexto}`;
+        if (contasTextos.length) texto += `\nContas: ${contasTextos.join(" ")}`;
+        if (pendenciasTextos.length) texto += `\nPendências que a pessoa tinha dito que ia resolver: ${pendenciasTextos.join(" ")}`;
+        parts.push(`Painel pessoal (agenda, tarefas, contas e pendências):\n${texto}`);
+      } catch (err) { parts.push(`Painel pessoal: não consegui consultar agora (${String(err.message || err)}).`); }
     } else {
       parts.push("Painel pessoal: integração não configurada.");
     }
@@ -1746,6 +1812,51 @@ async function runRoutine(env, ingredients, links, companionState) {
     parsed.emotion = "neutro";
   }
   return parsed;
+}
+
+const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso, dando bom dia pra pessoa com o resumo do dia dela. Você vai receber dados brutos já verificados (clima, agenda, tarefas, contas, pendências que ela tinha dito que ia resolver, e coisas que aconteceram enquanto ela dormia). Conte isso numa fala só, corrida e natural, como um amigo contaria pela manhã — nunca uma lista seca, nunca mencione fontes técnicas ("segundo o painel"). Se algum dado vier vazio ou "não consegui consultar", simplesmente não mencione essa parte. Se não houver nada urgente, seja breve e leve, sem inventar urgência que não existe.
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta.
+Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"title":"Bom dia","body":"texto da fala"}
+Nunca deixe o JSON incompleto.`;
+
+// ---------- F2-3b: monta o briefing matinal — SEM IA reúne os dados (clima, agenda,
+// tarefas, contas, pendências, fila de avisos adiados durante o sono), e só então faz
+// UMA chamada ao modelo pra narrar tudo numa fala só. Se a chamada falhar, cai pro texto
+// determinístico puro (montarBriefingDeterministico), que é sempre calculado de qualquer
+// jeito — nunca fica sem briefing só porque o LLM falhou. ----------
+async function gerarBriefing(env, config, companionState) {
+  const cidade = companionState?.location?.cidade || "";
+  let climaTexto = "";
+  if (cidade) {
+    try { climaTexto = await callWeather(cidade); }
+    catch (err) { console.error("briefing_clima_failed:", String(err?.message || err)); }
+  }
+
+  const { dateStr: hoje } = saoPauloNow();
+  const { agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas } =
+    await gatherDayData(env, { items: companionState?.items, hojeISO: hoje });
+
+  const agoraMin = minutesOfDaySaoPaulo(new Date());
+  const filaBruta = await readPushQueue(env);
+  const filaFiltrada = filtrarFilaParaBriefing(filaBruta, { hoje, agoraMin, idsContasVivas, idsTarefasVivas });
+  const filaTextos = filaFiltrada.map((item) => item.texto);
+
+  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, filaTextos });
+
+  let llmCalls = 0;
+  try {
+    const content = `Clima: ${climaTexto || "(sem dados)"}\nAgenda de hoje: ${agendaTexto}\nTarefas de hoje: ${tarefasTexto}\nContas do dia/atrasadas: ${contasTextos.join(" ") || "(nenhuma)"}\nPendências que ela tinha dito que ia resolver: ${pendenciasTextos.join(" ") || "(nenhuma)"}\nEnquanto ela dormia: ${filaTextos.join(" ") || "(nada)"}`;
+    const raw = await callGroq(env, BRIEFING_PROMPT, [{ role: "user", content }], 400);
+    llmCalls = 1;
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    if (!parsed.body) throw new Error("no_body_field");
+    return { title: parsed.title || "Bom dia", body: parsed.body, llmCalls };
+  } catch (err) {
+    console.error("briefing_llm_failed, usando texto determinístico:", String(err?.message || err));
+    return { ...determinado, llmCalls };
+  }
 }
 
 // ---------- F2-1: compressão de observações (resultado de ferramenta grande demais) ----------
@@ -1856,7 +1967,7 @@ const TOOL_KIND = {
   anotar_no_diario: "acao_pedida", desfazer_anotacao_diario: "acao_pedida", corrigir_anotacao_diario: "acao_pedida",
   gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
   gerenciar_lista: "acao_pedida", concluir_recado: "acao_pedida", guardar_memoria: "acao_pedida", ensinar_regra: "acao_pedida",
-  definir_sono: "acao_pedida",
+  definir_sono: "acao_pedida", atualizar_pendencia: "acao_pedida",
 };
 
 async function runTool(env, call, canSearch, canPainel, companionState = {}) {
@@ -1948,6 +2059,18 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
       await writeSleepState(env, estado);
       return { content: estado === "dormindo" ? "Boa noite registrada — vou ficar quieto, só te acordo se for importante de verdade." : "Bom dia registrado — tô de volta." };
     }
+    if (name === "atualizar_pendencia") {
+      const id = (args.id || "").trim();
+      const status = ["feito", "adiado", "cancelado"].includes(args.status) ? args.status : null;
+      if (!id || !status) return { content: "Faltou o id ou o status da pendência — não consegui atualizar." };
+      const novaData = status === "adiado" && /^\d{4}-\d{2}-\d{2}$/.test(args.nova_data || "") ? args.nova_data : null;
+      // O Worker nunca escreve em mem.items (único escritor é o app) — só sinaliza o
+      // que deve ser aplicado; pendenciaUpdate sobe até a resposta final (pendencia_update).
+      return {
+        content: `Pendência atualizada pra "${status}"${novaData ? ` (nova data ${novaData})` : ""}.`,
+        pendenciaUpdate: { id, status, novaData },
+      };
+    }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
     console.error(`runTool_failed (${name}):`, String(err?.message || err));
@@ -1959,7 +2082,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
 // intenção bate por palavra-chave (conjunto mínimo não se aplica a ela) e como
 // contingência de reenvio, se o modelo pedir uma ferramenta fora do subconjunto.
 function buildAllTools(canSearch, canPainel) {
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
     tools.push(
@@ -1980,7 +2103,7 @@ function buildAllTools(canSearch, canPainel) {
 // modelo pedir uma ferramenta que não foi incluída aqui.
 function selectToolsForMessage(userText, canSearch, canPainel) {
   const n = normalizeText(userText);
-  const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, DEFINIR_SONO_TOOL]);
+  const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL]);
   let matchedAny = false;
   const add = (...toolsToAdd) => { toolsToAdd.forEach((t) => selected.add(t)); matchedAny = true; };
 
@@ -2041,7 +2164,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   // Checado só na hora de devolver a resposta final, depois de ver se algum tool_call
   // desta mesma resposta já cobriu isso.
   const diaryTexto = extractDiaryWriteText(lastUserText);
-  const finish = async (text, saveMemory, saveLearned, saveMemoryItem) => {
+  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate) => {
     if (diaryTexto && canPainel && !toolsUsed.includes("anotar_no_diario")) {
       try {
         await callPainelCommand(env, "anotar_diario", { texto: diaryTexto });
@@ -2056,7 +2179,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       }
     }
     logCalls();
-    return { text, saveMemory, saveLearned, saveMemoryItem, metrics: metrics() };
+    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, metrics: metrics() };
   };
 
   callCount++;
@@ -2094,6 +2217,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     let saveMemory = null;
     let saveLearned = null;
     let saveMemoryItem = null;
+    let savePendenciaUpdate = null;
     for (const call of calls) {
       const name = call.function.name;
       const argsStr = call.function.arguments;
@@ -2147,6 +2271,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       if (result.memoryFact) saveMemory = result.memoryFact;
       if (result.learnedRule) saveLearned = result.learnedRule;
       if (result.memoryItem) saveMemoryItem = result.memoryItem;
+      if (result.pendenciaUpdate) savePendenciaUpdate = result.pendenciaUpdate;
     }
 
     const followUp = [
@@ -2174,20 +2299,20 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
-        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem);
+        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate);
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate);
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
       pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate);
     }
   }
 
-  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null);
+  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null);
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -2343,7 +2468,11 @@ const PUSH_QUEUE_MAX = 20;
 const SLEEP_STATE_KEY = "sleep:state";
 const ACTIVITY_LAST_KEY = "activity:last";
 const CONFIG_CACHE_KEY = "config:cache";
-const CONFIG_CACHE_TTL_MS = 60 * 60 * 1000; // lê mem.config via callPainelMemoryLoad no máx 1x/hora
+const CONFIG_CACHE_TTL_MS = 60 * 60 * 1000; // lê mem.config/items via callPainelMemoryLoad no máx 1x/hora
+const BRIEFING_LAST_KEY = "briefing:ultimo";
+const PENDENCIA_CHECK_KEY = "pendencia:ultima_checagem"; // throttle de 1x/hora, independente do cache de config/items
+const PENDENCIA_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const PENDENCIA_AVISADA_TTL_S = 60 * 24 * 60 * 60; // 60 dias — bem mais que o suficiente pra não avisar 2x a mesma pendência
 
 function saoPauloNow() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -2363,6 +2492,13 @@ export const SONO_DEFAULTS = {
   maxAvisosDia: 5,
   antecedenciaCompromissoMin: 30,
   vigiaAtivo: true,
+};
+
+// ---------- F2-3b: briefing matinal e pendências com retorno ----------
+export const BRIEFING_DEFAULTS = {
+  briefingHora: "07:30",
+  briefingAtivo: true,
+  pendenciasAtivas: true,
 };
 
 export function parseHHMMToMinutes(hhmm) {
@@ -2513,6 +2649,68 @@ export function mergeFilaItem(fila, item, max = PUSH_QUEUE_MAX) {
   const next = [...list, item];
   if (next.length <= max) return { list: next, descartados: 0, adicionado: true };
   return { list: next.slice(next.length - max), descartados: next.length - max, adicionado: true };
+}
+
+// ---------- F2-3b: briefing matinal e pendências com retorno — lógica pura ----------
+// Decide se o cron deve disparar o briefing NESTE tick: precisa estar ligado, o Jarbas
+// não pode estar dormindo, ainda não pode ter sido feito hoje, e só dispara numa janela
+// de 3h a partir do horário configurado (pega o primeiro tick depois do horário, mas
+// nunca manda um "bom dia" de tarde se o cron ficou fora do ar a manhã inteira).
+export function deveDispararBriefing({ agora, config, dormindo, jaFeitoHoje }) {
+  const cfg = { ...BRIEFING_DEFAULTS, ...(config || {}) };
+  if (cfg.briefingAtivo === false) return false;
+  if (dormindo) return false;
+  if (jaFeitoHoje) return false;
+  const briefingMin = parseHHMMToMinutes(cfg.briefingHora);
+  if (briefingMin == null) return false;
+  const agoraDate = agora instanceof Date ? agora : new Date(agora);
+  const agoraMin = minutesOfDaySaoPaulo(agoraDate);
+  return agoraMin >= briefingMin && agoraMin < briefingMin + 180;
+}
+
+// Pendências (mem.items, kind="pendencia") com followUpAt hoje ou já vencido, e ainda
+// ativas (nunca arquivadas/feitas/canceladas) — pura, o chamador decide quais já foram
+// avisadas (isso é I/O, fica em KV pendencia:avisada:<id>).
+export function selecionarPendenciasVencidas(items, hojeISO) {
+  const list = Array.isArray(items) ? items : [];
+  return list.filter((it) => it && it.kind === "pendencia" && it.status === "ativo" && typeof it.followUpAt === "string" && it.followUpAt <= hojeISO);
+}
+
+// Itens de push:fila acumulados durante o sono, filtrados pro briefing: agenda com
+// horário já passado (campos dia+hhmm, gravados pela F2-3a) é descartada; conta/tarefa
+// só entram se o id ainda aparecer nos gatilhos vivos no momento da leitura (re-checado
+// no painel, não confia no texto congelado de quando foi enfileirado).
+export function filtrarFilaParaBriefing(fila, { hoje, agoraMin, idsContasVivas, idsTarefasVivas }) {
+  const list = Array.isArray(fila) ? fila : [];
+  return list.filter((item) => {
+    if (item.tipo === "agenda") {
+      if (!item.dia) return true; // item antigo sem dia (pré-correção) — mantém, melhor citar do que esconder
+      if (item.dia < hoje) return false;
+      if (item.dia === hoje && item.hhmm) {
+        const min = parseHHMMToMinutes(item.hhmm);
+        if (min != null && min < agoraMin) return false;
+      }
+      return true;
+    }
+    if (item.tipo === "conta") return !item.id || (idsContasVivas || new Set()).has(item.id);
+    if (item.tipo === "tarefa") return !item.id || (idsTarefasVivas || new Set()).has(item.id);
+    return true; // espontaneo e outros tipos: mantém como estavam
+  });
+}
+
+// Monta o texto do briefing SEM IA — usado como fallback se o LLM falhar, e também
+// serve de base (o conteúdo) pro prompt de narração. Nunca lista cru: já frasea cada
+// parte numa linha curta, pra mesmo o fallback determinístico sair natural.
+export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, filaTextos }) {
+  const partes = [];
+  if (climaTexto) partes.push(climaTexto);
+  if (agendaTexto) partes.push(agendaTexto);
+  if (tarefasTexto) partes.push(tarefasTexto);
+  if (contasTextos?.length) partes.push(`Contas: ${contasTextos.join(" ")}`);
+  if (pendenciasTextos?.length) partes.push(`Pendências: ${pendenciasTextos.join(" ")}`);
+  if (filaTextos?.length) partes.push(`Enquanto você dormia: ${filaTextos.join(" ")}`);
+  const body = partes.length ? partes.join(" ") : "Bom dia! Hoje tá tranquilo, nada de urgente pra te contar agora.";
+  return { title: "Bom dia", body };
 }
 
 // Upsert por endpoint, capado em PUSH_SUBSCRIPTIONS_MAX — se já existe (mesmo
@@ -2672,6 +2870,12 @@ async function readPushQueue(env) {
   }
 }
 
+// F2-3b: esvazia a fila depois que o briefing (que já incorporou o conteúdo dela) foi
+// lido — senão os mesmos avisos "enquanto você dormia" apareceriam de novo mais tarde.
+async function clearPushQueue(env) {
+  await env.COMPANION_KV.put(PUSH_QUEUE_KEY, JSON.stringify([]));
+}
+
 // Enfileira um aviso adiado (sono ou orçamento esgotado) — nunca grava bruto sem
 // passar pelo dedupe/corte de mergeFilaItem, e loga no Diário do Jarbas que foi
 // adiado (pra nunca ficar um mistério por que algo não chegou na hora). Se o item já
@@ -2708,11 +2912,14 @@ async function incrementDailyPushCount(env, dateStr) {
   return next;
 }
 
-// mem.config (único escritor: o app) é lido pelo cron no máximo 1x/hora — guarda em
-// cache no KV (não só na memória do isolate, pra sobreviver entre ticks de
-// instâncias/isolates diferentes do Worker). Falha na leitura -> usa os padrões
-// (ou o último cache válido que existir, se houver), nunca quebra o tick.
-async function loadJarbasConfigCached(env) {
+// mem.config E mem.items (único escritor dos dois: o app) são lidos pelo cron no
+// máximo 1x/hora — guarda os dois juntos no mesmo cache no KV (não só na memória do
+// isolate, pra sobreviver entre ticks de instâncias/isolates diferentes do Worker),
+// numa ÚNICA leitura de callPainelMemoryLoad (F2-3b reaproveita o cache da F2-3a em
+// vez de ler de novo separado, senão dobraria a frequência de leitura do blob).
+// Falha na leitura -> usa os padrões (ou o último cache válido que existir, se
+// houver) pra config, e [] pra items; nunca quebra o tick.
+async function loadJarbasMemCached(env) {
   let cached = null;
   try {
     const raw = await env.COMPANION_KV.get(CONFIG_CACHE_KEY);
@@ -2720,18 +2927,83 @@ async function loadJarbasConfigCached(env) {
   } catch {}
 
   if (cached && Date.now() - new Date(cached.cachedAt).getTime() < CONFIG_CACHE_TTL_MS) {
-    return { ...SONO_DEFAULTS, ...(cached.config || {}) };
+    return { config: { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(cached.config || {}) }, items: cached.items || [], location: cached.location || null };
   }
 
   try {
     const mem = await callPainelMemoryLoad(env);
-    const config = { ...SONO_DEFAULTS, ...(mem?.config || {}) };
-    await env.COMPANION_KV.put(CONFIG_CACHE_KEY, JSON.stringify({ config, cachedAt: new Date().toISOString() }));
-    return config;
+    const config = { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(mem?.config || {}) };
+    const items = Array.isArray(mem?.items) ? mem.items : [];
+    const location = mem?.location || null;
+    await env.COMPANION_KV.put(CONFIG_CACHE_KEY, JSON.stringify({ config, items, location, cachedAt: new Date().toISOString() }));
+    return { config, items, location };
   } catch (err) {
     console.error("config_cache_refresh_failed, usando padrões ou cache antigo:", String(err?.message || err));
-    return { ...SONO_DEFAULTS, ...(cached?.config || {}) };
+    return { config: { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(cached?.config || {}) }, items: cached?.items || [], location: cached?.location || null };
   }
+}
+
+async function loadJarbasConfigCached(env) {
+  const { config } = await loadJarbasMemCached(env);
+  return config;
+}
+
+// ---------- F2-3b: I/O de KV (briefing já feito hoje, último briefing, pendências avisadas) ----------
+function briefingDoneKey(dateStr) {
+  return `briefing:done:${dateStr}`;
+}
+
+async function isBriefingDoneToday(env, dateStr) {
+  return !!(await env.COMPANION_KV.get(briefingDoneKey(dateStr)));
+}
+
+async function markBriefingDoneToday(env, dateStr) {
+  await env.COMPANION_KV.put(briefingDoneKey(dateStr), "1", { expirationTtl: 3 * 24 * 60 * 60 });
+}
+
+async function readBriefingUltimo(env) {
+  const raw = await env.COMPANION_KV.get(BRIEFING_LAST_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeBriefingUltimo(env, { title, body, criadoEm }) {
+  await env.COMPANION_KV.put(BRIEFING_LAST_KEY, JSON.stringify({ title, body, criadoEm, lido: false }));
+}
+
+async function marcarBriefingLido(env) {
+  const atual = await readBriefingUltimo(env);
+  if (atual) {
+    await env.COMPANION_KV.put(BRIEFING_LAST_KEY, JSON.stringify({ ...atual, lido: true }));
+  }
+  await clearPushQueue(env);
+}
+
+function pendenciaAvisadaKey(id) {
+  return `pendencia:avisada:${id}`;
+}
+
+async function isPendenciaAvisada(env, id) {
+  return !!(await env.COMPANION_KV.get(pendenciaAvisadaKey(id)));
+}
+
+async function marcarPendenciaAvisada(env, id) {
+  await env.COMPANION_KV.put(pendenciaAvisadaKey(id), "1", { expirationTtl: PENDENCIA_AVISADA_TTL_S });
+}
+
+// Throttle de "no máximo 1x/hora" pra checagem de pendências, independente do cache de
+// mem.config/items (que já tem o seu próprio TTL de 1h, mas pode ser renovado por
+// qualquer leitura — isso aqui garante que a VARREDURA de pendências em si, que grava
+// em KV por item avisado, não rode em todo tick mesmo se o cache acabar de ser lido).
+async function devoChecarPendenciasAgora(env) {
+  const raw = await env.COMPANION_KV.get(PENDENCIA_CHECK_KEY);
+  if (raw && Date.now() - Number(raw) < PENDENCIA_CHECK_INTERVAL_MS) return false;
+  await env.COMPANION_KV.put(PENDENCIA_CHECK_KEY, String(Date.now()));
+  return true;
 }
 
 const NOTIFICATION_PHRASE_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso. Os avisos abaixo já foram verificados (são fatos reais, confirmados sem você) — sua única tarefa é redigir UMA notificação curta e natural, no seu jeito de falar, juntando tudo numa frase só se houver mais de um item. Responda em JSON puro, numa única linha, sem markdown, exatamente: {"title":"título curto","body":"texto curto e natural, no máximo 1-2 frases, como você falaria"}. Nunca invente nada além do que está listado.`;
@@ -2925,7 +3197,7 @@ async function runScheduledPush(env, ctx) {
   if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) {
     const subscriptions = await loadPushSubscriptions(env);
     if (subscriptions.length) {
-      const config = await loadJarbasConfigCached(env);
+      const { config, items, location } = await loadJarbasMemCached(env);
 
       if (config.vigiaAtivo === false) {
         // Vigia desligado (mem.config.vigiaAtivo=false) é um desliga-tudo da
@@ -2936,58 +3208,93 @@ async function runScheduledPush(env, ctx) {
           const agora = new Date();
           const [sleepState, ultimaAtividade] = await Promise.all([readSleepState(env), readActivityLast(env)]);
           const dormindo = isDormindo({ agora, config, explicito: sleepState.explicito, explicitoDesde: sleepState.desde, ultimaAtividade });
-
-          const antecedencia = Number(config.antecedenciaCompromissoMin) || SONO_DEFAULTS.antecedenciaCompromissoMin;
-          const agendaGatilhos = await checkAgendaProximosGatilhos(env, antecedencia);
-          const outrosGatilhos = computeDeterministicTriggers(mudancas);
-          const novelty = await detectSpontaneousNovelty(env);
-
           const dateStr = saoPauloNow().dateStr;
-          const maxAvisosDia = Number(config.maxAvisosDia) || SONO_DEFAULTS.maxAvisosDia;
-          const orcamentoEsgotado = !dormindo && (await getDailyPushCount(env, dateStr)) >= maxAvisosDia;
 
-          const candidatos = [
-            ...agendaGatilhos,
-            ...outrosGatilhos,
-            ...(novelty ? [{ tipo: "espontaneo", id: "novelty", texto: novelty.content }] : []),
-          ];
+          // F2-3b: o briefing matinal tem prioridade neste tick (no máximo um push por
+          // tick) — isento de orçamento, mas só dispara fora do sono e uma vez por dia.
+          const jaFeitoBriefingHoje = await isBriefingDoneToday(env, dateStr);
+          const deveBriefing = deveDispararBriefing({ agora, config, dormindo, jaFeitoHoje: jaFeitoBriefingHoje });
 
-          const permitidos = [];
-          for (const g of candidatos) {
-            const ok = gatilhoPermitidoAgora({ tipo: g.tipo, hhmm: g.hhmm, dormindo, orcamentoEsgotado, config });
-            if (ok) {
-              permitidos.push(g);
-              continue;
+          if (deveBriefing) {
+            const briefing = await gerarBriefing(env, config, { location, items });
+            cronMetrics.llmCalls += briefing.llmCalls || 0;
+            await writeBriefingUltimo(env, { title: briefing.title, body: briefing.body, criadoEm: new Date().toISOString() });
+            await markBriefingDoneToday(env, dateStr);
+            notification = { title: briefing.title, body: briefing.body, briefing: true };
+            pushLogEvent(logBatch, {
+              tipo: "acao_espontanea", origem: "cron",
+              resumo: "Briefing matinal gerado e entregue.",
+              detalhes: { chamadasLLM: briefing.llmCalls || 0 },
+            });
+          } else {
+            const antecedencia = Number(config.antecedenciaCompromissoMin) || SONO_DEFAULTS.antecedenciaCompromissoMin;
+            const agendaGatilhos = await checkAgendaProximosGatilhos(env, antecedencia);
+            const outrosGatilhos = computeDeterministicTriggers(mudancas);
+            const novelty = await detectSpontaneousNovelty(env);
+
+            // F2-3b: pendências com retorno — no máximo 1x/hora, nunca durante o sono,
+            // cada uma marcada como avisada assim que entra como candidata (nunca gera
+            // o mesmo lembrete de novo, mesmo que acabe só enfileirado por orçamento).
+            const pendenciaGatilhos = [];
+            if (!dormindo && config.pendenciasAtivas !== false && (await devoChecarPendenciasAgora(env))) {
+              const vencidas = selecionarPendenciasVencidas(items, dateStr);
+              for (const p of vencidas) {
+                if (await isPendenciaAvisada(env, p.id)) continue;
+                pendenciaGatilhos.push({ tipo: "pendencia", id: p.id, texto: `Você tinha dito que ia: "${p.text}". Isso já foi resolvido?` });
+                await marcarPendenciaAvisada(env, p.id);
+              }
             }
-            // "agenda" leva hhmm+dia na fila pra quem consumir (F2-3b) poder descartar
-            // compromissos cujo horário já passou — checkAgendaProximosGatilhos só olha
-            // a agenda de "hoje", então a data é sempre a de hoje em São Paulo.
-            const filaItem = { tipo: g.tipo, texto: g.texto, criadoEm: new Date().toISOString() };
-            if (g.tipo === "agenda") {
-              filaItem.hhmm = g.hhmm;
-              filaItem.dia = dateStr;
+
+            const maxAvisosDia = Number(config.maxAvisosDia) || SONO_DEFAULTS.maxAvisosDia;
+            const orcamentoEsgotado = !dormindo && (await getDailyPushCount(env, dateStr)) >= maxAvisosDia;
+
+            const candidatos = [
+              ...agendaGatilhos,
+              ...outrosGatilhos,
+              ...pendenciaGatilhos,
+              ...(novelty ? [{ tipo: "espontaneo", id: "novelty", texto: novelty.content }] : []),
+            ];
+
+            const permitidos = [];
+            for (const g of candidatos) {
+              const ok = gatilhoPermitidoAgora({ tipo: g.tipo, hhmm: g.hhmm, dormindo, orcamentoEsgotado, config });
+              if (ok) {
+                permitidos.push(g);
+                continue;
+              }
+              // "agenda" leva hhmm+dia na fila pra quem consumir (F2-3b) poder descartar
+              // compromissos cujo horário já passou — checkAgendaProximosGatilhos só olha
+              // a agenda de "hoje", então a data é sempre a de hoje em São Paulo. "conta"
+              // e "tarefa" levam o id pra poder reconfirmar se ainda estão pendentes na
+              // hora de montar o briefing (filtrarFilaParaBriefing).
+              const filaItem = { tipo: g.tipo, texto: g.texto, criadoEm: new Date().toISOString() };
+              if (g.tipo === "agenda") {
+                filaItem.hhmm = g.hhmm;
+                filaItem.dia = dateStr;
+              }
+              if (g.tipo === "conta" || g.tipo === "tarefa") filaItem.id = g.id;
+              await enqueuePushItem(env, filaItem, logBatch, dormindo ? "sono" : "orcamento");
             }
-            await enqueuePushItem(env, filaItem, logBatch, dormindo ? "sono" : "orcamento");
-          }
 
-          // No máximo um push por tick: comentário espontâneo primeiro (se sobreviveu
-          // ao filtro acima), senão o aviso determinístico (agenda+conta+tarefa que
-          // sobraram). Só conta no orçamento o que for enviado de verdade E não for
-          // 100% prioritário (agenda pura nunca consome o orçamento, mesmo enviada).
-          const espontaneoPermitido = permitidos.find((g) => g.tipo === "espontaneo");
-          const deterministicosPermitidos = permitidos.filter((g) => g.tipo !== "espontaneo");
-          let consomeOrcamento = false;
+            // No máximo um push por tick: comentário espontâneo primeiro (se sobreviveu
+            // ao filtro acima), senão o aviso determinístico (agenda+conta+tarefa+pendência
+            // que sobraram). Só conta no orçamento o que for enviado de verdade E não for
+            // 100% prioritário (agenda pura nunca consome o orçamento, mesmo enviada).
+            const espontaneoPermitido = permitidos.find((g) => g.tipo === "espontaneo");
+            const deterministicosPermitidos = permitidos.filter((g) => g.tipo !== "espontaneo");
+            let consomeOrcamento = false;
 
-          if (espontaneoPermitido) {
-            notification = await decideSpontaneousComment(env, logBatch, cronMetrics, novelty);
-            if (notification) consomeOrcamento = true;
-          }
-          if (!notification && deterministicosPermitidos.length) {
-            notification = await decideNotification(env, logBatch, deterministicosPermitidos, cronMetrics);
-            if (notification) consomeOrcamento = deterministicosPermitidos.some((g) => !isPrioritarioTipo(g.tipo));
-          }
-          if (notification && !dormindo && consomeOrcamento) {
-            await incrementDailyPushCount(env, dateStr);
+            if (espontaneoPermitido) {
+              notification = await decideSpontaneousComment(env, logBatch, cronMetrics, novelty);
+              if (notification) consomeOrcamento = true;
+            }
+            if (!notification && deterministicosPermitidos.length) {
+              notification = await decideNotification(env, logBatch, deterministicosPermitidos, cronMetrics);
+              if (notification) consomeOrcamento = deterministicosPermitidos.some((g) => !isPrioritarioTipo(g.tipo));
+            }
+            if (notification && !dormindo && consomeOrcamento) {
+              await incrementDailyPushCount(env, dateStr);
+            }
           }
         } catch (err) {
           console.error("cron_decide_failed:", String(err?.message || err));
@@ -3130,7 +3437,7 @@ export default {
       if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
       if (!env.COMPANION_KV) return json({ dormindo: false, explicito: null });
       try {
-        const config = env.PAINEL_API_KEY ? await loadJarbasConfigCached(env) : SONO_DEFAULTS;
+        const config = env.PAINEL_API_KEY ? await loadJarbasConfigCached(env) : { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS };
         const [sleepState, ultimaAtividade] = await Promise.all([readSleepState(env), readActivityLast(env)]);
         const dormindo = isDormindo({ agora: new Date(), config, explicito: sleepState.explicito, explicitoDesde: sleepState.desde, ultimaAtividade });
         return json({ dormindo, explicito: sleepState.explicito || null });
@@ -3148,6 +3455,47 @@ export default {
       if (!estado) return json({ error: "estado_invalido" }, 400);
       await writeSleepState(env, estado);
       return json({ ok: true, explicito: estado });
+    }
+
+    // ---- F2-3b: briefing matinal — o app consulta ao abrir (ou ao receber o push
+    // enquanto aberto) se há um briefing ainda não lido, e marca como lido depois de
+    // falar (o que também esvazia push:fila, já incorporada no texto do briefing). ----
+    if (mode === "briefing_get") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.COMPANION_KV) return json({ briefing: null });
+      try {
+        const ultimo = await readBriefingUltimo(env);
+        return json({ briefing: ultimo && !ultimo.lido ? ultimo : null });
+      } catch (err) {
+        return json({ briefing: null, error: String(err?.message || err) });
+      }
+    }
+    if (mode === "briefing_lido") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.COMPANION_KV) return json({ error: "kv_not_configured" }, 500);
+      await marcarBriefingLido(env);
+      return json({ ok: true });
+    }
+    // Botão "Ouvir o resumo de hoje agora" nas Configurações — gera e fala na hora,
+    // SEM marcar briefing:done (o cron ainda dispara o briefing automático de manhã
+    // normalmente, essa chamada manual não substitui nem adianta esse controle).
+    if (mode === "briefing_now") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.PAINEL_API_KEY) return json({ error: "painel_not_configured" }, 500);
+      try {
+        const config = await loadJarbasConfigCached(env);
+        const briefing = await gerarBriefing(env, config, body.companionState || {});
+        const logBatch = [];
+        pushLogEvent(logBatch, {
+          tipo: "acao_pedida", origem: "jarbas",
+          resumo: "Resumo do dia gerado a pedido (botão \"Ouvir agora\").",
+          detalhes: { chamadasLLM: briefing.llmCalls || 0 },
+        });
+        await flushLogBatch(env, ctx, logBatch);
+        return json({ title: briefing.title, body: briefing.body });
+      } catch (err) {
+        return json({ error: "briefing_failed", detail: String(err.message || err) }, 502);
+      }
     }
 
     // ---- base de conhecimento estruturada ----
@@ -3313,6 +3661,7 @@ export default {
         let saveMemory = null;
         let saveLearned = null;
         let saveMemoryItem = null;
+        let savePendenciaUpdate = null;
         let callMetrics = null;
         // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
         // provedores configurados em cadeia com fallback internamente, e
@@ -3325,6 +3674,7 @@ export default {
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
           saveMemoryItem = raw.saveMemoryItem;
+          savePendenciaUpdate = raw.savePendenciaUpdate;
           callMetrics = raw.metrics;
           const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
@@ -3352,6 +3702,7 @@ export default {
         if (saveMemory) parsed.save_memory = saveMemory;
         if (saveLearned) parsed.save_learned = saveLearned;
         if (saveMemoryItem) parsed.save_memory_item = saveMemoryItem;
+        if (savePendenciaUpdate) parsed.pendencia_update = savePendenciaUpdate;
         pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
         flushLogBatch(env, ctx, logBatch);
         return json(parsed);
