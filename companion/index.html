@@ -1019,6 +1019,7 @@ function validateSvg(svgText){
   if(/<\s*script/i.test(svgText)) return null;
   if(/<\s*foreignObject/i.test(svgText)) return null;
   if(/\son[a-z]+\s*=/i.test(svgText)) return null;
+  if(/url\(\s*["']?\s*(https?:)?\/\//i.test(svgText)) return null; // FACE-2: css url(http...) também não entra
   const imgHrefRe = /<\s*image\b[^>]*\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']/gi;
   let m;
   while((m = imgHrefRe.exec(svgText))){
@@ -1244,6 +1245,7 @@ window.Jarbas.materialize = materialize;
 window.Jarbas.materializeScene = materializeScene;
 window.Jarbas.materializeSVG = materializeSVG;
 window.Jarbas.dissolve = dissolve;
+window.Jarbas.isMaterialized = () => P.mode !== 'home'; // FACE-2: pro comando de voz "pode guardar"/dissolver saber se há algo pra dissolver
 if(typeof window.Jarbas.onMaterialized !== 'function') window.Jarbas.onMaterialized = null;
 
 /* ========== Motor "classic" — desenho original, preservado como reversão ========== */
@@ -2403,6 +2405,102 @@ async function enablePush(){
 }
 pushBtn.addEventListener('click', enablePush);
 
+/* ---------- FACE-2: materialização decidida pela IA — o Worker manda parsed.materialize
+   ({titulo, kind, data, motivo, origem}); aqui só executamos (Jarbas.materializeScene/SVG,
+   já revalidado por dentro pela própria FACE-1b) e registramos em mem.creations (até 200,
+   mais recente primeiro — é o que a aba "Criações" do painel e o tile do Jarbas leem).
+   A política espontânea (limite diário, intervalo mínimo) é só LOCAL/por aparelho — nunca
+   vai pro mem sincronizado, senão dois aparelhos brigariam pelo mesmo contador. ---------- */
+const SPONT_MATERIALIZE_KEY = 'raiz_materializacao_espontanea_estado';
+const MATERIALIZACAO_ESPONTANEA_DEFAULTS = { ativa: true, maxPorDia: 4, intervaloMinimoMin: 20 };
+function readSpontMaterializeState(){
+  try{ return JSON.parse(localStorage.getItem(SPONT_MATERIALIZE_KEY) || '{}') || {}; }catch(e){ return {}; }
+}
+function registerSpontMaterialization(){
+  const s = readSpontMaterializeState();
+  const hoje = todayISO();
+  if(s.day !== hoje){ s.day = hoje; s.count = 0; }
+  s.count = (s.count || 0) + 1;
+  s.lastAt = Date.now();
+  try{ localStorage.setItem(SPONT_MATERIALIZE_KEY, JSON.stringify(s)); }catch(e){}
+}
+function podeMaterializarEspontaneo(){
+  if(CLASSIC_FACE) return false;
+  const cfg = { ...MATERIALIZACAO_ESPONTANEA_DEFAULTS, ...((mem.config && mem.config.aparencia && mem.config.aparencia.materializacaoEspontanea) || {}) };
+  if(cfg.ativa === false) return false;
+  if(document.hidden) return false;
+  if(sleepFaceState && sleepFaceState.dormindo) return false;
+  if(window.Jarbas && typeof window.Jarbas.isMaterialized === 'function' && window.Jarbas.isMaterialized()) return false;
+  const s = readSpontMaterializeState();
+  const hoje = todayISO();
+  const countHoje = (s.day === hoje) ? (s.count || 0) : 0;
+  if(countHoje >= (Number(cfg.maxPorDia) || 0)) return false;
+  const intervaloMs = Math.max(0, Number(cfg.intervaloMinimoMin) || 0) * 60000;
+  if(s.lastAt && (Date.now() - s.lastAt) < intervaloMs) return false;
+  return true;
+}
+function buildAparenciaForWorker(){
+  const ap = (mem.config && mem.config.aparencia) || {};
+  return {
+    expressoesAtivas: Array.isArray(ap.expressoesAtivas) ? ap.expressoesAtivas : null,
+    materializacaoEspontanea: { ...MATERIALIZACAO_ESPONTANEA_DEFAULTS, ...(ap.materializacaoEspontanea || {}) },
+  };
+}
+
+function registerCreation(m){
+  if(!m || !m.titulo) return;
+  if(!Array.isArray(mem.creations)) mem.creations = [];
+  mem.creations.unshift({
+    id: Date.now(),
+    title: String(m.titulo).slice(0, 80),
+    kind: m.kind === 'svg' ? 'svg' : 'cena',
+    data: m.data,
+    origem: ['pedido','conversa','espontaneo'].includes(m.origem) ? m.origem : 'pedido',
+    motivo: String(m.motivo || '').slice(0, 300),
+    at: new Date().toISOString(),
+  });
+  mem.creations = mem.creations.slice(0, 200);
+}
+
+// Dispara a materialização de verdade (visual) — NUNCA bloqueia nem atrasa a fala: é
+// chamado sem await, logo antes de `speak()`. Espontâneo começa com um "curioso" breve
+// antes de formar a criação; ao dissolver (sozinho ou por interrupção), o rosto volta a
+// neutro, sem travar numa expressão velha.
+function watchMaterializeDissolve(){
+  let ticks = 0;
+  const iv = setInterval(()=>{
+    ticks++;
+    const aindaTem = window.Jarbas && typeof window.Jarbas.isMaterialized === 'function' && window.Jarbas.isMaterialized();
+    if(!aindaTem){
+      clearInterval(iv);
+      const parado = !(typeof isSpeaking!=='undefined' && isSpeaking) && !(typeof listening!=='undefined' && listening) && !(typeof awaitingCommand!=='undefined' && awaitingCommand);
+      const idleExpr = ['neutro','curioso','feliz','pensando'].includes(state.expr);
+      if(parado && idleExpr && state.expr !== 'neutro') setEmotion('neutro');
+      return;
+    }
+    if(ticks > 40) clearInterval(iv); // nunca fica rodando pra sempre (~60s)
+  }, 1500);
+}
+function triggerJarbasMaterialize(m){
+  try{
+    if(!m || !window.Jarbas || CLASSIC_FACE) return;
+    const launch = () => {
+      if(m.kind === 'svg') window.Jarbas.materializeSVG(m.data, m.titulo, m.origem);
+      else window.Jarbas.materializeScene(m.data, m.titulo, m.origem);
+      if(m.origem === 'espontaneo') registerSpontMaterialization();
+      watchMaterializeDissolve();
+    };
+    if(m.origem === 'espontaneo'){
+      setEmotion('curioso');
+      setTimeout(launch, 450);
+    } else {
+      launch();
+    }
+  }catch(err){
+    console.error('jarbas_materialize_trigger_failed:', err);
+  }
+}
+
 async function askRaiz(userText, isRetry){
   if(!isRetry && handsFree) startConversationWindow();
   setEmotion('pensando');
@@ -2425,7 +2523,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO(), aparencia: buildAparenciaForWorker(), podeMaterializarEspontaneo: podeMaterializarEspontaneo() }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -2452,12 +2550,18 @@ async function askRaiz(userText, isRetry){
     if(parsed.pendencia_update){
       applyPendenciaUpdate(parsed.pendencia_update);
     }
+    if(parsed.materialize){
+      registerCreation(parsed.materialize);
+    }
     saveMemoryState();
     pushMemoryToServer(workerUrl);
 
     setEmotion(parsed.emotion || 'neutro');
     setCaption('jarbas', parsed.reply);
     hint.textContent = 'falando...';
+    // FACE-2: dispara a materialização visual só depois de iniciar a fala — nunca
+    // espera a animação, e uma falha aqui nunca afeta a fala (ver triggerJarbasMaterialize).
+    if(parsed.materialize) triggerJarbasMaterialize(parsed.materialize);
     const finishedNormally = await speak(parsed.reply);
     if(finishedNormally){
       hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
@@ -2550,6 +2654,22 @@ function checkRoutineTrigger(text){
   return true;
 }
 
+// FACE-2: "pode guardar"/"dissolve" dissolve a materialização na hora, sem passar pelo
+// Worker — só intercepta quando HÁ algo materializado de verdade (Jarbas.isMaterialized),
+// senão essas palavras seguem pro fluxo normal (podem significar outra coisa na frase).
+const DISSOLVE_TRIGGER = /\b(pode guardar|dissolve|dissolver)\b/i;
+function checkDissolveCommand(text){
+  if(!DISSOLVE_TRIGGER.test(text)) return false;
+  if(!window.Jarbas || typeof window.Jarbas.isMaterialized !== 'function' || !window.Jarbas.isMaterialized()) return false;
+  if(handsFree) startConversationWindow();
+  window.Jarbas.dissolve();
+  setEmotion('neutro');
+  setCaption('jarbas', 'Beleza, guardado.');
+  hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
+  resumeHandsFreeListening();
+  return true;
+}
+
 /* ---------- Ativação por voz ("modo mãos livres") ---------- */
 const HANDS_FREE_KEY = 'raiz_hands_free';
 const WAKE_WORD = 'jarbas';
@@ -2629,6 +2749,7 @@ function initRecognition(){
       recognition.stop();
       if(handleLearnCommand(text)) return;
       if(checkRoutineTrigger(text)) return;
+      if(checkDissolveCommand(text)) return;
       askRaiz(text);
       return;
     }
@@ -2641,6 +2762,7 @@ function initRecognition(){
       setCaption('você', text);
       if(handleLearnCommand(text)) return;
       if(checkRoutineTrigger(text)) return;
+      if(checkDissolveCommand(text)) return;
       askRaiz(text);
       return;
     }
@@ -2653,6 +2775,7 @@ function initRecognition(){
         setCaption('você', rest);
         if(handleLearnCommand(rest)) return;
         if(checkRoutineTrigger(rest)) return;
+        if(checkDissolveCommand(rest)) return;
         askRaiz(rest);
       } else {
         awaitingCommand = true;
@@ -2817,6 +2940,7 @@ async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
     setCaption('você', text);
     if(handleLearnCommand(text)) return;
     if(checkRoutineTrigger(text)) return;
+    if(checkDissolveCommand(text)) return;
     askRaiz(text);
   }catch(err){
     setEmotion('neutro');
