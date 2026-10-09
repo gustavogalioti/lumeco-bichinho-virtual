@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Incubadora Jarbas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#050709; --ink:#e6f7ff; --muted:#7a93a0; --cyan:#00e5ff; --violet:#9b6bff;
+  --line:rgba(120,220,255,.14); --card:rgba(10,16,22,.65);
+  --display:"Chakra Petch",system-ui,sans-serif; --body:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);line-height:1.5;
+  background-image:radial-gradient(circle at 20% -10%, rgba(0,229,255,.08), transparent 55%),
+                    radial-gradient(circle at 90% 10%, rgba(155,107,255,.07), transparent 50%);}
+main{max-width:860px;margin:0 auto;padding:56px 24px 80px}
+header{margin-bottom:40px}
+header span{display:inline-block;color:var(--cyan);font:600 12px var(--display);letter-spacing:.14em;text-transform:uppercase;margin-bottom:10px}
+h1{font:700 34px var(--display);letter-spacing:.02em;margin:0 0 10px}
+header p{color:var(--muted);font-size:15px;max-width:560px;margin:0}
+h2{font:700 14px var(--display);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:40px 0 16px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.grid{display:grid;gap:14px}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s}
+a.card:hover{border-color:rgba(0,229,255,.5);transform:translateY(-1px)}
+.card .name{font:700 16px var(--display);letter-spacing:.02em;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+.card .desc{color:var(--muted);font-size:13.5px}
+.tag{font:600 10px var(--display);letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid rgba(0,229,255,.4);color:var(--cyan)}
+.card.soon{opacity:.55;cursor:default}
+.card.soon .tag{border-color:var(--line);color:var(--muted)}
+footer{margin-top:56px;color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span>Jarbas · laboratório</span>
+    <h1>Incubadora</h1>
+    <p>Onde testamos rosto, expressões, cenário e animações do Jarbas antes de levar qualquer coisa para o app de verdade. Cada laboratório é uma página independente — nada aqui altera o companion em uso.</p>
+  </header>
+
+  <h2>Laboratórios</h2>
+  <div class="grid">
+    <a class="card" href="./lab-1-2.html">
+      <div class="name">Lab 1 + 2 — Rosto e materialização <span class="tag">disponível</span></div>
+      <div class="desc">Rosto com física de molas, o catálogo completo de expressões, e a materialização de objetos e cenas em partículas sobre um fundo animado.</div>
+    </a>
+  </div>
+
+  <h2>Em breve</h2>
+  <div class="grid">
+    <div class="card soon">
+      <div class="name">Lab 3 — Cenário e telas <span class="tag">em breve</span></div>
+      <div class="desc">O ambiente ao redor do Jarbas e as telas que ele acompanha com você.</div>
+    </div>
+    <div class="card soon">
+      <div class="name">Lab 4 — Balões e lousa <span class="tag">em breve</span></div>
+      <div class="desc">Balões de fala, cartões de dados, lousa e quadro de pensamento.</div>
+    </div>
+    <div class="card soon">
+      <div class="name">Lab 5 — Onde o Jarbas gosta de estar <span class="tag">em breve</span></div>
+      <div class="desc">O lugar que o Jarbas escolhe quando está sozinho, sem ninguém chamando.</div>
+    </div>
+  </div>
+
+  <footer>Experimental — não faz parte do app em uso. Veja <code>README.md</code> nesta pasta para detalhes.</footer>
+</main>
+</body>
+</html>
