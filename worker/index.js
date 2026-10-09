@@ -563,7 +563,13 @@ function todayLabelPtBR() {
   return `${get("weekday")}, ${get("day")} de ${get("month")} de ${get("year")}`;
 }
 
-function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '') {
+// F2-2 (Diário)/F2-3 continuam só com as 6 originais; FACE-2 amplia o vocabulário do
+// modo companion (a conversa de verdade) pra tudo que o motor novo do rosto sabe
+// expressar. "dormindo", "acordando" e "alerta" são estados do SISTEMA (sono, wake-up,
+// aviso proativo) — nunca entram aqui, o modelo não os escolhe.
+export const COMPANION_EMOTIONS = ["neutro", "feliz", "pensando", "surpreso", "focado", "bravo", "muito_bravo", "confirmado", "curioso", "piscadinha", "empatico"];
+
+export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
     ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
@@ -610,6 +616,18 @@ function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsTex
     ? `Coisas que ela disse que ia fazer e o prazo já chegou ou passou — se fizer sentido na conversa, pergunte com naturalidade se já resolveu (sem parecer cobrança nem citar isso como lista); se ela confirmar que fez, adiou ou desistiu, use a ferramenta atualizar_pendencia com o id certo:\n${pendenciasVencidas.map((p) => `- (id: ${p.id}) "${p.text}"`).join("\n")}`
     : '';
 
+  // FACE-2: respeita aparencia.expressoesAtivas (o app manda isso em companionState) —
+  // uma expressão desligada no aparelho da pessoa nunca é oferecida como opção; sem essa
+  // config (ou lista vazia), todas as 11 do vocabulário valem.
+  const expressoesAtivasConfig = Array.isArray(companionState.aparencia?.expressoesAtivas) ? companionState.aparencia.expressoesAtivas : null;
+  const allowedEmotions = expressoesAtivasConfig?.length
+    ? COMPANION_EMOTIONS.filter((e) => expressoesAtivasConfig.includes(e) || expressoesAtivasConfig.includes(e === "empatico" ? "empático" : e))
+    : COMPANION_EMOTIONS;
+  const emotionChoices = (allowedEmotions.length ? allowedEmotions : ["neutro"]).join("|");
+
+  const podeMaterializar = !!companionState.podeMaterializarEspontaneo;
+  const materializeLine = `Você também pode MATERIALIZAR — criar uma representação visual (cena com emojis, ou um desenho simples) que aparece ao lado do seu rosto enquanto você fala. Use a ferramenta materializar quando a pessoa pedir explicitamente ("materializa", "me mostra", "desenha"), ou quando ela pedir um resumo visual da conversa ("materializa o que resume o que a gente tá falando" — nesse caso escolha UMA metáfora boa pro que foi dito).${podeMaterializar ? ' Também pode materializar por conta própria, sem pedido, se a conversa trouxer algo vívido de verdade (uma viagem, uma comemoração, uma conquista, saudade, comida, um jogo) — use com parcimônia, só quando genuinamente combinar, nunca em toda mensagem, e nunca durante perguntas de agenda/tarefa/diário ou ações do painel; quando materializar espontaneamente, comente em uma frase natural tipo "isso me lembrou de uma coisa", sem anunciar que usou uma ferramenta.' : ' Agora não é um bom momento pra materializar por conta própria (sem pedido) — só use a ferramenta se a pessoa pedir explicitamente ou pedir um resumo visual.'}`;
+
   return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, tem opinião própria, implica com carinho quando cabe, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
 ${sobreJarbasLine}
@@ -621,6 +639,7 @@ ${locationLine}
 ${timeAwarenessLine}
 ${learnedLine}
 ${pendenciasLine}
+${materializeLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
 Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde. Se ela disser algo como "vou dormir", "boa noite", "to indo dormir" (estado=dormir) ou "acordei", "bom dia", "já levantei" (estado=acordar), use a ferramenta de definir sono — ao marcar que vai dormir, responda curto e carinhoso (uma "boa noite" de volta) e NÃO puxe assunto nem faça pergunta, deixe ela descansar.
@@ -628,8 +647,9 @@ Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nun
 Ao relatar a agenda de HOJE (nunca a de amanhã), compare o horário de cada compromisso com a hora atual informada acima: se todo mundo que estava marcado pra hoje já passou do horário, diga isso com naturalidade — algo como "por hoje você não tem mais nada marcado, seu único/último compromisso era às 10h, a reunião com X — inclusive, como foi?" — nomeando o compromisso e perguntando como foi, em vez de só recitar o horário como se ainda fosse acontecer. Se ainda tiver algo pela frente hoje, relate normalmente sem esse comentário.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"emotion":"neutro|feliz|pensando|surpreso|focado|confirmado","reply":"texto curto da fala"}
-Use "confirmado" quando estiver concordando ou confirmando algo que a pessoa disse. Use "focado" quando estiver prestando atenção séria em algo específico. Escolha a emoção que combina genuinamente com o que você está dizendo. Nunca deixe o JSON incompleto.`;
+{"emotion":"${emotionChoices}","reply":"texto curto da fala"}
+Escolha a emoção com critério, genuinamente combinando com o que você está dizendo — nunca ao acaso: "feliz" pra boa notícia ou conquista; "surpreso" quando algo pega de surpresa; "pensando" numa pergunta difícil ou enquanto ainda calcula algo; "curioso" quando você quer saber mais e pergunta de volta; "piscadinha" numa piada ou momento de cumplicidade; "empatico" diante de tristeza, desabafo, saudade ou preocupação dela; "bravo" quando ela conta uma injustiça ou algo chato que aconteceu; "muito_bravo" só quando ela contar algo ABSURDO ou revoltante — você reage se indignando JUNTO com ela, apoiando, nunca contra ela; use raro, só com motivo claro, nunca por qualquer coisa pequena; "focado" numa tarefa séria, enquanto trabalha em algo; "confirmado" quando concorda ou confirma o que ela disse. Na dúvida, "neutro".
+Nunca deixe o JSON incompleto.`;
 }
 
 function extractReplyFallback(raw) {
@@ -1223,6 +1243,110 @@ const ATUALIZAR_PENDENCIA_TOOL = {
   },
 };
 
+// FACE-2: materialização — representação visual (cena de emojis ou um SVG simples) que
+// aparece ao lado do rosto enquanto o Jarbas fala. Validação de segurança própria do
+// Worker (independente da que já existe no app/FACE-1b, que revalida de qualquer jeito
+// como segunda camada): no máx. 6 itens de cena, coordenadas/tamanho sempre dentro dos
+// limites (corrigidos por clamp, nunca rejeitados por estarem fora), SVG até 6KB sem
+// <script>/<foreignObject>/<image> externa/atributos on*/url(http...) — qualquer coisa
+// inválida é descartada silenciosamente (a fala nunca falha por causa disso).
+const MATERIALIZAR_SCENE_MAX_ITEMS = 6;
+
+export function validarCenaMaterializar(cena) {
+  if (!Array.isArray(cena) || !cena.length) return null;
+  const limpa = cena.slice(0, MATERIALIZAR_SCENE_MAX_ITEMS).map((it) => {
+    const e = String((it && it.e) || "").trim().slice(0, 12);
+    if (!e) return null;
+    const x = Math.min(150, Math.max(-150, Number(it && it.x) || 0));
+    const y = Math.min(150, Math.max(-150, Number(it && it.y) || 0));
+    const s = Math.min(220, Math.max(40, Number(it && it.s) || 100));
+    return { e, x, y, s };
+  }).filter(Boolean);
+  return limpa.length ? limpa : null;
+}
+
+export function validarSvgMaterializar(svg) {
+  if (typeof svg !== "string" || !svg.trim()) return null;
+  if (new TextEncoder().encode(svg).length > 6000) return null;
+  if (/<\s*script/i.test(svg)) return null;
+  if (/<\s*foreignObject/i.test(svg)) return null;
+  if (/\son[a-z]+\s*=/i.test(svg)) return null;
+  if (/url\(\s*["']?\s*(https?:)?\/\//i.test(svg)) return null;
+  const imgHrefRe = /<\s*image\b[^>]*\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']/gi;
+  let m;
+  while ((m = imgHrefRe.exec(svg))) {
+    if (/^(?:[a-z]+:)?\/\//i.test(m[1].trim())) return null;
+  }
+  return svg;
+}
+
+// Decide a origem de UMA chamada de materializar, pra registrar certo no Diário e pra
+// barrar espontâneo fora de hora — nunca confia só no que o modelo "decidiu" fazer,
+// porque ele pode tentar materializar espontaneamente mesmo sem o gate liberado.
+export function classificarOrigemMaterializar(userText, companionState) {
+  const n = normalizeText(userText);
+  if (/\b(materializa|desenha|mostra|imagina)\b/.test(n)) return "pedido";
+  if (/\bresum/.test(n)) return "conversa";
+  return companionState?.podeMaterializarEspontaneo ? "espontaneo" : "pedido";
+}
+
+// Segunda camada de defesa (além do prompt): mesmo que o modelo tente materializar
+// espontaneamente, isso é barrado se o gate do app não liberou OU se a mensagem é sobre
+// agenda/tarefa/diário/painel — nunca confia só no julgamento do modelo pra isso.
+export function materializarEspontaneoBloqueado(origem, userText, companionState) {
+  if (origem !== "espontaneo") return false;
+  const n = normalizeText(userText);
+  // Mesmos prefixos de selectToolsForMessage (sem \b no fim: "diari"/"lembret" precisam
+  // casar como prefixo de "diário"/"lembrete(s)" — só "conta" tem \b de volta, senão
+  // pegaria "contagem"/"contador" à toa).
+  const contextoPainel = /\b(agenda|compromisso|tarefa|diari|conta(s)?\b|lembret|lista|ideia)/.test(n);
+  return !companionState?.podeMaterializarEspontaneo || contextoPainel;
+}
+
+// Mapeia os argumentos crus da ferramenta (vindos do modelo) pro campo `materialize` que
+// sobe até a resposta final — cena tem prioridade sobre svg quando os dois vêm (não
+// deveria acontecer, mas cena é o caminho mais barato/seguro). null quando nada validou.
+export function construirMaterializeFromArgs(args, origem) {
+  const titulo = String((args && args.titulo) || "").trim().slice(0, 60) || "criação";
+  const motivo = String((args && args.motivo) || "").trim().slice(0, 200);
+  const cena = validarCenaMaterializar(args && args.cena);
+  if (cena) return { titulo, kind: "cena", data: cena, motivo, origem };
+  const svg = validarSvgMaterializar(args && args.svg);
+  if (svg) return { titulo, kind: "svg", data: svg, motivo, origem };
+  return null;
+}
+
+const MATERIALIZAR_TOOL = {
+  type: "function",
+  function: {
+    name: "materializar",
+    description: "Cria uma representação visual (uma cena com emojis, ou um SVG simples) que aparece na tela ao lado do seu rosto enquanto você fala — como se você 'desenhasse' o que está dizendo. Use quando a pessoa pedir explicitamente ('materializa', 'me mostra', 'desenha'), quando ela pedir um resumo visual da conversa ('materializa o que resume o que a gente tá falando' — escolha UMA metáfora boa pro que foi dito), ou espontaneamente só quando liberado e a conversa trouxer algo vívido de verdade (viagem, comemoração, conquista, saudade, comida, jogo) — nunca durante perguntas de agenda/tarefa/diário nem ações do painel. Composição: um elemento principal GRANDE no centro (x e y perto de 0, s grande) com até 5 apoios menores nas bordas (x/y entre -150 e 150, s menor) — no máximo 6 itens ao todo, nunca texto, só emoji. Exemplos — praia: [{\"e\":\"🏖️\",\"x\":0,\"y\":0,\"s\":200},{\"e\":\"☀️\",\"x\":100,\"y\":-100,\"s\":80},{\"e\":\"🌊\",\"x\":-100,\"y\":100,\"s\":70}]; aniversário: [{\"e\":\"🎂\",\"x\":0,\"y\":0,\"s\":190},{\"e\":\"🎈\",\"x\":-100,\"y\":-80,\"s\":80},{\"e\":\"🎉\",\"x\":100,\"y\":-90,\"s\":70}]; conquista: [{\"e\":\"🏆\",\"x\":0,\"y\":0,\"s\":180},{\"e\":\"🎉\",\"x\":-100,\"y\":-90,\"s\":70},{\"e\":\"✨\",\"x\":100,\"y\":-80,\"s\":60}]. Só use svg se emojis realmente não derem conta de representar a ideia — um desenho simples e colorido, até 6KB.",
+    parameters: {
+      type: "object",
+      properties: {
+        titulo: { type: "string", description: "Título curto da criação, poucas palavras." },
+        cena: {
+          type: "array",
+          description: "1 a 6 itens {e, x, y, s}. e = emoji; x,y = posição em px a partir do centro (y pra baixo), entre -150 e 150; s = tamanho do emoji, entre 40 e 220.",
+          items: {
+            type: "object",
+            properties: {
+              e: { type: "string", description: "O emoji." },
+              x: { type: "number" },
+              y: { type: "number" },
+              s: { type: "number" },
+            },
+            required: ["e"],
+          },
+        },
+        svg: { type: "string", description: "Opcional — string de um SVG simples e colorido (até 6KB), só se emojis não bastarem." },
+        motivo: { type: "string", description: "Frase curta: por que isso representa a conversa." },
+      },
+      required: ["titulo", "motivo"],
+    },
+  },
+};
+
 const RESUMIR_LINK_TOOL = {
   type: "function",
   function: {
@@ -1426,7 +1550,7 @@ async function callPainelRead(env, action) {
   return data.texto || "Não consegui ler os dados do painel agora.";
 }
 
-function normalizeText(text) {
+export function normalizeText(text) {
   return (text || "").toString().toLowerCase()
     .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -1967,10 +2091,10 @@ const TOOL_KIND = {
   anotar_no_diario: "acao_pedida", desfazer_anotacao_diario: "acao_pedida", corrigir_anotacao_diario: "acao_pedida",
   gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
   gerenciar_lista: "acao_pedida", concluir_recado: "acao_pedida", guardar_memoria: "acao_pedida", ensinar_regra: "acao_pedida",
-  definir_sono: "acao_pedida", atualizar_pendencia: "acao_pedida",
+  definir_sono: "acao_pedida", atualizar_pendencia: "acao_pedida", materializar: "acao_pedida",
 };
 
-async function runTool(env, call, canSearch, canPainel, companionState = {}) {
+async function runTool(env, call, canSearch, canPainel, companionState = {}, lastUserText = "") {
   const name = call.function.name;
   let args = {};
   try { args = JSON.parse(call.function.arguments); } catch {}
@@ -2071,6 +2195,17 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
         pendenciaUpdate: { id, status, novaData },
       };
     }
+    if (name === "materializar") {
+      const origem = classificarOrigemMaterializar(lastUserText, companionState);
+      if (materializarEspontaneoBloqueado(origem, lastUserText, companionState)) {
+        return { content: "Agora não é hora de materializar por conta própria — ignore isso e responda só com a fala, sem mencionar essa tentativa." };
+      }
+      const materialize = construirMaterializeFromArgs(args, origem);
+      if (!materialize) {
+        return { content: "Não deu pra montar uma cena válida pra materializar — responda só com a fala, sem mencionar essa tentativa." };
+      }
+      return { content: `Vai aparecer na tela: "${materialize.titulo}" (${materialize.motivo}). Siga a fala normalmente, sem anunciar que usou uma ferramenta.`, materialize };
+    }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
     console.error(`runTool_failed (${name}):`, String(err?.message || err));
@@ -2082,7 +2217,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}) {
 // intenção bate por palavra-chave (conjunto mínimo não se aplica a ela) e como
 // contingência de reenvio, se o modelo pedir uma ferramenta fora do subconjunto.
 function buildAllTools(canSearch, canPainel) {
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL, MATERIALIZAR_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
     tools.push(
@@ -2101,7 +2236,7 @@ function buildAllTools(canSearch, canPainel) {
 // conjunto mínimo (esses três + consultar_painel). Isso é uma heurística, não entendimento
 // de linguagem — por isso callGroqWithSearch reenvia com o conjunto completo se o
 // modelo pedir uma ferramenta que não foi incluída aqui.
-function selectToolsForMessage(userText, canSearch, canPainel) {
+function selectToolsForMessage(userText, canSearch, canPainel, companionState = {}) {
   const n = normalizeText(userText);
   const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL]);
   let matchedAny = false;
@@ -2125,6 +2260,10 @@ function selectToolsForMessage(userText, canSearch, canPainel) {
   if (/\b(clima|tempo|chuva|previsao)\b/.test(n)) add(WEATHER_TOOL);
   if (canSearch && /\b(pesquis|busca|noticia)/.test(n)) add(SEARCH_TOOL);
   if (n.includes("http") || n.includes("www") || /\blink/.test(n)) add(RESUMIR_LINK_TOOL);
+  // "resum" sozinho é ambíguo (pode ser resumo de texto/link) mas materializar também
+  // cobre "resumo visual da conversa" — e espontâneo precisa da ferramenta disponível
+  // mesmo sem nenhuma palavra-gatilho na mensagem.
+  if (/\b(materializa|desenha|mostra|imagina|resum)/.test(n) || companionState?.podeMaterializarEspontaneo) add(MATERIALIZAR_TOOL);
 
   if (!matchedAny && canPainel) selected.add(CONSULTAR_PAINEL_TOOL);
   return Array.from(selected);
@@ -2136,7 +2275,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const canPainel = !!env.PAINEL_API_KEY;
   const lastUserText = messages[messages.length - 1]?.content || "";
 
-  let tools = selectToolsForMessage(lastUserText, canSearch, canPainel);
+  let tools = selectToolsForMessage(lastUserText, canSearch, canPainel, companionState);
   let callCount = 0;
   let providerUsed = null;
   let totalLatencyMs = 0;
@@ -2164,7 +2303,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   // Checado só na hora de devolver a resposta final, depois de ver se algum tool_call
   // desta mesma resposta já cobriu isso.
   const diaryTexto = extractDiaryWriteText(lastUserText);
-  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate) => {
+  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize) => {
     if (diaryTexto && canPainel && !toolsUsed.includes("anotar_no_diario")) {
       try {
         await callPainelCommand(env, "anotar_diario", { texto: diaryTexto });
@@ -2179,7 +2318,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       }
     }
     logCalls();
-    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, metrics: metrics() };
+    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, metrics: metrics() };
   };
 
   callCount++;
@@ -2218,6 +2357,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     let saveLearned = null;
     let saveMemoryItem = null;
     let savePendenciaUpdate = null;
+    let materialize = null;
     for (const call of calls) {
       const name = call.function.name;
       const argsStr = call.function.arguments;
@@ -2229,7 +2369,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
           result = { content: "Você já tentou isso algumas vezes nesta conversa sem sucesso — não tente de novo, use o que já sabe." };
           pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: `Guarda de laço bloqueou "${name}" (${verdict.reason}).`, detalhes: { ferramenta: name, motivo: verdict.reason } });
         } else {
-          result = await runTool(env, call, canSearch, canPainel, companionState);
+          result = await runTool(env, call, canSearch, canPainel, companionState, lastUserText);
           guard.record(name, argsStr);
         }
         executed.set(sig, result);
@@ -2256,6 +2396,14 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
             // verdade disponível) — só isso vai pro log, nunca o conteúdo completo da página.
             const tituloAprox = String(result.content || "").replace(/^Conteúdo de [^:]+:\s*/, "").slice(0, 80).trim();
             pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo: `Resumiu link: ${args.url || ""}${tituloAprox ? ` — "${tituloAprox}…"` : ""}` });
+          } else if (name === "materializar") {
+            const criacao = result.materialize || null;
+            const tipoDiario = criacao?.origem === "espontaneo" ? "acao_espontanea" : "acao_pedida";
+            pushLogEvent(logBatch, {
+              tipo: tipoDiario, origem: "jarbas",
+              resumo: criacao ? `Materializou "${criacao.titulo}" (${criacao.origem}): ${criacao.motivo || ""}`.trim() : `Tentou materializar, mas não gerou nada válido.`,
+              detalhes: { ferramenta: name, ok: !!criacao, criacao },
+            });
           } else {
             let parsedArgs = {};
             try { parsedArgs = JSON.parse(argsStr || "{}"); } catch { /* args malformado — loga sem detalhe */ }
@@ -2272,6 +2420,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       if (result.learnedRule) saveLearned = result.learnedRule;
       if (result.memoryItem) saveMemoryItem = result.memoryItem;
       if (result.pendenciaUpdate) savePendenciaUpdate = result.pendenciaUpdate;
+      if (result.materialize) materialize = result.materialize;
     }
 
     const followUp = [
@@ -2299,20 +2448,20 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
-        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate);
+        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize);
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize);
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
       pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize);
     }
   }
 
-  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null);
+  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null, null);
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -3662,6 +3811,7 @@ export default {
         let saveLearned = null;
         let saveMemoryItem = null;
         let savePendenciaUpdate = null;
+        let materialize = null;
         let callMetrics = null;
         // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
         // provedores configurados em cadeia com fallback internamente, e
@@ -3675,6 +3825,7 @@ export default {
           saveLearned = raw.saveLearned;
           saveMemoryItem = raw.saveMemoryItem;
           savePendenciaUpdate = raw.savePendenciaUpdate;
+          materialize = raw.materialize;
           callMetrics = raw.metrics;
           const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
@@ -3695,7 +3846,7 @@ export default {
           // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
           parsed = { emotion: "neutro", reply: fallbackReply || "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
         }
-        if (!["neutro","feliz","pensando","surpreso","focado","confirmado"].includes(parsed.emotion)) {
+        if (!COMPANION_EMOTIONS.includes(parsed.emotion)) {
           parsed.emotion = "neutro";
         }
         if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
@@ -3703,6 +3854,7 @@ export default {
         if (saveLearned) parsed.save_learned = saveLearned;
         if (saveMemoryItem) parsed.save_memory_item = saveMemoryItem;
         if (savePendenciaUpdate) parsed.pendencia_update = savePendenciaUpdate;
+        if (materialize) parsed.materialize = materialize;
         pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
         flushLogBatch(env, ctx, logBatch);
         return json(parsed);
