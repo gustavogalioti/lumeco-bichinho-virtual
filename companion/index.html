@@ -2623,6 +2623,13 @@ function buildAparenciaForWorker(){
   };
 }
 
+// Limita o peso de mem.creations no blob sincronizado (localStorage + servidor a cada
+// mensagem): no máximo 60 criações; SVG pode ter até 6KB cada, então só as 15 mais
+// recentes guardam o `data` — as mais antigas descartam o SVG (data:null, semPrevia:true)
+// mas preservam título/data/origem/motivo. Cena de emoji e forma ficam pequenas, mantêm
+// `data` sempre, em qualquer posição.
+const JARBAS_CREATIONS_MAX = 60;
+const JARBAS_CREATIONS_SVG_COM_PREVIA = 15;
 function registerCreation(m){
   if(!m || !m.titulo) return;
   if(!Array.isArray(mem.creations)) mem.creations = [];
@@ -2635,7 +2642,12 @@ function registerCreation(m){
     motivo: String(m.motivo || '').slice(0, 300),
     at: new Date().toISOString(),
   });
-  mem.creations = mem.creations.slice(0, 200);
+  mem.creations = mem.creations.slice(0, JARBAS_CREATIONS_MAX).map((c, i) => {
+    if(c.kind === 'svg' && i >= JARBAS_CREATIONS_SVG_COM_PREVIA){
+      return { ...c, data: null, semPrevia: true };
+    }
+    return c;
+  });
 }
 
 // PARTE C: o Worker manda "coracao" (sem acento, pra caber num enum JSON) — a biblioteca
@@ -2951,14 +2963,16 @@ function findWakeWordMatch(text, apelidos){
   }
   return { matched: false, rest: '' };
 }
-// Similaridade 0..1: 1 se um está inteiro contido no outro (só conta pra textos com 8+
-// caracteres normalizados, senão uma palavra curta e comum ficaria "contida" à toa numa
-// fala longa do Jarbas); senão o maior entre sobreposição de palavras e proximidade por
-// Levenshtein — robusto tanto pra eco quase idêntico quanto pra eco com um pedaço cortado.
+// Similaridade 0..1: 1 se um está inteiro contido no outro (só conta pra textos com pelo
+// menos 4 palavras E 18+ caracteres normalizados — senão uma frase curta e comum tipo
+// "tomar café" ficaria "contida" à toa numa fala longa do Jarbas); senão o maior entre
+// sobreposição de palavras e proximidade por Levenshtein — robusto tanto pra eco quase
+// idêntico quanto pra eco com um pedaço cortado.
 function textSimilarity(a, b){
   const na = normalizeVoiceText(a), nb = normalizeVoiceText(b);
   if(!na || !nb) return 0;
-  if(na.length >= 8 && (nb.includes(na) || na.includes(nb))) return 1;
+  const naWordCount = na.split(' ').filter(Boolean).length;
+  if(na.length >= 18 && naWordCount >= 4 && (nb.includes(na) || na.includes(nb))) return 1;
   const wa = na.split(' ').filter(Boolean);
   const wbSet = new Set(nb.split(' ').filter(Boolean));
   let common = 0;
@@ -2988,6 +3002,18 @@ function isLikelyEcho(transcript, nowMs){
     if(textSimilarity(transcript, line) >= 0.65) return true;
   }
   return false;
+}
+
+// ECO-2: decide se uma transcrição deve ser descartada como eco. A guarda de "Jarbas
+// falando" (isSpeaking) + a folga de 900ms vale SEMPRE, em qualquer modo. A checagem de
+// semelhança com falas recentes (isLikelyEcho) só entra em mãos livres — no toque pra
+// falar a pessoa apertou o botão de propósito, então uma pergunta curta contida numa
+// fala recente do Jarbas (ex: Jarbas diz "Anotei que você tomou café em casa", a pessoa
+// toca e pergunta "tomar café?") nunca pode ser descartada em silêncio.
+function shouldDiscardAsEcho(transcript, nowMs, handsFree, speaking, speechEndedAtMs, graceMs){
+  if(speaking || (nowMs - speechEndedAtMs) < graceMs) return true;
+  if(!handsFree) return false;
+  return isLikelyEcho(transcript, nowMs);
 }
 
 // ---------- janela de continuidade: abre no FIM da fala do Jarbas (nunca no início),
@@ -3145,12 +3171,8 @@ function initRecognition(){
     }
 
     // Supressão de eco, SEMPRE primeiro — nunca entra no histórico nem vira pergunta.
-    if(isSpeaking || (Date.now() - speechEndedAt) < ECHO_GRACE_MS){
-      console.warn('eco descartado (fala em andamento)');
-      showMicDebug(text, 'eco');
-      return;
-    }
-    if(isLikelyEcho(text, Date.now())){
+    // No toque pra falar, só a guarda de "Jarbas falando" vale (ver shouldDiscardAsEcho).
+    if(shouldDiscardAsEcho(text, Date.now(), handsFree, isSpeaking, speechEndedAt, ECHO_GRACE_MS)){
       console.warn('eco descartado');
       showMicDebug(text, 'eco');
       return;
