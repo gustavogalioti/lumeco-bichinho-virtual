@@ -156,6 +156,28 @@
   @keyframes cartao-sai{ to{ opacity:0; transform:translateY(-8px); } }
   body.classic-face #links, body.classic-face #overlay, body.classic-face #bolhas, body.classic-face #cartoes{ display:none; }
 
+  /* ---------- PARTE F: lousa real e quadro de pensamento — portado de
+     incubadora/lab-3-4.html (DR/escrever/desenhar, SC.praia/fogos/flor/sofa/pensar).
+     Nunca aparecem juntas (ver lousaAbrir/pensar no script); escondidas no motor "classic". ---------- */
+  .lousa{
+    position:absolute; left:50%; top:27%; width:min(330px,66vw); aspect-ratio:4/3;
+    transform:translateX(-50%) perspective(900px) rotateX(4deg);
+    border-radius:12px; background:linear-gradient(145deg,#10201f,#0b1716);
+    border:4px solid #263636; box-shadow:0 0 0 1px rgba(0,229,255,.2), 0 18px 40px -16px #000;
+    transition:opacity .5s; pointer-events:auto; cursor:pointer;
+  }
+  .lousa[hidden]{ display:none; } .lousa.some{ opacity:0; }
+  .lousa svg{ width:100%; height:100%; display:block; }
+  .lousa .etq{ position:absolute; left:10px; top:6px; font:700 9px 'Chakra Petch',sans-serif; letter-spacing:.14em; color:rgba(255,255,255,.35); text-transform:uppercase; }
+  .giz{ position:fixed; width:7px; height:7px; border-radius:50%; background:#fff; box-shadow:0 0 10px #fff; z-index:3; pointer-events:none; display:none; }
+  .po{ position:fixed; width:3px; height:3px; border-radius:50%; background:rgba(255,255,255,.75); z-index:3; pointer-events:none; animation:po-cai 1s forwards; }
+  @keyframes po-cai{ to{ transform:translateY(26px); opacity:0; } }
+  .pensamento{ position:absolute; left:50%; top:2.5%; width:min(220px,44vw); transform:translateX(-50%); transition:opacity .6s; pointer-events:none; }
+  .pensamento[hidden]{ display:none; } .pensamento.some{ opacity:0; }
+  .pensamento canvas{ display:block; width:100%; aspect-ratio:1.6; border-radius:18px; border:2px solid rgba(160,130,255,.55); box-shadow:0 0 24px -6px rgba(155,107,255,.65); background:#0a1018; }
+  .pensamento .legenda{ display:block; text-align:center; margin-top:5px; font:600 10px 'Chakra Petch',sans-serif; letter-spacing:.1em; color:#c5b2ff; text-transform:uppercase; }
+  body.classic-face #lousa, body.classic-face #pensamento, body.classic-face #giz{ display:none; }
+
   /* ---------- Histórico (pop-up) e cartão "Resumo do dia" ---------- */
   .history-overlay, .briefing-card-overlay{
     position:fixed; inset:0; z-index:40; background:rgba(0,0,0,0.72);
@@ -287,9 +309,12 @@
   <div class="tela t-tarefas" id="tTarefas"></div>
   <div class="tela t-tv" id="tTv"></div>
   <div class="tela t-mercado" id="tMercado"></div>
+  <div class="lousa" id="lousa" hidden><svg viewBox="0 0 300 225" id="lousaSvg" aria-label="Lousa"></svg><span class="etq">Lousa</span></div>
+  <div class="pensamento" id="pensamento" hidden><canvas id="pensCv" width="420" height="262"></canvas><span class="legenda" id="pensLeg"></span></div>
 </div>
 <div id="bolhas"></div>
 <div id="cartoes"></div>
+<div class="giz" id="giz"></div>
 
 <div class="bottom-ui">
   <div class="caption" id="caption">
@@ -538,7 +563,7 @@ Spring.prototype.step = function(dt){
 Spring.prototype.kick = function(v){ this.v += v; };
 
 const tune = { speed:1, damp:1, intensity:1 };
-const opts = { olharVivo:true, piscadas:true, autoReturn:true, expressoesAtivas:null, telas:true, baloes:true, sinapses:true };
+const opts = { olharVivo:true, piscadas:true, autoReturn:true, expressoesAtivas:null, telas:true, baloes:true, sinapses:true, lousa:true, pensamento:true };
 
 const EK = { sx:[1,12,.72], sy:[1,12,.72], r:[.32,9,.9], hole:[.42,9,.9], tilt:[0,12,.7], lidTop:[0,15,.72], lidTilt:[0,12,.85], lidBot:[0,14,.85], cheek:[0,11,.66], ex:[0,12,.85], ey:[0,12,.85], alpha:[1,10,1], hx:[0,16,.85], hy:[0,16,.85] };
 function mkEye(){ const o={}; for(const k in EK) o[k]=new Spring(EK[k][0],EK[k][1],EK[k][2]); return o; }
@@ -809,7 +834,9 @@ const APARENCIA_DEFAULTS = {
   fundoIntensidade:.3, fundoSegueHumor:true, particulas:12000, tamanhoTriangulos:4.5, girar:.5,
   manterSegundos:9, manterAteDissolver:false, coresMateriais:'neon', qualidadeAutomatica:true, efeitosReduzidos:false,
   // PARTE: telas ao redor, balões de conversa e linhas de sinapse (Lab 3+4)
-  telas:true, baloes:true, sinapses:true
+  telas:true, baloes:true, sinapses:true,
+  // PARTE F: lousa real e quadro de pensamento (Lab 3+4, parte B)
+  lousa:true, pensamento:true
 };
 function applyAparencia(){
   const ap = { ...APARENCIA_DEFAULTS, ...((typeof mem!=='undefined' && mem && mem.config && mem.config.aparencia) || {}) };
@@ -835,7 +862,15 @@ function applyAparencia(){
   opts.telas = ap.telas !== false;
   opts.baloes = ap.baloes !== false;
   opts.sinapses = ap.sinapses !== false;
-  if(!CLASSIC_FACE) aplicarVisibilidadeTelas();
+  opts.lousa = ap.lousa !== false;
+  opts.pensamento = ap.pensamento !== false;
+  if(!CLASSIC_FACE){
+    aplicarVisibilidadeTelas();
+    // Desligar pela config fecha na hora o que estiver aberto — nunca deixa uma
+    // lousa/cena de pensamento "fantasma" depois que a pessoa desativou no painel.
+    if(!opts.lousa) lousaFechar();
+    if(!opts.pensamento) pensarFim();
+  }
 }
 
 function resizeFace(){
@@ -870,6 +905,7 @@ function faceFrameBody(now){
   renderGL(now, t, dt, idleBand(now));
   drawFace(now, t, effectiveQuality()==='leve');
   drawLinks(now); // PARTE: sinapses das telas/balões/cartões até o rosto (Lab 3+4)
+  pensarFrame(now); // PARTE F: quadro de pensamento (Lab 3+4, parte B)
 }
 
 /* ========== FACE-1b: cenário animado (fundo) + materialização (partículas) ==========
@@ -1665,6 +1701,242 @@ function renderCards(cards){
 const OV = document.getElementById('overlay');
 setInterval(ajustarVisibilidadeTelasSeguro, 600);
 function ajustarVisibilidadeTelasSeguro(){ try{ aplicarVisibilidadeTelas(); }catch(e){} }
+
+/* ========== Lousa real e quadro de pensamento — portado de incubadora/lab-3-4.html
+   (DR/escrever/desenhar, SC.praia/fogos/flor/sofa/pensar/pensarFim/sceneByMood), parte B
+   do Lab 3+4. Lousa vem do Worker (ferramenta "lousa", parsed.lousa); pensamento é só
+   local (sem IA, sem push, sem custo de LLM/KV — só registra a lousa em mem.creations,
+   igual à materialização). Nunca aparecem juntas; materialização em curso tem prioridade
+   sobre as duas. Nunca roda no motor "classic". ========== */
+const lousaEl = document.getElementById('lousa');
+const lousaSvg = document.getElementById('lousaSvg');
+const gizEl = document.getElementById('giz');
+const SVG_NS = 'http://www.w3.org/2000/svg';
+lousaSvg.innerHTML = '<defs><filter id="gizf" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="2.4"/></filter></defs><g id="lousaGg" filter="url(#gizf)"></g>';
+const lousaGg = lousaSvg.querySelector('#lousaGg');
+let lousaTimer = 0, lousaDrawTok = 0;
+
+// As 5 "formas" prontas que a ferramenta `lousa` do Worker pode pedir (parte{tipo:'forma',
+// nome}) — mesmos traços do lab (DR), coordenadas já na lousa de 300×225.
+const DR_LOUSA = {
+  casa: [{ d:'M60 190 L60 112 L150 50 L240 112 L240 190 Z' }, { d:'M132 190 L132 142 L170 142 L170 190' }, { d:'M190 122 L224 122 L224 152 L190 152 Z' }, { d:'M205 78 L205 46 L222 46 L222 90' }, { d:'M214 36 Q226 26 214 16 Q202 6 216 -6', cor:'#9fb6b3' }],
+  coracao: [{ d:'M150 195 C40 125 60 40 150 92 C240 40 260 125 150 195 Z', cor:'#ff8fb3' }],
+  estrela: [{ d:'M150 30 L178 88 L242 96 L195 140 L208 204 L150 172 L92 204 L105 140 L58 96 L122 88 Z', cor:'#ffe08a' }],
+  grafico: [{ d:'M40 30 L40 190 L270 190' }, { d:'M62 160 L110 130 L150 142 L200 92 L252 54', cor:'#7cf0ff' }, { d:'M232 52 L252 54 L250 74', cor:'#7cf0ff' }],
+  equacao: [{ text:'12 × 8 = 96', x:34, y:112, size:50 }, { d:'M36 132 Q150 146 266 126', cor:'#7cf0ff' }],
+};
+// Transforma os itens validados pelo Worker (texto/linha/forma) numa lista de "passos de
+// giz" no formato do lab ({d,cor} ou {text,x,y,size}) — forma expande em várias partes.
+function lousaPassosFromItens(itens){
+  const passos = [];
+  (itens || []).forEach(it => {
+    if(!it || !it.tipo) return;
+    if(it.tipo === 'forma' && DR_LOUSA[it.nome]) passos.push(...DR_LOUSA[it.nome]);
+    else if(it.tipo === 'texto' && it.texto) passos.push({ text:String(it.texto), x:Number(it.x)||0, y:Number(it.y)||0, size:Number(it.tam)||32 });
+    else if(it.tipo === 'linha' && Array.isArray(it.pontos) && it.pontos.length >= 2){
+      passos.push({ d:'M' + it.pontos.map(p => `${Number(p[0])||0} ${Number(p[1])||0}`).join(' L ') });
+    }
+  });
+  return passos.slice(0, 24); // uma "forma" expande em várias partes — nunca cresce sem limite
+}
+function poeiraGiz(x,y){
+  const d = document.createElement('div'); d.className = 'po';
+  d.style.left = (x + (Math.random()*8-4)) + 'px'; d.style.top = (y + (Math.random()*6-2)) + 'px';
+  document.body.appendChild(d);
+  setTimeout(() => { if(d.parentNode) d.parentNode.removeChild(d); }, 1000);
+}
+function lousaAbrir(){ lousaEl.hidden = false; lousaEl.classList.remove('some'); G.rob.t = 1; }
+function lousaFechar(){
+  lousaDrawTok++; clearTimeout(lousaTimer);
+  lousaEl.classList.add('some'); gizEl.style.display = 'none'; G.rob.t = 0;
+  gazeTarget = [0,0]; gazeHold = performance.now() + 700;
+  setTimeout(() => { if(lousaEl.classList.contains('some')){ lousaEl.hidden = true; lousaGg.innerHTML = ''; } }, 650);
+}
+function escreverLousa(it, tok, done){
+  const id = 'cp' + Date.now() + Math.random().toString(36).slice(2);
+  const cp = document.createElementNS(SVG_NS,'clipPath'); cp.id = id;
+  const rc = document.createElementNS(SVG_NS,'rect'); rc.setAttribute('x',0); rc.setAttribute('y',0); rc.setAttribute('height',225); rc.setAttribute('width',0);
+  cp.appendChild(rc); lousaGg.appendChild(cp);
+  const tx = document.createElementNS(SVG_NS,'text');
+  tx.setAttribute('x', it.x); tx.setAttribute('y', it.y);
+  tx.setAttribute('font-family','cursive'); tx.setAttribute('font-size', it.size || 32); tx.setAttribute('font-weight','600');
+  tx.setAttribute('fill','#eaf3f1'); tx.setAttribute('clip-path', `url(#${id})`);
+  tx.textContent = it.text;
+  lousaGg.appendChild(tx);
+  const bb = tx.getBBox(), t0 = performance.now(), dur = 1700;
+  gizEl.style.display = 'block';
+  (function step(){
+    if(tok !== lousaDrawTok) return;
+    const r = lousaSvg.getBoundingClientRect(), sc = r.width/300;
+    const k = clamp((performance.now()-t0)/dur, 0, 1), w = bb.x + bb.width*k;
+    rc.setAttribute('width', w+4);
+    const px = r.left + w*sc, py = r.top + (bb.y + bb.height*.7)*sc;
+    gizEl.style.left = (px-3)+'px'; gizEl.style.top = (py-3)+'px';
+    if(Math.random()<.5) poeiraGiz(px,py);
+    if(k<1) requestAnimationFrame(step); else done();
+  })();
+}
+function desenharLousaPasso(it, tok, done){
+  if(it.text != null){ escreverLousa(it, tok, done); return; }
+  const p = document.createElementNS(SVG_NS,'path');
+  p.setAttribute('d', it.d); p.setAttribute('fill','none'); p.setAttribute('stroke', it.cor || '#eaf3f1');
+  p.setAttribute('stroke-width','3.2'); p.setAttribute('stroke-linecap','round'); p.setAttribute('stroke-linejoin','round');
+  lousaGg.appendChild(p);
+  const L = p.getTotalLength(), dur = clamp(L/190, .5, 2.2)*1000, t0 = performance.now();
+  p.style.strokeDasharray = L; p.style.strokeDashoffset = L;
+  gizEl.style.display = 'block';
+  (function step(){
+    if(tok !== lousaDrawTok) return;
+    const k = clamp((performance.now()-t0)/dur, 0, 1), e = k<.5 ? 2*k*k : 1-Math.pow(-2*k+2,2)/2;
+    p.style.strokeDashoffset = L*(1-e);
+    const pt = p.getPointAtLength(L*e), r = lousaSvg.getBoundingClientRect(), sc = r.width/300;
+    const px = r.left + pt.x*sc, py = r.top + pt.y*sc;
+    gizEl.style.left = (px-3)+'px'; gizEl.style.top = (py-3)+'px';
+    if(Math.random()<.5) poeiraGiz(px,py);
+    if(k<1) requestAnimationFrame(step); else done();
+  })();
+}
+function desenharLousaItens(itens){
+  const passos = lousaPassosFromItens(itens);
+  if(!passos.length) return;
+  const tok = ++lousaDrawTok; clearTimeout(lousaTimer); lousaGg.innerHTML = '';
+  lousaAbrir(); gazeTarget = [0,.75]; gazeHold = performance.now() + 60000;
+  let i = 0;
+  (function next(){
+    if(tok !== lousaDrawTok) return;
+    if(i >= passos.length){ gizEl.style.display = 'none'; lousaTimer = setTimeout(lousaFechar, 12000); return; }
+    desenharLousaPasso(passos[i++], tok, next);
+  })();
+}
+lousaEl.addEventListener('click', lousaFechar); // "feche sozinha 12s depois ou ao tocar"
+// Chamado só pelo askRaiz (parsed.lousa) — igual ao materialize, nunca atrasa/afeta a fala.
+function triggerLousa(payload){
+  try{
+    if(CLASSIC_FACE || !opts.lousa || !payload) return;
+    if(window.Jarbas && typeof window.Jarbas.isMaterialized === 'function' && window.Jarbas.isMaterialized()) return; // materialização tem prioridade
+    if(pensName) pensarFim(); // lousa e pensamento nunca aparecem juntas
+    desenharLousaItens(payload.itens);
+  }catch(err){
+    console.error('lousa_trigger_failed:', err);
+  }
+}
+
+// ---------- Quadro de pensamento: cenas procedurais (Lab 4 — SC.praia/fogos/flor/sofa) ----------
+const pensamentoEl = document.getElementById('pensamento');
+const pensCv = document.getElementById('pensCv');
+const pensCtx = pensCv.getContext('2d');
+const pensLeg = document.getElementById('pensLeg');
+const W2 = 420, H2 = 262; // mesmas dimensões do atributo width/height do <canvas id="pensCv">
+const FW = []; // partículas dos fogos de artifício (SC.fogos)
+let pensName = null, pensT0 = 0, pensHideTimer = 0, pensLastFrame = 0;
+const PENSAMENTO_LEGENDA = { praia:'um dia de praia', fogos:'comemorando', flor:'uma flor para você', sofa:'relaxando em casa' };
+function roundRectOn(c,x,y,w,h,r){
+  c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+const SC = {};
+SC.praia = function(c,t){
+  const w=W2, h=H2, g=c.createLinearGradient(0,0,0,h*.62); g.addColorStop(0,'#1a63ad'); g.addColorStop(1,'#9bdcf6'); c.fillStyle=g; c.fillRect(0,0,w,h);
+  const sx=w*.78, sy=h*.2, p=1+Math.sin(t*2)*.07, rg=c.createRadialGradient(sx,sy,2,sx,sy,60*p); rg.addColorStop(0,'rgba(255,240,150,1)'); rg.addColorStop(1,'rgba(255,200,60,0)'); c.fillStyle=rg; c.beginPath(); c.arc(sx,sy,60*p,0,TAU); c.fill(); c.fillStyle='#ffe680'; c.beginPath(); c.arc(sx,sy,20,0,TAU); c.fill();
+  c.fillStyle='rgba(255,255,255,.85)'; const nx=((t*8)%(w+120))-60; c.beginPath(); c.arc(nx,h*.22,14,0,TAU); c.arc(nx+16,h*.2,18,0,TAU); c.arc(nx+34,h*.23,12,0,TAU); c.fill();
+  let x; for(let k=0;k<3;k++){ const y0=h*.54+k*15; c.fillStyle=`rgba(${20+k*22},${110+k*28},${190+k*14},.95)`; c.beginPath(); c.moveTo(0,h); for(x=0;x<=w;x+=10) c.lineTo(x,y0+Math.sin(x*.045+t*(1.2+k*.4)+k*2)*4); c.lineTo(w,h); c.closePath(); c.fill(); }
+  c.fillStyle='#f0d9a2'; c.beginPath(); c.moveTo(0,h); for(x=0;x<=w;x+=10) c.lineTo(x,h*.8+Math.sin(x*.035)*3); c.lineTo(w,h); c.closePath(); c.fill();
+  const cx=((t*20)%(w+60))-30, cy=h*.9+Math.sin(t*9)*1.2; c.fillStyle='#e8503a'; c.beginPath(); c.ellipse(cx,cy,15,9,0,0,TAU); c.fill();
+  c.strokeStyle='#e8503a'; c.lineWidth=2.4; c.lineCap='round';
+  for(let s=-1;s<=1;s+=2){ for(let l=0;l<3;l++){ const a=Math.sin(t*10+l+s)*3; c.beginPath(); c.moveTo(cx+s*8,cy+l*2.5-2); c.lineTo(cx+s*(18+l),cy+8+a); c.stroke(); }
+    c.beginPath(); c.moveTo(cx+s*12,cy-5); c.lineTo(cx+s*20,cy-14+Math.sin(t*6)*2); c.stroke(); c.fillStyle='#ff7a5c'; c.beginPath(); c.arc(cx+s*22,cy-16+Math.sin(t*6)*2,4.5,0,TAU); c.fill(); }
+  c.fillStyle='#111'; c.beginPath(); c.arc(cx-5,cy-9,1.8,0,TAU); c.arc(cx+5,cy-9,1.8,0,TAU); c.fill();
+  const gx=w-((t*18)%(w+40)), gy=h*.3+Math.sin(t*1.3)*8; c.strokeStyle='#fff'; c.lineWidth=2; c.beginPath(); c.moveTo(gx-10,gy); c.quadraticCurveTo(gx-5,gy-6+Math.sin(t*8)*3,gx,gy); c.quadraticCurveTo(gx+5,gy-6+Math.sin(t*8)*3,gx+10,gy); c.stroke();
+};
+SC.fogos = function(c,t){
+  const w=W2, h=H2; c.fillStyle='rgba(6,8,22,.3)'; c.fillRect(0,0,w,h); if(t<.08){ c.fillStyle='#060816'; c.fillRect(0,0,w,h); FW.length=0; }
+  if(Math.random()<.05) FW.push({ x:rndRange(60,w-60), y:h, vy:-rndRange(220,270), ty:rndRange(h*.15,h*.42), st:0, ps:[], col:['#00e5ff','#9b6bff','#ff6bb5','#ffd166','#7cf0ff'][(Math.random()*5)|0] });
+  for(let i=FW.length-1;i>=0;i--){ const f=FW[i];
+    if(f.st===0){ f.y+=f.vy/24; c.fillStyle='#fff'; c.fillRect(f.x,f.y,2,7); if(f.y<=f.ty){ f.st=1; for(let k=0;k<36;k++){ const a=k/36*TAU, sp=rndRange(30,95); f.ps.push({ x:f.x, y:f.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, l:1 }); } } }
+    else{ let alive=0; f.ps.forEach(p => { p.x+=p.vx/24; p.y+=p.vy/24; p.vy+=70/24; p.l-=.022; if(p.l>0){ alive++; c.fillStyle=f.col; c.globalAlpha=Math.max(0,p.l); c.fillRect(p.x,p.y,2.6,2.6); } }); c.globalAlpha=1; if(!alive) FW.splice(i,1); }
+  }
+  c.fillStyle='#04060f'; let bx=0; for(let b=0;b<12;b++){ const bw=30+((b*37)%24), bh=28+((b*53)%46); c.fillRect(bx,h-bh,bw,bh); bx+=bw+2; }
+};
+SC.flor = function(c,t){
+  const w=W2, h=H2, tt=t%11, g=c.createLinearGradient(0,0,0,h); g.addColorStop(0,'#13224a'); g.addColorStop(1,'#3a2b57'); c.fillStyle=g; c.fillRect(0,0,w,h);
+  for(let s=0;s<16;s++){ c.fillStyle=`rgba(255,255,255,${.3+.5*Math.abs(Math.sin(t*1.5+s))})`; c.fillRect((s*53)%w,(s*37)%(h*.5),1.8,1.8); }
+  c.fillStyle='#2a1d12'; c.fillRect(0,h*.86,w,h*.14);
+  const grow=clamp(tt/4,0,1), sx=w/2, top=h*.86-grow*h*.52, sway=Math.sin(t*1.4)*5*grow;
+  c.strokeStyle='#4fd17a'; c.lineWidth=5; c.lineCap='round'; c.beginPath(); c.moveTo(sx,h*.86); c.quadraticCurveTo(sx+sway*.5,(h*.86+top)/2,sx+sway,top); c.stroke();
+  if(grow>.4){ c.fillStyle='#43c06b'; [-1,1].forEach(q => { c.beginPath(); c.ellipse(sx+q*24*grow+sway*.3,h*.86-grow*h*.2,22*grow,9*grow,q*-.5,0,TAU); c.fill(); }); }
+  if(grow>=1){ const bloom=clamp((tt-4)/2,0,1), R=40*bloom;
+    for(let k=0;k<8;k++){ const a=k/8*TAU+t*.15; c.fillStyle=k%2?'#ff9bd2':'#c9a2ff'; c.beginPath(); c.ellipse(sx+sway+Math.cos(a)*R*.62,top+Math.sin(a)*R*.62,R*.5,R*.28,a,0,TAU); c.fill(); }
+    c.fillStyle='#ffd166'; c.beginPath(); c.arc(sx+sway,top,R*.26,0,TAU); c.fill();
+    const bx=sx+Math.cos(t*1.8)*80, by=top-30+Math.sin(t*3.2)*20; c.fillStyle='#ffd166'; c.beginPath(); c.ellipse(bx,by,8,6,0,0,TAU); c.fill(); c.fillStyle='#222'; c.fillRect(bx-2,by-6,2,12); c.fillRect(bx+2,by-6,2,12); c.fillStyle='rgba(255,255,255,.75)'; c.beginPath(); c.ellipse(bx-2,by-8,6,3,Math.sin(t*60)*.5,0,TAU); c.fill(); }
+};
+SC.sofa = function(c,t){
+  const w=W2, h=H2, fl=.6+.4*Math.sin(t*9)*Math.sin(t*3.1); c.fillStyle='#0b1220'; c.fillRect(0,0,w,h); c.fillStyle=`rgba(0,229,255,${.05+fl*.08})`; c.fillRect(0,0,w,h);
+  c.fillStyle='#05080d'; c.fillRect(w*.58,h*.16,w*.36,h*.36); c.fillStyle=`hsl(${(t*40)%360},70%,${35+fl*18}%)`; c.fillRect(w*.6,h*.18,w*.32,h*.32);
+  for(let i=0;i<6;i++){ c.fillStyle=`rgba(255,255,255,${.08+.1*Math.sin(t*5+i)})`; c.fillRect(w*.6,h*.18+i*h*.055,w*.32,2); }
+  c.fillStyle='#1b2638'; c.fillRect(w*.72,h*.52,w*.08,h*.06);
+  c.fillStyle='#24344f'; roundRectOn(c,w*.08,h*.58,w*.52,h*.3,14); c.fill(); c.fillStyle='#2f4468'; roundRectOn(c,w*.04,h*.5,w*.14,h*.38,12); c.fill(); roundRectOn(c,w*.5,h*.5,w*.14,h*.38,12); c.fill();
+  const bl=(t%4)<.12?.25:1; c.fillStyle='#00e5ff'; c.shadowColor='#00e5ff'; c.shadowBlur=8; c.fillRect(w*.27,h*.6-14*bl,16,14*bl); c.fillRect(w*.39,h*.6-14*bl,16,14*bl); c.shadowBlur=0;
+  c.fillStyle='#04080d'; c.fillRect(0,h*.9,w,h*.1);
+};
+function sceneByMood(){
+  const e = state.expr || 'neutro';
+  if(e==='feliz' || e==='piscadinha') return 'praia';
+  if(e==='surpreso' || e==='alerta') return 'fogos';
+  if(e==='empático' || e==='dormindo') return 'flor';
+  return 'sofa';
+}
+function pensar(nome, ms){
+  if(CLASSIC_FACE || !SC[nome]) return;
+  if(!lousaEl.hidden && !lousaEl.classList.contains('some')) lousaFechar(); // nunca aparecem juntas
+  pensName = nome; pensT0 = performance.now(); FW.length = 0;
+  pensamentoEl.hidden = false; pensamentoEl.classList.remove('some');
+  pensLeg.textContent = 'pensando em: ' + PENSAMENTO_LEGENDA[nome];
+  clearTimeout(pensHideTimer);
+  pensHideTimer = setTimeout(pensarFim, ms || 22000);
+}
+function pensarFim(){
+  if(!pensName) return;
+  clearTimeout(pensHideTimer);
+  pensamentoEl.classList.add('some');
+  setTimeout(() => { if(pensamentoEl.classList.contains('some')){ pensamentoEl.hidden = true; pensName = null; } }, 650);
+}
+function pensarFrame(now){
+  if(!pensName || !SC[pensName] || pensamentoEl.hidden) return;
+  if(now - pensLastFrame <= 41) return; // ~24fps, igual ao lab
+  pensLastFrame = now;
+  try{ SC[pensName](pensCtx, (now - pensT0)/1000); }catch(e){}
+}
+
+// ---------- Pensar sozinho: só quando ocioso de verdade (Lab 4: st.pensarSozinho) ----------
+// 40–90s aleatórios de ociosidade contínua (medidos contra lastInteractionAt, já rastreado
+// pela política de energia), no máximo 1 cena a cada 10min, nunca com conversa/gravação/
+// materialização/lousa em andamento, fora do sono, aba visível, sem efeitos reduzidos —
+// sem push, sem token de LLM, sem escrita em KV/Postgres (só usa o relógio local).
+let pensarLimiarMs = rndRange(40000, 90000);
+let pensarUltimoAs = 0;
+function podePensarSozinho(now){
+  if(CLASSIC_FACE || !opts.pensamento) return false;
+  if(document.hidden) return false;
+  if(sleepFaceState && sleepFaceState.dormindo) return false;
+  if(effectiveQuality()==='leve') return false; // "modo econômico" do aparelho
+  if(typeof isSpeaking!=='undefined' && isSpeaking) return false;
+  if(typeof listening!=='undefined' && listening) return false;
+  if(typeof awaitingCommand!=='undefined' && awaitingCommand) return false;
+  if(window.Jarbas && typeof window.Jarbas.isMaterialized === 'function' && window.Jarbas.isMaterialized()) return false; // materialização tem prioridade
+  if(!lousaEl.hidden) return false; // lousa aberta tem prioridade
+  if(pensName) return false; // já tem uma cena rodando
+  if(now - pensarUltimoAs < 10*60*1000) return false; // no máximo 1 a cada 10min
+  return (now - lastInteractionAt) > pensarLimiarMs;
+}
+function tentarPensarSozinho(now){
+  if(!podePensarSozinho(now)) return;
+  pensar(sceneByMood(), 22000);
+  pensarUltimoAs = now;
+  pensarLimiarMs = rndRange(40000, 90000); // sorteia o próximo limiar pra próxima ociosidade
+}
+setInterval(() => { try{ tentarPensarSozinho(performance.now()); }catch(e){} }, 1000);
+// Qualquer toque fecha a cena na hora, em qualquer parte da tela (ela não bloqueia cliques
+// — pointer-events:none — então o toque sempre chega no que está por baixo também).
+document.addEventListener('pointerdown', () => { if(!CLASSIC_FACE) pensarFim(); }, true);
 
 /* ========== Motor "classic" — desenho original, preservado como reversão ========== */
 const eyeClassicCanvas = document.getElementById('eyeClassic');
@@ -2989,8 +3261,8 @@ function buildAparenciaForWorker(){
 // Limita o peso de mem.creations no blob sincronizado (localStorage + servidor a cada
 // mensagem): no máximo 60 criações; SVG pode ter até 6KB cada, então só as 15 mais
 // recentes guardam o `data` — as mais antigas descartam o SVG (data:null, semPrevia:true)
-// mas preservam título/data/origem/motivo. Cena de emoji e forma ficam pequenas, mantêm
-// `data` sempre, em qualquer posição.
+// mas preservam título/data/origem/motivo. Cena de emoji, forma e lousa ficam pequenas,
+// mantêm `data` sempre, em qualquer posição.
 const JARBAS_CREATIONS_MAX = 60;
 const JARBAS_CREATIONS_SVG_COM_PREVIA = 15;
 function registerCreation(m){
@@ -2999,7 +3271,7 @@ function registerCreation(m){
   mem.creations.unshift({
     id: Date.now(),
     title: String(m.titulo).slice(0, 80),
-    kind: m.kind === 'forma' ? 'forma' : (m.kind === 'svg' ? 'svg' : 'cena'),
+    kind: m.kind === 'forma' ? 'forma' : (m.kind === 'svg' ? 'svg' : (m.kind === 'lousa' ? 'lousa' : 'cena')),
     data: m.data,
     origem: ['pedido','conversa','espontaneo'].includes(m.origem) ? m.origem : 'pedido',
     motivo: String(m.motivo || '').slice(0, 300),
@@ -3058,6 +3330,7 @@ function triggerJarbasMaterialize(m){
 }
 
 async function askRaiz(userText, isRetry){
+  if(!CLASSIC_FACE) pensarFim(); // qualquer interação de voz fecha o pensamento sozinho na hora
   setEmotion('pensando');
   hint.textContent = 'pensando...';
   if(!isRetry){
@@ -3108,6 +3381,9 @@ async function askRaiz(userText, isRetry){
     if(parsed.materialize){
       registerCreation(parsed.materialize);
     }
+    if(parsed.lousa){
+      registerCreation({ titulo: parsed.lousa.titulo, kind:'lousa', data: parsed.lousa.itens, origem:'pedido', motivo:'' });
+    }
     saveMemoryState();
     pushMemoryToServer(workerUrl);
 
@@ -3117,6 +3393,9 @@ async function askRaiz(userText, isRetry){
     // FACE-2: dispara a materialização visual só depois de iniciar a fala — nunca
     // espera a animação, e uma falha aqui nunca afeta a fala (ver triggerJarbasMaterialize).
     if(parsed.materialize) triggerJarbasMaterialize(parsed.materialize);
+    // PARTE F: lousa real — mesma lógica de "nunca espera, nunca afeta a fala" acima;
+    // materialização em curso e config desligada têm prioridade (ver triggerLousa).
+    if(!CLASSIC_FACE && parsed.lousa) triggerLousa(parsed.lousa);
     // PARTE: cartões de dados determinísticos (clima/agenda de hoje) que o Worker já
     // montou a partir da ferramenta usada nesta mesma resposta — nunca bloqueia a fala.
     if(!CLASSIC_FACE && parsed.cards) renderCards(parsed.cards);
@@ -3495,6 +3774,7 @@ function initRecognition(){
   recognition.continuous = handsFree;
 
   recognition.onstart = ()=>{
+    if(!CLASSIC_FACE) pensarFim(); // qualquer interação de voz fecha o pensamento sozinho
     listening = true;
     G.listen.t = 1;
     micBtn.classList.add('on');
@@ -3639,6 +3919,7 @@ async function startTapRecording(){
     };
     mediaRecorder.start();
 
+    if(!CLASSIC_FACE) pensarFim(); // qualquer interação de voz fecha o pensamento sozinho
     listening = true;
     G.listen.t = 1;
     micBtn.classList.add('on');
@@ -4282,6 +4563,7 @@ async function handleBriefingPush(briefing){
 }
 
 async function handleProactivePush(data){
+  if(!CLASSIC_FACE) pensarFim(); // qualquer push fecha o pensamento sozinho na hora
   let payload = data;
   if(payload && payload.briefing && !payload.card){
     // O push ao vivo só traz o resumo curto (body, pensado pra notificação, <=140
