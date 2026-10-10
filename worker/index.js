@@ -969,6 +969,23 @@ async function callWeather(cidade) {
   return text;
 }
 
+// PARTE D: cartões de dados — determinísticos, nunca uma chamada de LLM extra. Só
+// interpretam o texto que a ferramenta já buscou nesta mesma resposta (ver runTool).
+export function construirCardClima(texto) {
+  if (typeof texto !== "string" || !texto) return null;
+  const mTemp = texto.match(/(-?\d+(?:\.\d+)?)\s*°C/);
+  if (!mTemp) return null;
+  const mDesc = texto.match(/agora:\s*([^,]+),/);
+  return { tipo: "clima", titulo: "Clima", valor: `${mTemp[1]}°C`, sub: mDesc ? mDesc[1].trim() : "" };
+}
+
+export function construirCardAgendaHoje(agendaTexto, dia) {
+  if (dia && dia !== "hoje") return null; // só "agenda de hoje" vira cartão determinístico
+  const itens = parseAgendaTexto(agendaTexto).slice(0, 4);
+  if (!itens.length) return null;
+  return { tipo: "lista", titulo: "Agenda de hoje", linhas: itens.map((i) => `${i.hora} ${i.titulo}`) };
+}
+
 // ---------- Geolocalização: reverse geocode via Nominatim (OpenStreetMap) ----------
 async function reverseGeocode(lat, lon) {
   const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`;
@@ -1902,6 +1919,7 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
 
   let contasTextos = [];
   let tarefasItens = [];
+  let contasItens = [];
   let idsContasVivas = new Set();
   let idsTarefasVivas = new Set();
   try {
@@ -1912,7 +1930,9 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
     idsTarefasVivas = new Set(triggers.filter((g) => g.tipo === "tarefa").map((g) => g.id));
     // PARTE B: tarefas/contas ESTRUTURADAS (com status), pro cartão do resumo do dia e
     // pro fallback determinístico contarem/destacarem em vez de despejar texto cru.
+    // PARTE E: contasItens também alimenta ?action=telas (contas.vencendo/total).
     tarefasItens = Array.isArray(mudancas?.tarefas?.itens) ? mudancas.tarefas.itens : [];
+    contasItens = Array.isArray(mudancas?.contas?.itens) ? mudancas.contas.itens : [];
   } catch (err) {
     console.error("gather_day_data_contas_failed:", String(err?.message || err));
   }
@@ -1920,7 +1940,83 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
   const dia = hojeISO || saoPauloNow().dateStr;
   const pendenciasTextos = selecionarPendenciasVencidas(items, dia).map((p) => `"${p.text}"`);
 
-  return { agendaTexto, tarefasTexto, tarefasItens, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas };
+  return { agendaTexto, tarefasTexto, tarefasItens, contasItens, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas };
+}
+
+// ---------- PARTE E: ?action=telas (mode "telas") — dados REAIS pras telas ao redor
+// do rosto no app (agenda, tarefas, contas), sem IA; cache de 5 min no KV pra não bater
+// o painel a cada abertura/poll do app. Notícias e mercado não têm fonte configurada
+// hoje — nunca inventa dados de exemplo, devolve listas vazias (o app esconde a tela). ----------
+const TELAS_CACHE_KEY = "telas:cache";
+const TELAS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export function construirTelasTarefas(tarefasItens) {
+  const itens = Array.isArray(tarefasItens) ? tarefasItens : [];
+  const porColuna = {};
+  for (const t of itens) {
+    const col = (t && t.status) || "outro";
+    porColuna[col] = (porColuna[col] || 0) + 1;
+  }
+  return { porColuna };
+}
+
+export function construirTelasContas(contasItens, dayOfMonth) {
+  const itens = Array.isArray(contasItens) ? contasItens : [];
+  let vencendo = 0;
+  for (const c of itens) {
+    if (!c || c.status !== "pendente" || !c.data) continue;
+    const dueDay = parseInt(c.data, 10);
+    if (Number.isFinite(dueDay) && dueDay <= dayOfMonth) vencendo++;
+  }
+  return { vencendo, total: itens.length };
+}
+
+// Primeiro item da agenda (já ordenada por horário) que ainda não passou — minutos até
+// ele. null se não houver mais nada hoje (nunca inventa "nada mais hoje" aqui; isso é
+// decisão de exibição do app, não do Worker).
+export function calcularProximoEmMin(agendaItens, agoraMin) {
+  const itens = Array.isArray(agendaItens) ? agendaItens : [];
+  for (const it of itens) {
+    const m = /^(\d{2}):(\d{2})$/.exec(it && it.hora || "");
+    if (!m) continue;
+    const diff = Number(m[1]) * 60 + Number(m[2]) - agoraMin;
+    if (diff >= 0) return diff;
+  }
+  return null;
+}
+
+async function montarTelasDados(env, companionState) {
+  const { agendaTexto, tarefasItens, contasItens } = await gatherDayData(env, { items: companionState?.items });
+  const agendaCompleta = parseAgendaTexto(agendaTexto);
+  const { hour, minute, dayOfMonth } = saoPauloNow();
+  return {
+    agenda: agendaCompleta.slice(0, 4),
+    proximoEmMin: calcularProximoEmMin(agendaCompleta, hour * 60 + minute),
+    tarefas: construirTelasTarefas(tarefasItens),
+    contas: construirTelasContas(contasItens, dayOfMonth),
+    noticias: [],
+    mercado: [],
+  };
+}
+
+export async function montarTelasCached(env, companionState) {
+  let cached = null;
+  try {
+    const raw = env.COMPANION_KV && (await env.COMPANION_KV.get(TELAS_CACHE_KEY));
+    if (raw) cached = JSON.parse(raw);
+  } catch (err) {
+    console.error("montar_telas_cache_read_failed:", String(err?.message || err));
+  }
+  if (cached && Date.now() - cached.cachedAt < TELAS_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const data = await montarTelasDados(env, companionState);
+  try {
+    if (env.COMPANION_KV) await env.COMPANION_KV.put(TELAS_CACHE_KEY, JSON.stringify({ data, cachedAt: Date.now() }));
+  } catch (err) {
+    console.error("montar_telas_cache_write_failed:", String(err?.message || err));
+  }
+  return data;
 }
 
 async function collectRoutineIngredients(env, ingredients, links, companionState) {
@@ -2163,11 +2259,15 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}, las
     if (name === "previsao_do_tempo") {
       const cidade = args.cidade || companionState.location?.cidade || "";
       if (!cidade) return { content: "Não sei a cidade da pessoa ainda — peça pra ela informar a cidade, ou avise que ela pode ativar a localização nas configurações." };
-      return { content: await callWeather(cidade) };
+      const climaTexto = await callWeather(cidade);
+      return { content: climaTexto, card: construirCardClima(climaTexto) };
     }
     if (name === "buscar_na_web" && canSearch) return { content: await callTavily(env, args.query || "") };
     if (name === "consultar_painel" && canPainel) return { content: await callPainelSnapshot(env, args.dia || "") };
-    if (name === "consultar_agenda" && canPainel) return { content: await callPainelAgenda(env, args.dia || "") };
+    if (name === "consultar_agenda" && canPainel) {
+      const agendaTexto = await callPainelAgenda(env, args.dia || "");
+      return { content: agendaTexto, card: construirCardAgendaHoje(agendaTexto, args.dia || "hoje") };
+    }
     if (name === "gerenciar_tarefa" && canPainel) return { content: await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto }) };
     if (name === "gerenciar_conta" && canPainel) return { content: await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome }) };
     if (name === "gerenciar_compromisso" && canPainel) return { content: await callPainelCommand(env, COMPROMISSO_ACAO_MAP[args.acao], { titulo: args.titulo, data: args.data, hora: args.hora }) };
@@ -2363,7 +2463,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   // Checado só na hora de devolver a resposta final, depois de ver se algum tool_call
   // desta mesma resposta já cobriu isso.
   const diaryTexto = extractDiaryWriteText(lastUserText);
-  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize) => {
+  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards) => {
     if (diaryTexto && canPainel && !toolsUsed.includes("anotar_no_diario")) {
       try {
         await callPainelCommand(env, "anotar_diario", { texto: diaryTexto });
@@ -2391,7 +2491,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       });
     }
     logCalls();
-    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, metrics: metrics() };
+    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, cards: (cards || []).slice(0, 2), metrics: metrics() };
   };
 
   callCount++;
@@ -2431,6 +2531,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     let saveMemoryItem = null;
     let savePendenciaUpdate = null;
     let materialize = null;
+    let cards = [];
     for (const call of calls) {
       const name = call.function.name;
       const argsStr = call.function.arguments;
@@ -2494,6 +2595,9 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       if (result.memoryItem) saveMemoryItem = result.memoryItem;
       if (result.pendenciaUpdate) savePendenciaUpdate = result.pendenciaUpdate;
       if (result.materialize) materialize = result.materialize;
+      // PARTE D: cartões de dados — determinísticos, montados a partir do que a
+      // ferramenta JÁ buscou nesta mesma resposta (nunca uma chamada de LLM extra).
+      if (result.card) cards.push(result.card);
     }
 
     const followUp = [
@@ -2521,20 +2625,20 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
-        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize);
+        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards);
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards);
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
       pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards);
     }
   }
 
-  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null, null);
+  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null, null, []);
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -3817,6 +3921,20 @@ export default {
       }
     }
 
+    // ---- PARTE E: telas ao redor do rosto (agenda/tarefas/contas reais, sem IA) — o
+    // app consulta ao abrir, a cada 5min com a aba visível, e depois de respostas que
+    // mexeram em tarefas/agenda. Mesma autenticação (SYNC_KEY) das outras ações do app. ----
+    if (mode === "telas") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.PAINEL_API_KEY) return json({ error: "painel_not_configured" }, 500);
+      try {
+        const dados = await montarTelasCached(env, body.companionState || {});
+        return json(dados);
+      } catch (err) {
+        return json({ error: "telas_failed", detail: String(err.message || err) }, 502);
+      }
+    }
+
     // ---- base de conhecimento estruturada ----
     if (mode === "classify_fact") {
       try {
@@ -3982,6 +4100,7 @@ export default {
         let saveMemoryItem = null;
         let savePendenciaUpdate = null;
         let materialize = null;
+        let cards = null;
         let callMetrics = null;
         // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
         // provedores configurados em cadeia com fallback internamente, e
@@ -3996,6 +4115,7 @@ export default {
           saveMemoryItem = raw.saveMemoryItem;
           savePendenciaUpdate = raw.savePendenciaUpdate;
           materialize = raw.materialize;
+          cards = raw.cards;
           callMetrics = raw.metrics;
           const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
@@ -4025,6 +4145,7 @@ export default {
         if (saveMemoryItem) parsed.save_memory_item = saveMemoryItem;
         if (savePendenciaUpdate) parsed.pendencia_update = savePendenciaUpdate;
         if (materialize) parsed.materialize = materialize;
+        if (cards && cards.length) parsed.cards = cards;
         pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
         flushLogBatch(env, ctx, logBatch);
         return json(parsed);
