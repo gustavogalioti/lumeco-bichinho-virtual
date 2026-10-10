@@ -29,6 +29,7 @@ function makeSandbox({ mem, history, now }) {
     this.__findWakeWordMatch = findWakeWordMatch;
     this.__textSimilarity = textSimilarity;
     this.__isLikelyEcho = isLikelyEcho;
+    this.__shouldDiscardAsEcho = shouldDiscardAsEcho;
     this.__vozConfig = vozConfig;
     this.__startContinuityWindow = startContinuityWindow;
     this.__continuityActive = continuityActive;
@@ -115,6 +116,15 @@ function sb(opts = {}) {
     const sim = s.__textSimilarity(texto, jarbasFala);
     assert.ok(sim < 0.65, `"${texto}" não deveria ser considerado eco (similaridade ${sim.toFixed(2)})`);
   }
+
+  // ---- ECO-2: a regra de contenção agora exige 4+ palavras E 18+ caracteres
+  // normalizados (antes bastavam 8 caracteres) — entrada sintética (substring que NÃO
+  // cai em limite de palavra) pra isolar só o ramo de contenção, sem a sobreposição de
+  // palavras (que combinaria com o mesmo resultado e mascararia o teste): ----
+  const naCurta = 'xyzxyzxy'; // 8 caracteres, 1 palavra só — satisfazia o limiar antigo
+  const nbComSubstring = 'aaaxyzxyzxybbb'; // contém naCurta como substring, mas não como palavra própria
+  assert.ok(s.__textSimilarity(naCurta, nbComSubstring) < 0.65, 'contenção de 8 caracteres/1 palavra não dispara mais (exige 4+ palavras e 18+ caracteres)');
+
   console.log('textSimilarity: OK');
 }
 
@@ -141,6 +151,58 @@ function sb(opts = {}) {
   const s2 = sb({ history: historyAntigo, now: nowMs });
   assert.equal(s2.__isLikelyEcho('esse dia de café em família promete ser bom', nowMs), false, 'fala do Jarbas fora da janela de 120s não é usada pra detectar eco');
   console.log('isLikelyEcho: OK');
+}
+
+// ---------- ECO-2: shouldDiscardAsEcho — toque pra falar PULA a similaridade ----------
+{
+  const nowMs = Date.parse('2026-10-10T10:11:30Z');
+  const jarbasFala = 'Anotei que você tomou café em casa hoje de manhã, junto com um pão na chapa.';
+  const history = [{ role: 'assistant', content: jarbasFala, at: '2026-10-10T10:11:00.000Z' }];
+  const s = sb({ history, now: nowMs });
+
+  // confirma que, SE a checagem de similaridade rodasse, "tomar café?" seria mesmo
+  // candidata a eco (senão o teste de "toque pula" não provaria nada) — repetição da
+  // fala inteira do Jarbas garante alta similaridade por sobreposição de palavras.
+  const transcricaoRepeticaoTotal = jarbasFala.toLowerCase();
+
+  // TOQUE PRA FALAR (handsFree=false): nunca descarta por similaridade, só pela guarda
+  // de "Jarbas falando" — mesmo uma repetição quase total da fala do Jarbas passa, porque
+  // a pessoa apertou o botão de propósito.
+  assert.equal(
+    s.__shouldDiscardAsEcho('tomar café?', nowMs, false, false, 0, 900),
+    false,
+    'toque pra falar: pergunta curta contida numa fala recente do Jarbas NUNCA é descartada em silêncio'
+  );
+  assert.equal(
+    s.__shouldDiscardAsEcho(transcricaoRepeticaoTotal, nowMs, false, false, 0, 900),
+    false,
+    'toque pra falar: pula a checagem de similaridade por completo, mesmo pra uma repetição quase total'
+  );
+  // a guarda de "Jarbas falando" continua valendo em QUALQUER modo
+  assert.equal(
+    s.__shouldDiscardAsEcho('qualquer coisa', nowMs, false, true, 0, 900),
+    true,
+    'toque pra falar: ainda descarta enquanto o Jarbas está falando (isSpeaking)'
+  );
+  assert.equal(
+    s.__shouldDiscardAsEcho('qualquer coisa', nowMs, false, false, nowMs - 500, 900),
+    true,
+    'toque pra falar: ainda descarta dentro da folga de 900ms após o fim da fala'
+  );
+
+  // MÃOS LIVRES (handsFree=true): a checagem de similaridade continua valendo —
+  // eco real (fala inteira repetida) continua descartado.
+  assert.equal(
+    s.__shouldDiscardAsEcho(transcricaoRepeticaoTotal, nowMs, true, false, 0, 900),
+    true,
+    'mãos livres: eco real (repetição da fala inteira) continua descartado'
+  );
+  assert.equal(
+    s.__shouldDiscardAsEcho('jarbas, muda de assunto', nowMs, true, false, 0, 900),
+    false,
+    'mãos livres: fala nova e diferente do usuário continua passando'
+  );
+  console.log('shouldDiscardAsEcho: OK');
 }
 
 // ---------- vozConfig: apelidos/janela/exigirApelidoSempre, com defaults ----------
