@@ -625,6 +625,12 @@ export function companionPrompt(companionState = {}, timeGapLine = '', selectedI
     : COMPANION_EMOTIONS;
   const emotionChoices = (allowedEmotions.length ? allowedEmotions : ["neutro"]).join("|");
 
+  // PARTE F: lousa real — só um esboço de apoio (conta, equação, esquema curto, gráfico
+  // simples) quando isso realmente ilustra melhor do que só falar; nunca pra qualquer
+  // explicação. Exclusiva com pensar sozinho no app (nunca aparecem juntas) — isso é
+  // decidido no lado do app, não precisa de nada aqui.
+  const lousaLine = `Você também pode abrir uma LOUSA — um quadro visual ao lado do seu rosto, com giz desenhando aos poucos, enquanto você fala. Use a ferramenta lousa SÓ quando o assunto realmente pede um esboço: uma conta, uma equação simples, um esquema ou lista curta, um gráfico simples, ou quando a pessoa pedir explicitamente pra você desenhar algo. NÃO use pra ilustrar uma explicação qualquer que não ganha nada visualmente — nesses casos responda só com a fala, sem chamar a ferramenta. A fala continua curta e normal; a lousa ilustra, nunca substitui a resposta.`;
+
   const podeMaterializar = !!companionState.podeMaterializarEspontaneo;
   const materializeLine = `Você também pode MATERIALIZAR — criar uma representação visual (uma escultura em partículas 3D, uma cena com emojis, ou um desenho simples) que aparece ao lado do seu rosto enquanto você fala. Use a ferramenta materializar quando a pessoa pedir explicitamente, em qualquer flexão do verbo ("materializa", "materialize", "materializar", "desenha", "desenhe", "me mostra", "mostre", "imagina", "imagine", "crie", "cria"), ou quando ela pedir um resumo visual da conversa ("materializa o que resume o que a gente tá falando" — nesse caso escolha UMA metáfora boa pro que foi dito). Se o pedido for exatamente uma bola, um bolo, um coração, um sol, uma casa ou uma flor, use o parâmetro forma (escultura em partículas 3D) em vez de cena — pra qualquer outro pedido, continue compondo com cena de emojis (ou svg, só se emojis não bastarem). Materializar é uma AÇÃO: chame a ferramenta de verdade — nunca responda um pedido de materializar só falando ou escrevendo um emoji, sem chamar a ferramenta.${podeMaterializar ? ' Também pode materializar por conta própria, sem pedido, se a conversa trouxer algo vívido de verdade (uma viagem, uma comemoração, uma conquista, saudade, comida, um jogo) — use com parcimônia, só quando genuinamente combinar, nunca em toda mensagem, e nunca durante perguntas de agenda/tarefa/diário ou ações do painel; quando materializar espontaneamente, comente em uma frase natural tipo "isso me lembrou de uma coisa", sem anunciar que usou uma ferramenta.' : ' Agora não é um bom momento pra materializar por conta própria (sem pedido) — só use a ferramenta se a pessoa pedir explicitamente ou pedir um resumo visual.'}`;
 
@@ -640,6 +646,7 @@ ${timeAwarenessLine}
 ${learnedLine}
 ${pendenciasLine}
 ${materializeLine}
+${lousaLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
 Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde. Se ela disser algo como "vou dormir", "boa noite", "to indo dormir" (estado=dormir) ou "acordei", "bom dia", "já levantei" (estado=acordar), use a ferramenta de definir sono — ao marcar que vai dormir, responda curto e carinhoso (uma "boa noite" de volta) e NÃO puxe assunto nem faça pergunta, deixe ela descansar.
@@ -1413,6 +1420,90 @@ const MATERIALIZAR_TOOL = {
         motivo: { type: "string", description: "Frase curta: por que isso representa a conversa." },
       },
       required: ["titulo", "motivo"],
+    },
+  },
+};
+
+// PARTE F: lousa real — portada de incubadora/lab-3-4.html (DR/escrever/desenhar). Igual
+// à materialização, a ferramenta só é OFERECIDA quando o pedido casa com o padrão abaixo
+// (decisão por regra); o modelo decide se o assunto pede mesmo um esboço (conta, equação,
+// esquema simples, lista curta, gráfico) — nunca ilustra qualquer explicação falada.
+export const LOUSA_PEDIDO_REGEX = /\b(explic\w*|ensin\w*|desenh\w*|mostr\w*|calcul\w*|resum\w*|esquema\w*)/;
+export const LOUSA_FORMAS = ["casa", "coracao", "estrela", "grafico", "equacao"];
+const LOUSA_MAX_ITENS = 8;
+const LOUSA_MAX_PONTOS_POR_LINHA = 40;
+const LOUSA_TEXTO_MAX = 60;
+// só caracteres imprimíveis (sem controle) — mantém acentuação/pt-BR, corta \x00-\x1F e \x7F.
+const LOUSA_CARACTER_INVALIDO = /[\x00-\x1F\x7F]/g;
+
+// Valida e descarta item por item (nunca deixa a lousa inteira cair por causa de UM item
+// ruim) — coordenadas sempre fixadas em 0–300 (x) × 0–225 (y), até 40 pontos por linha,
+// texto até 60 caracteres imprimíveis. Item sem os campos certos pro seu tipo é descartado.
+export function validarItensLousa(itens) {
+  if (!Array.isArray(itens) || !itens.length) return null;
+  const clampX = (v) => Math.min(300, Math.max(0, Number(v) || 0));
+  const clampY = (v) => Math.min(225, Math.max(0, Number(v) || 0));
+  const limpos = itens.slice(0, LOUSA_MAX_ITENS).map((it) => {
+    if (!it || typeof it !== "object") return null;
+    if (it.tipo === "texto") {
+      const texto = String(it.texto || "").replace(LOUSA_CARACTER_INVALIDO, "").trim().slice(0, LOUSA_TEXTO_MAX);
+      if (!texto) return null;
+      const tam = Math.min(60, Math.max(10, Number(it.tam) || 32));
+      return { tipo: "texto", x: clampX(it.x), y: clampY(it.y), texto, tam };
+    }
+    if (it.tipo === "linha") {
+      if (!Array.isArray(it.pontos) || it.pontos.length < 2) return null;
+      const pontos = it.pontos.slice(0, LOUSA_MAX_PONTOS_POR_LINHA)
+        .filter((p) => Array.isArray(p) && p.length === 2 && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])))
+        .map((p) => [clampX(p[0]), clampY(p[1])]);
+      if (pontos.length < 2) return null;
+      return { tipo: "linha", pontos };
+    }
+    if (it.tipo === "forma") {
+      const nome = String(it.nome || "").trim().toLowerCase();
+      if (!LOUSA_FORMAS.includes(nome)) return null;
+      return { tipo: "forma", nome };
+    }
+    return null;
+  }).filter(Boolean);
+  return limpos.length ? limpos : null;
+}
+
+export function construirLousaFromArgs(args) {
+  const titulo = String((args && args.titulo) || "").trim().slice(0, 60) || "Lousa";
+  const itens = validarItensLousa(args && args.itens);
+  if (!itens) return null;
+  return { titulo, itens };
+}
+
+const LOUSA_TOOL = {
+  type: "function",
+  function: {
+    name: "lousa",
+    description: "Abre uma lousa visual ao lado do rosto, com giz desenhando aos poucos, enquanto você fala — use SÓ quando o pedido realmente pede um esboço: uma conta, uma equação simples, um esquema ou lista curta, um gráfico simples, ou pedir explicitamente pra desenhar algo. NÃO use pra ilustrar uma explicação qualquer que não ganha nada com um desenho — nesses casos responda só com a fala. A fala continua curta e normal; a lousa ilustra, nunca substitui a resposta. Até 8 itens, em coordenadas de uma lousa de 300×225: texto ({tipo:'texto',x,y,texto,tam?}) escreve números/palavras curtas; linha ({tipo:'linha',pontos:[[x,y],...]}) traça um desenho à mão livre (eixos de gráfico, uma seta, um esquema simples); forma ({tipo:'forma',nome}) usa um destes 5 desenhos já prontos: casa, coracao, estrela, grafico ou equacao. Exemplo (conta): [{\"tipo\":\"texto\",\"x\":40,\"y\":110,\"texto\":\"12 × 8 = 96\",\"tam\":40}]. Exemplo (pedir pra desenhar uma casa): [{\"tipo\":\"forma\",\"nome\":\"casa\"}].",
+    parameters: {
+      type: "object",
+      properties: {
+        titulo: { type: "string", description: "Título curto da lousa, poucas palavras." },
+        itens: {
+          type: "array",
+          description: "1 a 8 itens — veja os 3 tipos na descrição da ferramenta.",
+          items: {
+            type: "object",
+            properties: {
+              tipo: { type: "string", enum: ["texto", "linha", "forma"] },
+              x: { type: "number", description: "0 a 300 — só pro tipo texto." },
+              y: { type: "number", description: "0 a 225 — só pro tipo texto." },
+              texto: { type: "string", description: "Até 60 caracteres — só pro tipo texto." },
+              tam: { type: "number", description: "Tamanho da letra, opcional — só pro tipo texto." },
+              pontos: { type: "array", items: { type: "array", items: { type: "number" } }, description: "Lista de [x,y], até 40 pontos — só pro tipo linha." },
+              nome: { type: "string", enum: LOUSA_FORMAS, description: "Só pro tipo forma." },
+            },
+            required: ["tipo"],
+          },
+        },
+      },
+      required: ["titulo", "itens"],
     },
   },
 };
@@ -2247,7 +2338,7 @@ const TOOL_KIND = {
   anotar_no_diario: "acao_pedida", desfazer_anotacao_diario: "acao_pedida", corrigir_anotacao_diario: "acao_pedida",
   gerenciar_ideia: "acao_pedida", gerenciar_lembrete: "acao_pedida",
   gerenciar_lista: "acao_pedida", concluir_recado: "acao_pedida", guardar_memoria: "acao_pedida", ensinar_regra: "acao_pedida",
-  definir_sono: "acao_pedida", atualizar_pendencia: "acao_pedida", materializar: "acao_pedida",
+  definir_sono: "acao_pedida", atualizar_pendencia: "acao_pedida", materializar: "acao_pedida", lousa: "acao_pedida",
 };
 
 async function runTool(env, call, canSearch, canPainel, companionState = {}, lastUserText = "") {
@@ -2366,6 +2457,13 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}, las
       }
       return { content: `Vai aparecer na tela: "${materialize.titulo}" (${materialize.motivo}). Siga a fala normalmente, sem anunciar que usou uma ferramenta.`, materialize };
     }
+    if (name === "lousa") {
+      const lousa = construirLousaFromArgs(args);
+      if (!lousa) {
+        return { content: "Não deu pra montar uma lousa válida — responda só com a fala, sem mencionar essa tentativa." };
+      }
+      return { content: `Lousa aberta: "${lousa.titulo}". Siga a fala normalmente, curta — a lousa ilustra, não substitui a resposta.`, lousa };
+    }
     return { content: "Ferramenta indisponível." };
   } catch (err) {
     console.error(`runTool_failed (${name}):`, String(err?.message || err));
@@ -2377,7 +2475,7 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}, las
 // intenção bate por palavra-chave (conjunto mínimo não se aplica a ela) e como
 // contingência de reenvio, se o modelo pedir uma ferramenta fora do subconjunto.
 function buildAllTools(canSearch, canPainel) {
-  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL, MATERIALIZAR_TOOL];
+  const tools = [WEATHER_TOOL, GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, RESUMIR_LINK_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL, MATERIALIZAR_TOOL, LOUSA_TOOL];
   if (canSearch) tools.push(SEARCH_TOOL);
   if (canPainel) {
     tools.push(
@@ -2424,6 +2522,7 @@ function selectToolsForMessage(userText, canSearch, canPainel, companionState = 
   // cobre "resumo visual da conversa" — e espontâneo precisa da ferramenta disponível
   // mesmo sem nenhuma palavra-gatilho na mensagem.
   if (MATERIALIZAR_PEDIDO_REGEX.test(n) || /\bresum/.test(n) || companionState?.podeMaterializarEspontaneo) add(MATERIALIZAR_TOOL);
+  if (LOUSA_PEDIDO_REGEX.test(n)) add(LOUSA_TOOL);
 
   if (!matchedAny && canPainel) selected.add(CONSULTAR_PAINEL_TOOL);
   return Array.from(selected);
@@ -2463,7 +2562,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   // Checado só na hora de devolver a resposta final, depois de ver se algum tool_call
   // desta mesma resposta já cobriu isso.
   const diaryTexto = extractDiaryWriteText(lastUserText);
-  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards) => {
+  const finish = async (text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards, lousa) => {
     if (diaryTexto && canPainel && !toolsUsed.includes("anotar_no_diario")) {
       try {
         await callPainelCommand(env, "anotar_diario", { texto: diaryTexto });
@@ -2491,7 +2590,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       });
     }
     logCalls();
-    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, cards: (cards || []).slice(0, 2), metrics: metrics() };
+    return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, cards: (cards || []).slice(0, 2), lousa: lousa || null, metrics: metrics() };
   };
 
   callCount++;
@@ -2532,6 +2631,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     let savePendenciaUpdate = null;
     let materialize = null;
     let cards = [];
+    let lousa = null;
     for (const call of calls) {
       const name = call.function.name;
       const argsStr = call.function.arguments;
@@ -2578,6 +2678,13 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
               resumo: criacao ? `Materializou "${criacao.titulo}" (${criacao.origem}): ${criacao.motivo || ""}`.trim() : `Tentou materializar, mas não gerou nada válido.`,
               detalhes: { ferramenta: name, ok: !!criacao, criacao },
             });
+          } else if (name === "lousa") {
+            const lousaCriada = result.lousa || null;
+            pushLogEvent(logBatch, {
+              tipo: "acao_pedida", origem: "jarbas",
+              resumo: lousaCriada ? `Abriu a lousa "${lousaCriada.titulo}" (${lousaCriada.itens.length} item(ns)).` : `Tentou abrir a lousa, mas não gerou nada válido.`,
+              detalhes: { ferramenta: name, ok: !!lousaCriada, lousa: lousaCriada },
+            });
           } else {
             let parsedArgs = {};
             try { parsedArgs = JSON.parse(argsStr || "{}"); } catch { /* args malformado — loga sem detalhe */ }
@@ -2598,6 +2705,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       // PARTE D: cartões de dados — determinísticos, montados a partir do que a
       // ferramenta JÁ buscou nesta mesma resposta (nunca uma chamada de LLM extra).
       if (result.card) cards.push(result.card);
+      if (result.lousa) lousa = result.lousa;
     }
 
     const followUp = [
@@ -2625,20 +2733,20 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
-        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards);
+        return finish(secondContent, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards, lousa);
       }
       // Modelo devolveu vazio depois da ferramenta — tenta mais uma vez, sem margem pra ele "pensar" demais
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards, lousa);
     } catch (err) {
       console.error("callGroqWithSearch_second_call_failed, repetindo só a fala:", String(err?.message || err));
       pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Segunda chamada ao LLM falhou, repetindo só a fala.", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
       const text = await retrySpeech();
-      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards);
+      return finish(text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize, cards, lousa);
     }
   }
 
-  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null, null, []);
+  return finish(msg?.content?.trim() || "Só um instante, deixa eu organizar o pensamento — pode repetir?", null, null, null, null, null, [], null);
 }
 
 // ---------- Notificações push (Frente 5): Web Push (RFC 8291) + VAPID (RFC 8292) ----------
@@ -4101,6 +4209,7 @@ export default {
         let savePendenciaUpdate = null;
         let materialize = null;
         let cards = null;
+        let lousa = null;
         let callMetrics = null;
         // Uma única tentativa aqui: o roteador de LLMs (groqRequest) já tenta os
         // provedores configurados em cadeia com fallback internamente, e
@@ -4116,6 +4225,7 @@ export default {
           savePendenciaUpdate = raw.savePendenciaUpdate;
           materialize = raw.materialize;
           cards = raw.cards;
+          lousa = raw.lousa;
           callMetrics = raw.metrics;
           const clean = raw.text.replace(/```json|```/g, "").trim();
           try {
@@ -4146,6 +4256,7 @@ export default {
         if (savePendenciaUpdate) parsed.pendencia_update = savePendenciaUpdate;
         if (materialize) parsed.materialize = materialize;
         if (cards && cards.length) parsed.cards = cards;
+        if (lousa) parsed.lousa = lousa;
         pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
         flushLogBatch(env, ctx, logBatch);
         return json(parsed);

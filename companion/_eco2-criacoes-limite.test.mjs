@@ -98,4 +98,22 @@ function sb(initialMem) {
   console.log("cena/forma mantêm data sempre: OK");
 }
 
+// ---------- PARTE F: lousa também respeita o cap, com kind "lousa" e itens em `data` ----------
+{
+  const s = sb({ creations: [] });
+  s.__registerCreation({ titulo: "Juros compostos", kind: "lousa", data: [{ tipo: "texto", x: 40, y: 110, texto: "12 × 8 = 96", tam: 40 }], motivo: "", origem: "pedido" });
+  assert.equal(s.mem.creations.length, 1);
+  assert.equal(s.mem.creations[0].kind, "lousa");
+  assert.deepEqual(s.mem.creations[0].data, [{ tipo: "texto", x: 40, y: 110, texto: "12 × 8 = 96", tam: 40 }]);
+  // mesmo cap de 60 vale pra lousa, junto com as outras criações
+  for (let i = 0; i < 65; i++) {
+    s.__registerCreation({ titulo: `lousa ${i}`, kind: "lousa", data: [{ tipo: "forma", nome: "estrela" }], motivo: "", origem: "pedido" });
+  }
+  assert.equal(s.mem.creations.length, 60, "lousa nunca faz mem.creations passar de 60");
+  // lousa nunca perde o `data`, mesmo em posições além das 15 "com prévia" (regra é só pra svg)
+  const lousas = s.mem.creations.filter(c => c.kind === "lousa");
+  lousas.forEach(c => assert.ok(c.data !== null, "lousa mantém os itens (data) em qualquer posição"));
+  console.log("lousa respeita o cap de 60 e nunca perde os itens: OK");
+}
+
 console.log("_eco2-criacoes-limite.test.mjs: todos os testes passaram");
