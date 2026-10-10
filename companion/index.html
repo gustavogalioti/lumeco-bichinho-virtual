@@ -206,6 +206,8 @@
     <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
     <button id="interruptSensitivityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">sensibilidade: média</button>
     <div style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;">Toque na tela ou no microfone sempre interrompe o Jarbas enquanto ele fala.</div>
+    <button id="micDebugBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">mostrar o que o microfone ouviu: desligado</button>
+    <div style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;">Só deste aparelho. Mostra por 2s cada transcrição e se foi aceita, ignorada (sem apelido) ou descartada como eco — útil pra calibrar.</div>
     <button id="aparenciaTestBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🎨 Aparência (teste)</button>
     <button id="connectionBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔌 Conexão</button>
     <button id="settingsCloseBtn" type="button" style="margin-top:18px;">Fechar</button>
@@ -1723,7 +1725,6 @@ function handleLearnCommand(text){
   const fact = text.slice(match[0].length).trim();
   if(!fact) return false;
 
-  if(handsFree) startConversationWindow();
   ensureKnowledge();
   mem.knowledge.outros = (mem.knowledge.outros ? mem.knowledge.outros.trim() + '\n' : '') + fact;
   saveMemoryState();
@@ -2006,6 +2007,7 @@ async function speak(text){
   speechState.generation++;
   const myGen = speechState.generation;
   isSpeaking = true;
+  pauseHandsFreeForSpeech(); // supressão de eco: para de ouvir enquanto o Jarbas fala
   startInterruptMonitor(myGen);
   try{
     if(edgeVoiceEnabled()){
@@ -2023,6 +2025,9 @@ async function speak(text){
     if(myGen === speechState.generation){
       stopInterruptMonitor();
       isSpeaking = false;
+      speechEndedAt = Date.now(); // marca o fim pra folga de eco (900ms) e a janela de continuidade
+      startContinuityWindow();
+      resumeHandsFreeListening();
     }
   }
 }
@@ -2140,6 +2145,10 @@ function interruptNow(){
   setEmotion('neutro');
   hint.textContent = handsFree ? 'pode falar, estou ouvindo...' : 'toque e fale';
   if(handsFree){
+    // a pessoa já provou que é ela falando de verdade (interrompeu ativamente) — não
+    // exige repetir o apelido pra essa próxima fala, igual a ter acabado de chamar.
+    awaitingCommand = true;
+    clearTimeout(awaitingTimeout);
     resumeHandsFreeListening();
   }
   return true;
@@ -2502,7 +2511,6 @@ function triggerJarbasMaterialize(m){
 }
 
 async function askRaiz(userText, isRetry){
-  if(!isRetry && handsFree) startConversationWindow();
   setEmotion('pensando');
   hint.textContent = 'pensando...';
   if(!isRetry){
@@ -2649,8 +2657,7 @@ async function runRoutine(routine){
 function checkRoutineTrigger(text){
   const routine = findMatchingRoutine(text);
   if(!routine) return false;
-  if(handsFree) startConversationWindow();
-  runRoutine(routine);
+  runRoutine(routine); // a janela de continuidade abre quando a fala da rotina terminar (speak())
   return true;
 }
 
@@ -2661,7 +2668,8 @@ const DISSOLVE_TRIGGER = /\b(pode guardar|dissolve|dissolver)\b/i;
 function checkDissolveCommand(text){
   if(!DISSOLVE_TRIGGER.test(text)) return false;
   if(!window.Jarbas || typeof window.Jarbas.isMaterialized !== 'function' || !window.Jarbas.isMaterialized()) return false;
-  if(handsFree) startConversationWindow();
+  // não fala nada (sem speak()), então abre a janela de continuidade aqui mesmo
+  if(handsFree) startContinuityWindow();
   window.Jarbas.dissolve();
   setEmotion('neutro');
   setCaption('jarbas', 'Beleza, guardado.');
@@ -2670,36 +2678,246 @@ function checkDissolveCommand(text){
   return true;
 }
 
-/* ---------- Ativação por voz ("modo mãos livres") ---------- */
+/* ---------- Ativação por voz ("modo mãos livres") ----------
+   Reescrito pra corrigir o Jarbas ficando em laço falando com ele mesmo: o microfone
+   NUNCA aceita nada enquanto ele fala (+ 900ms de folga pro eco do alto-falante sumir),
+   e mesmo passado isso, qualquer transcrição muito parecida com uma fala recente dele
+   é descartada como eco (ver isLikelyEcho). A "janela de conversa" fixa de 2 minutos deu
+   lugar a uma janela de continuidade curta (padrão 20s, configurável em
+   mem.config.voz.janelaConversaSeg) que só começa a contar quando ele TERMINA de falar
+   — não quando a pergunta é feita. ---------- */
 const HANDS_FREE_KEY = 'raiz_hands_free';
 const WAKE_WORD = 'jarbas';
 const WAKE_ANSWER_TIMEOUT = 3000;        // espera pela fala após só dizer "jarbas"
-const CONVERSATION_WINDOW_MS = 2 * 60 * 1000; // 2 minutos sem precisar repetir "jarbas"
+const ECHO_GRACE_MS = 900;               // folga após o fim da fala antes de aceitar qualquer coisa
 let handsFree = localStorage.getItem(HANDS_FREE_KEY) === '1';
 let awaitingCommand = false;
 let awaitingTimeout = null;
-let conversationActive = false;
-let conversationTimeout = null;
+let speechEndedAt = 0;
 
-function startConversationWindow(){
-  conversationActive = true;
-  clearTimeout(conversationTimeout);
-  conversationTimeout = setTimeout(()=>{
-    conversationActive = false;
-    if(handsFree) hint.textContent = 'diga "jarbas" pra chamar';
-  }, CONVERSATION_WINDOW_MS);
+// ---------- mem.config.voz: apelidos e janela de continuidade (local ao app, lido sob
+// demanda — mesmo padrão de leitura de mem.config.aparencia, nunca escreve de volta aqui). ----------
+const VOZ_CONFIG_DEFAULTS = {
+  apelidos: ['jarbas','jarbinhas','jarbuxo','jarbera','jarbo','jarbleatles'],
+  janelaConversaSeg: 20,
+  exigirApelidoSempre: false,
+};
+function vozConfig(){
+  const v = (mem.config && mem.config.voz) || {};
+  const apelidos = Array.isArray(v.apelidos) && v.apelidos.length ? v.apelidos.filter(a => typeof a === 'string' && a.trim()) : VOZ_CONFIG_DEFAULTS.apelidos;
+  const janelaRaw = Number(v.janelaConversaSeg);
+  const janelaConversaSeg = Number.isFinite(janelaRaw) ? Math.max(0, janelaRaw) : VOZ_CONFIG_DEFAULTS.janelaConversaSeg;
+  return {
+    apelidos: apelidos.length ? apelidos : VOZ_CONFIG_DEFAULTS.apelidos,
+    janelaConversaSeg,
+    exigirApelidoSempre: v.exigirApelidoSempre === true,
+  };
 }
-function endConversationWindow(){
-  conversationActive = false;
-  clearTimeout(conversationTimeout);
+
+// ---------- normalização, apelidos (com variações) e similaridade/eco — funções puras,
+// testadas em Node (ver companion/_voz-eco-apelidos.test.mjs). ---------- */
+function normalizeVoiceText(s){
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function levenshteinDistance(a, b){
+  const m = a.length, n = b.length;
+  if(!m) return n;
+  if(!n) return m;
+  const dp = new Array(n + 1);
+  for(let j = 0; j <= n; j++) dp[j] = j;
+  for(let i = 1; i <= m; i++){
+    let prev = dp[0];
+    dp[0] = i;
+    for(let j = 1; j <= n; j++){
+      const tmp = dp[j];
+      dp[j] = a[i-1] === b[j-1] ? prev : 1 + Math.min(prev, dp[j], dp[j-1]);
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+// Um token é "apelido" se: tiver mais de 3 letras E (começar com "jarb" OU estiver a
+// distância de edição <= 2 de algum apelido configurado) — cobre variações do
+// reconhecimento de voz tipo "jorbas", "jarbaz", "jarbinha".
+function isWakeToken(token, apelidos){
+  const n = normalizeVoiceText(token);
+  if(n.length <= 3) return false;
+  if(n.startsWith('jarb')) return true;
+  for(const ap of (apelidos || VOZ_CONFIG_DEFAULTS.apelidos)){
+    const apn = normalizeVoiceText(ap);
+    if(!apn || apn.length <= 3) continue;
+    // tolerância proporcional ao tamanho — <=2 erros num apelido de 5 letras já é quase
+    // metade da palavra, perto demais de colidir com palavras comuns (ex: "carro"/"jarbo").
+    const maxDist = apn.length <= 5 ? 1 : 2;
+    if(n === apn || levenshteinDistance(n, apn) <= maxDist) return true;
+  }
+  return false;
+}
+// Acha a ÚLTIMA ocorrência de um apelido na fala (igual ao comportamento antigo de
+// lastIndexOf) e devolve o que vem depois dele no texto ORIGINAL (preserva pontuação
+// pro replace de vírgula/ponto inicial, igual a antes).
+function findWakeWordMatch(text, apelidos){
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  let offset = 0;
+  const positions = [];
+  for(const w of words){
+    const idx = text.indexOf(w, offset);
+    if(idx === -1) continue;
+    positions.push({ word: w, end: idx + w.length });
+    offset = idx + w.length;
+  }
+  for(let i = positions.length - 1; i >= 0; i--){
+    if(isWakeToken(positions[i].word, apelidos)){
+      const rest = text.slice(positions[i].end).replace(/^[,.\s]+/, '').trim();
+      return { matched: true, rest };
+    }
+  }
+  return { matched: false, rest: '' };
+}
+// Similaridade 0..1: 1 se um está inteiro contido no outro (só conta pra textos com 8+
+// caracteres normalizados, senão uma palavra curta e comum ficaria "contida" à toa numa
+// fala longa do Jarbas); senão o maior entre sobreposição de palavras e proximidade por
+// Levenshtein — robusto tanto pra eco quase idêntico quanto pra eco com um pedaço cortado.
+function textSimilarity(a, b){
+  const na = normalizeVoiceText(a), nb = normalizeVoiceText(b);
+  if(!na || !nb) return 0;
+  if(na.length >= 8 && (nb.includes(na) || na.includes(nb))) return 1;
+  const wa = na.split(' ').filter(Boolean);
+  const wbSet = new Set(nb.split(' ').filter(Boolean));
+  let common = 0;
+  for(const w of wa) if(wbSet.has(w)) common++;
+  const overlapRatio = wa.length ? common / wa.length : 0;
+  const maxLen = Math.max(na.length, nb.length) || 1;
+  const levRatio = 1 - levenshteinDistance(na, nb) / maxLen;
+  return Math.max(overlapRatio, levRatio);
+}
+// Últimas falas do Jarbas (role assistant) nos últimos `windowMs` — direto do `history`
+// que já existe, sem guardar estado duplicado.
+function recentJarbasLines(nowMs, windowMs, maxCount){
+  const out = [];
+  const list = history || [];
+  for(let i = list.length - 1; i >= 0 && out.length < (maxCount||3); i--){
+    const m = list[i];
+    if(!m || m.role !== 'assistant') continue;
+    const at = m.at ? new Date(m.at).getTime() : null;
+    if(at !== null && (nowMs - at) > (windowMs||120000)) break;
+    out.push(m.content);
+  }
+  return out;
+}
+function isLikelyEcho(transcript, nowMs){
+  const lines = recentJarbasLines(nowMs, 120000, 3);
+  for(const line of lines){
+    if(textSimilarity(transcript, line) >= 0.65) return true;
+  }
+  return false;
+}
+
+// ---------- janela de continuidade: abre no FIM da fala do Jarbas (nunca no início),
+// reinicia quando o Gustavo fala de novo (com apelido ou já dentro dela), e fecha
+// sozinha. janelaConversaSeg=0 ou exigirApelidoSempre=true = nunca liberada. ---------- */
+let continuityUntil = 0;
+function startContinuityWindow(){
+  const cfg = vozConfig();
+  if(cfg.exigirApelidoSempre || cfg.janelaConversaSeg <= 0){ continuityUntil = 0; return; }
+  continuityUntil = Date.now() + cfg.janelaConversaSeg * 1000;
+}
+function continuityActive(){
+  if(vozConfig().exigirApelidoSempre) return false;
+  return continuityUntil > Date.now();
+}
+function endContinuityWindow(){ continuityUntil = 0; }
+
+// Dica mostrando os segundos restantes da janela, discreta (atualiza 1x/s, só enquanto
+// de fato ouvindo e dentro da janela — nunca por cima de "pensando..."/"falando...").
+let continuityHintTimer = null;
+function stopContinuityHintTicker(){
+  if(continuityHintTimer){ clearInterval(continuityHintTimer); continuityHintTimer = null; }
+}
+function startContinuityHintTicker(){
+  stopContinuityHintTicker();
+  const tick = ()=>{
+    if(!handsFree || isSpeaking || !listening || !continuityActive()){
+      stopContinuityHintTicker();
+      if(handsFree && listening && !isSpeaking) hint.textContent = 'diga "jarbas" pra chamar';
+      return;
+    }
+    const secs = Math.max(0, Math.ceil((continuityUntil - Date.now()) / 1000));
+    hint.textContent = `ouvindo... (${secs}s)`;
+  };
+  tick();
+  continuityHintTimer = setInterval(tick, 1000);
+}
+
+// ---------- modo de depuração: "mostrar o que o microfone ouviu" (local, desligado por
+// padrão) — mostra por 2s a última transcrição e o que aconteceu com ela. ---------- */
+const MIC_DEBUG_KEY = 'raiz_mic_debug';
+function micDebugEnabled(){ return localStorage.getItem(MIC_DEBUG_KEY) === '1'; }
+let micDebugTimer = null;
+let micDebugEl = null;
+function showMicDebug(text, status){
+  if(!micDebugEnabled()) return;
+  if(!micDebugEl){
+    micDebugEl = document.createElement('div');
+    micDebugEl.id = 'micDebugEl';
+    micDebugEl.style.cssText = 'position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom,0px) + 150px); transform:translateX(-50%); background:rgba(7,14,22,0.9); border:1px solid rgba(0,224,255,0.3); color:var(--text); padding:7px 14px; border-radius:10px; font-size:11.5px; z-index:6; opacity:0; pointer-events:none; transition:opacity .2s; text-align:center; max-width:85vw; word-break:break-word;';
+    document.body.appendChild(micDebugEl);
+  }
+  const labels = { aceito: '✅ aceito', 'sem apelido': '🚫 ignorado (sem apelido)', eco: '🔇 eco descartado' };
+  micDebugEl.textContent = `"${text}" — ${labels[status] || status}`;
+  micDebugEl.style.opacity = '1';
+  clearTimeout(micDebugTimer);
+  micDebugTimer = setTimeout(()=>{ if(micDebugEl) micDebugEl.style.opacity = '0'; }, 2000);
+}
+
+// ---------- segurança de fluxo: nunca martela recognition.start() (máx. 1/s) e desliga
+// sozinho o mãos livres se o reconhecimento falhar 5 vezes seguidas de verdade (erros
+// "no-speech" são rotina em escuta contínua e não contam pra esse limite). ---------- */
+let recognitionFailCount = 0;
+let lastRecognitionStartAt = 0;
+const RECOGNITION_MIN_RESTART_MS = 1000;
+const RECOGNITION_MAX_FAILS = 5;
+function disableHandsFreeDueToFailures(){
+  handsFree = false;
+  try{ localStorage.setItem(HANDS_FREE_KEY, '0'); }catch(e){}
+  if(typeof updateHandsFreeBtn === 'function') updateHandsFreeBtn();
+  hint.textContent = 'mãos livres desligado — reconhecimento de voz falhando, tente de novo';
+  recognitionFailCount = 0;
+}
+function startRecognitionSafely(){
+  const now = Date.now();
+  if(now - lastRecognitionStartAt < RECOGNITION_MIN_RESTART_MS) return;
+  lastRecognitionStartAt = now;
+  try{ recognition.start(); }
+  catch(e){
+    recognitionFailCount++;
+    if(recognitionFailCount >= RECOGNITION_MAX_FAILS) disableHandsFreeDueToFailures();
+  }
+}
+
+// Pausa o reconhecimento assim que o Jarbas começa a falar — a parte mais importante
+// da supressão de eco: sem isso, o microfone fica aberto captando a própria voz dele
+// pelo alto-falante durante toda a fala, não só depois.
+function pauseHandsFreeForSpeech(){
+  if(handsFree && recognition && listening){
+    try{ recognition.stop(); }catch(e){}
+  }
 }
 
 function resumeHandsFreeListening(){
   if(!handsFree || listening) return;
+  if(isSpeaking) return; // speak() chama de novo no finally, quando terminar
+  const waitForGrace = Math.max(0, (speechEndedAt + ECHO_GRACE_MS) - Date.now());
+  const delay = Math.max(350, waitForGrace);
   setTimeout(()=>{
-    if(!handsFree || listening) return;
-    try{ recognition.start(); }catch(e){}
-  }, 350);
+    if(!handsFree || listening || isSpeaking) return;
+    startRecognitionSafely();
+  }, delay);
 }
 
 function initRecognition(){
@@ -2714,13 +2932,18 @@ function initRecognition(){
     G.listen.t = 1;
     micBtn.classList.add('on');
     setEmotion('neutro');
-    hint.textContent = awaitingCommand ? 'pode falar...' : 'ouvindo...';
+    recognitionFailCount = 0;
+    if(!handsFree){ hint.textContent = 'ouvindo...'; return; }
+    if(awaitingCommand){ hint.textContent = 'pode falar...'; return; }
+    if(continuityActive()){ startContinuityHintTicker(); return; }
+    hint.textContent = 'diga "jarbas" pra chamar';
   };
   recognition.onerror = (e)=>{
     listening = false;
     G.listen.t = handsFree ? .25 : 0;
     micBtn.classList.remove('on');
     setEmotion('neutro');
+    stopContinuityHintTicker();
     const reasons = {
       'no-speech': 'não ouvi nada, toque e fale',
       'audio-capture': 'sem acesso ao microfone',
@@ -2729,18 +2952,35 @@ function initRecognition(){
       'aborted': 'toque de novo',
     };
     if(!handsFree) hint.textContent = reasons[e.error] || ('erro: ' + e.error + ', toque de novo');
+    if(handsFree && e.error !== 'no-speech'){
+      recognitionFailCount++;
+      if(recognitionFailCount >= RECOGNITION_MAX_FAILS){ disableHandsFreeDueToFailures(); return; }
+    }
     resumeHandsFreeListening();
   };
   recognition.onend = ()=>{
     listening = false;
     G.listen.t = handsFree ? .25 : 0;
     micBtn.classList.remove('on');
+    stopContinuityHintTicker();
     resumeHandsFreeListening();
   };
   recognition.onresult = (e)=>{
     const text = e.results[e.results.length-1][0].transcript.trim();
     if(!text){
       if(!handsFree) hint.textContent = 'não peguei, toque de novo';
+      return;
+    }
+
+    // Supressão de eco, SEMPRE primeiro — nunca entra no histórico nem vira pergunta.
+    if(isSpeaking || (Date.now() - speechEndedAt) < ECHO_GRACE_MS){
+      console.warn('eco descartado (fala em andamento)');
+      showMicDebug(text, 'eco');
+      return;
+    }
+    if(isLikelyEcho(text, Date.now())){
+      console.warn('eco descartado');
+      showMicDebug(text, 'eco');
       return;
     }
 
@@ -2754,12 +2994,14 @@ function initRecognition(){
       return;
     }
 
-    const lower = text.toLowerCase();
-    if(awaitingCommand || conversationActive){
+    if(awaitingCommand || continuityActive()){
       clearTimeout(awaitingTimeout);
       awaitingCommand = false;
+      startContinuityWindow(); // o Gustavo falou de novo — reinicia a janela
+      stopContinuityHintTicker();
       recognition.stop();
       setCaption('você', text);
+      showMicDebug(text, 'aceito');
       if(handleLearnCommand(text)) return;
       if(checkRoutineTrigger(text)) return;
       if(checkDissolveCommand(text)) return;
@@ -2767,16 +3009,18 @@ function initRecognition(){
       return;
     }
 
-    if(lower.includes(WAKE_WORD)){
-      const idx = lower.lastIndexOf(WAKE_WORD);
-      const rest = text.slice(idx + WAKE_WORD.length).replace(/^[,.\s]+/, '').trim();
-      if(rest.length > 2){
+    const wake = findWakeWordMatch(text, vozConfig().apelidos);
+    if(wake.matched){
+      startContinuityWindow();
+      if(wake.rest.length > 2){
+        stopContinuityHintTicker();
         recognition.stop();
-        setCaption('você', rest);
-        if(handleLearnCommand(rest)) return;
-        if(checkRoutineTrigger(rest)) return;
-        if(checkDissolveCommand(rest)) return;
-        askRaiz(rest);
+        setCaption('você', wake.rest);
+        showMicDebug(wake.rest, 'aceito');
+        if(handleLearnCommand(wake.rest)) return;
+        if(checkRoutineTrigger(wake.rest)) return;
+        if(checkDissolveCommand(wake.rest)) return;
+        askRaiz(wake.rest);
       } else {
         awaitingCommand = true;
         setEmotion('neutro');
@@ -2788,8 +3032,10 @@ function initRecognition(){
           hint.textContent = 'diga "jarbas" pra chamar';
         }, WAKE_ANSWER_TIMEOUT);
       }
+      return;
     }
-    // sem a palavra de ativação: ignora e continua ouvindo em segundo plano
+    // sem apelido e fora da janela: ignora e continua ouvindo em segundo plano
+    showMicDebug(text, 'sem apelido');
   };
 }
 
@@ -2957,10 +3203,10 @@ micBtn.addEventListener('click', ()=>{
   if(handsFree){
     if(!recognition) return;
     if(listening){ recognition.stop(); return; }
-    awaitingCommand = false;
-    try{ recognition.start(); }catch(e){
-      hint.textContent = 'toque de novo em 1s';
-    }
+    // toque manual = intenção clara de falar, igual a já ter chamado pelo apelido
+    awaitingCommand = true;
+    clearTimeout(awaitingTimeout);
+    startRecognitionSafely();
     return;
   }
   if(listening){ stopTapRecording(); return; }
@@ -2982,7 +3228,7 @@ handsFreeBtn.addEventListener('click', ()=>{
   localStorage.setItem(HANDS_FREE_KEY, handsFree ? '1' : '0');
   updateHandsFreeBtn();
   if(!listening) G.listen.t = handsFree ? .25 : 0;
-  if(!handsFree) endConversationWindow();
+  if(!handsFree){ endContinuityWindow(); stopContinuityHintTicker(); }
   if(recognition){
     if(listening) recognition.stop();
     recognition.continuous = handsFree;
@@ -3533,6 +3779,16 @@ interruptSensitivityBtn.addEventListener('click', ()=>{
   updateInterruptSensitivityBtn();
 });
 updateInterruptSensitivityBtn();
+
+const micDebugBtn = document.getElementById('micDebugBtn');
+function updateMicDebugBtn(){
+  micDebugBtn.textContent = micDebugEnabled() ? 'mostrar o que o microfone ouviu: ligado' : 'mostrar o que o microfone ouviu: desligado';
+}
+micDebugBtn.addEventListener('click', ()=>{
+  localStorage.setItem(MIC_DEBUG_KEY, micDebugEnabled() ? '0' : '1');
+  updateMicDebugBtn();
+});
+updateMicDebugBtn();
 
 /* ---------- FACE-1a: "efeitos" (local deste aparelho, não sincroniza) ---------- */
 const faceQualityBtn = document.getElementById('faceQualityBtn');
