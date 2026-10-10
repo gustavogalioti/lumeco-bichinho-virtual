@@ -626,7 +626,7 @@ export function companionPrompt(companionState = {}, timeGapLine = '', selectedI
   const emotionChoices = (allowedEmotions.length ? allowedEmotions : ["neutro"]).join("|");
 
   const podeMaterializar = !!companionState.podeMaterializarEspontaneo;
-  const materializeLine = `Você também pode MATERIALIZAR — criar uma representação visual (cena com emojis, ou um desenho simples) que aparece ao lado do seu rosto enquanto você fala. Use a ferramenta materializar quando a pessoa pedir explicitamente ("materializa", "me mostra", "desenha"), ou quando ela pedir um resumo visual da conversa ("materializa o que resume o que a gente tá falando" — nesse caso escolha UMA metáfora boa pro que foi dito).${podeMaterializar ? ' Também pode materializar por conta própria, sem pedido, se a conversa trouxer algo vívido de verdade (uma viagem, uma comemoração, uma conquista, saudade, comida, um jogo) — use com parcimônia, só quando genuinamente combinar, nunca em toda mensagem, e nunca durante perguntas de agenda/tarefa/diário ou ações do painel; quando materializar espontaneamente, comente em uma frase natural tipo "isso me lembrou de uma coisa", sem anunciar que usou uma ferramenta.' : ' Agora não é um bom momento pra materializar por conta própria (sem pedido) — só use a ferramenta se a pessoa pedir explicitamente ou pedir um resumo visual.'}`;
+  const materializeLine = `Você também pode MATERIALIZAR — criar uma representação visual (uma escultura em partículas 3D, uma cena com emojis, ou um desenho simples) que aparece ao lado do seu rosto enquanto você fala. Use a ferramenta materializar quando a pessoa pedir explicitamente, em qualquer flexão do verbo ("materializa", "materialize", "materializar", "desenha", "desenhe", "me mostra", "mostre", "imagina", "imagine", "crie", "cria"), ou quando ela pedir um resumo visual da conversa ("materializa o que resume o que a gente tá falando" — nesse caso escolha UMA metáfora boa pro que foi dito). Se o pedido for exatamente uma bola, um bolo, um coração, um sol, uma casa ou uma flor, use o parâmetro forma (escultura em partículas 3D) em vez de cena — pra qualquer outro pedido, continue compondo com cena de emojis (ou svg, só se emojis não bastarem). Materializar é uma AÇÃO: chame a ferramenta de verdade — nunca responda um pedido de materializar só falando ou escrevendo um emoji, sem chamar a ferramenta.${podeMaterializar ? ' Também pode materializar por conta própria, sem pedido, se a conversa trouxer algo vívido de verdade (uma viagem, uma comemoração, uma conquista, saudade, comida, um jogo) — use com parcimônia, só quando genuinamente combinar, nunca em toda mensagem, e nunca durante perguntas de agenda/tarefa/diário ou ações do painel; quando materializar espontaneamente, comente em uma frase natural tipo "isso me lembrou de uma coisa", sem anunciar que usou uma ferramenta.' : ' Agora não é um bom momento pra materializar por conta própria (sem pedido) — só use a ferramenta se a pessoa pedir explicitamente ou pedir um resumo visual.'}`;
 
   return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, tem opinião própria, implica com carinho quando cabe, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
 ${profileLine}
@@ -1280,12 +1280,21 @@ export function validarSvgMaterializar(svg) {
   return svg;
 }
 
+// PARTE C: pega todas as flexões de pedir pra materializar (imperativo, infinitivo,
+// gerúndio, subjuntivo...) — "materialize"/"materializando" não casavam no regex antigo
+// (só \b(materializa|desenha|mostra|imagina)\b), e por isso o pedido virava só um emoji
+// falado em vez de materializar de verdade. Testado explicitamente contra: materializa,
+// materialize, materializar, materializando, desenha, desenhe, me mostra, mostre,
+// imagina, imagine, crie, cria uma — e contra frases que NÃO devem casar (ex: "qual a
+// minha agenda").
+export const MATERIALIZAR_PEDIDO_REGEX = /\b(materializ\w*|desenh\w*|mostr\w*|imagin\w*|cri(a|e|ar)\b|fa(z|ça|zer) apareceu?\w*)/;
+
 // Decide a origem de UMA chamada de materializar, pra registrar certo no Diário e pra
 // barrar espontâneo fora de hora — nunca confia só no que o modelo "decidiu" fazer,
 // porque ele pode tentar materializar espontaneamente mesmo sem o gate liberado.
 export function classificarOrigemMaterializar(userText, companionState) {
   const n = normalizeText(userText);
-  if (/\b(materializa|desenha|mostra|imagina)\b/.test(n)) return "pedido";
+  if (MATERIALIZAR_PEDIDO_REGEX.test(n)) return "pedido";
   if (/\bresum/.test(n)) return "conversa";
   return companionState?.podeMaterializarEspontaneo ? "espontaneo" : "pedido";
 }
@@ -1303,12 +1312,55 @@ export function materializarEspontaneoBloqueado(origem, userText, companionState
   return !companionState?.podeMaterializarEspontaneo || contextoPainel;
 }
 
+// PARTE C (rede de segurança): detecta uma resposta que é SÓ emoji (ou um resto
+// curtíssimo de 2 caracteres ou menos além do(s) emoji) — o caso visto no teste do
+// Gustavo ("materialize uma bola" -> Jarbas respondeu só "🌏"/"☀️" sem chamar a
+// ferramenta). \p{Extended_Pictographic} cobre o emoji em si; variation selector
+// (️) e ZWJ (‍) fazem parte do mesmo "caractere" visual, não contam como texto.
+export function respostaSoEmoji(text) {
+  const s = String(text || "").trim();
+  if (!s || !/\p{Extended_Pictographic}/u.test(s)) return false;
+  const resto = s.replace(/[\p{Extended_Pictographic}‍️]/gu, "").replace(/[\s!.,~"'?]/g, "");
+  return resto.length <= 2;
+}
+
+// Mapa de emoji comuns pra forma da biblioteca 3D — usado só pela rede de segurança
+// abaixo, pra decidir entre virar uma escultura 3D ou uma cena com aquele emoji sozinho.
+const EMOJI_PARA_FORMA_SEGURANCA = {
+  "☀️": "sol", "☀": "sol", "🌞": "sol",
+  "⚽": "bola", "🏀": "bola", "🎾": "bola", "🌏": "bola", "🌎": "bola", "🌍": "bola", "🔵": "bola",
+  "🎂": "bolo", "🍰": "bolo",
+  "❤️": "coracao", "❤": "coracao", "💖": "coracao", "💗": "coracao", "💕": "coracao", "💝": "coracao",
+  "🏠": "casa", "🏡": "casa",
+  "🌸": "flor", "🌼": "flor", "🌻": "flor", "🌺": "flor", "🌷": "flor",
+};
+
+// Converte uma resposta só-emoji num `materialize` de verdade — forma da biblioteca se o
+// emoji bater com uma das 6, senão uma cena com aquele emoji sozinho, centralizado (s:190).
+export function construirMaterializeDeRespostaEmoji(text) {
+  const match = String(text || "").match(/[\p{Extended_Pictographic}‍️]+/u);
+  const emoji = match ? match[0] : "✨";
+  const chaveBusca = emoji.replace(/[‍️]/gu, ""); // só pra bater com o mapa — a cena usa o emoji original
+  const forma = EMOJI_PARA_FORMA_SEGURANCA[chaveBusca];
+  if (forma) return { titulo: forma, kind: "forma", data: forma, motivo: "pedido de materializar respondido só com emoji — convertido em forma", origem: "pedido" };
+  const cena = validarCenaMaterializar([{ e: emoji, x: 0, y: 0, s: 190 }]);
+  return { titulo: "criação", kind: "cena", data: cena, motivo: "pedido de materializar respondido só com emoji — centralizado", origem: "pedido" };
+}
+
+// PARTE C: as 6 formas 3D de partículas que o app já sabe desenhar (window.Jarbas.materialize)
+// — "coracao" (sem acento, pra caber num enum) é mapeado pro app pra chave acentuada
+// 'coração' da biblioteca do lado do cliente.
+export const FORMAS_MATERIALIZAR = ["bola", "bolo", "coracao", "sol", "casa", "flor"];
+
 // Mapeia os argumentos crus da ferramenta (vindos do modelo) pro campo `materialize` que
-// sobe até a resposta final — cena tem prioridade sobre svg quando os dois vêm (não
-// deveria acontecer, mas cena é o caminho mais barato/seguro). null quando nada validou.
+// sobe até a resposta final — forma (biblioteca 3D) tem prioridade quando o pedido é
+// exatamente um desses 6 objetos; senão cena tem prioridade sobre svg quando os dois vêm
+// (não deveria acontecer, mas cena é o caminho mais barato/seguro). null quando nada validou.
 export function construirMaterializeFromArgs(args, origem) {
   const titulo = String((args && args.titulo) || "").trim().slice(0, 60) || "criação";
   const motivo = String((args && args.motivo) || "").trim().slice(0, 200);
+  const forma = String((args && args.forma) || "").trim().toLowerCase();
+  if (FORMAS_MATERIALIZAR.includes(forma)) return { titulo, kind: "forma", data: forma, motivo, origem };
   const cena = validarCenaMaterializar(args && args.cena);
   if (cena) return { titulo, kind: "cena", data: cena, motivo, origem };
   const svg = validarSvgMaterializar(args && args.svg);
@@ -1320,11 +1372,12 @@ const MATERIALIZAR_TOOL = {
   type: "function",
   function: {
     name: "materializar",
-    description: "Cria uma representação visual (uma cena com emojis, ou um SVG simples) que aparece na tela ao lado do seu rosto enquanto você fala — como se você 'desenhasse' o que está dizendo. Use quando a pessoa pedir explicitamente ('materializa', 'me mostra', 'desenha'), quando ela pedir um resumo visual da conversa ('materializa o que resume o que a gente tá falando' — escolha UMA metáfora boa pro que foi dito), ou espontaneamente só quando liberado e a conversa trouxer algo vívido de verdade (viagem, comemoração, conquista, saudade, comida, jogo) — nunca durante perguntas de agenda/tarefa/diário nem ações do painel. Composição: um elemento principal GRANDE no centro (x e y perto de 0, s grande) com até 5 apoios menores nas bordas (x/y entre -150 e 150, s menor) — no máximo 6 itens ao todo, nunca texto, só emoji. Exemplos — praia: [{\"e\":\"🏖️\",\"x\":0,\"y\":0,\"s\":200},{\"e\":\"☀️\",\"x\":100,\"y\":-100,\"s\":80},{\"e\":\"🌊\",\"x\":-100,\"y\":100,\"s\":70}]; aniversário: [{\"e\":\"🎂\",\"x\":0,\"y\":0,\"s\":190},{\"e\":\"🎈\",\"x\":-100,\"y\":-80,\"s\":80},{\"e\":\"🎉\",\"x\":100,\"y\":-90,\"s\":70}]; conquista: [{\"e\":\"🏆\",\"x\":0,\"y\":0,\"s\":180},{\"e\":\"🎉\",\"x\":-100,\"y\":-90,\"s\":70},{\"e\":\"✨\",\"x\":100,\"y\":-80,\"s\":60}]. Só use svg se emojis realmente não derem conta de representar a ideia — um desenho simples e colorido, até 6KB.",
+    description: "Cria uma representação visual (uma escultura em partículas 3D, uma cena com emojis, ou um SVG simples) que aparece na tela ao lado do seu rosto enquanto você fala — como se você 'desenhasse' o que está dizendo. Use quando a pessoa pedir explicitamente, em qualquer flexão do verbo ('materializa', 'materialize', 'materializar', 'desenha', 'desenhe', 'me mostra', 'mostre', 'imagina', 'imagine', 'crie', 'cria'), quando ela pedir um resumo visual da conversa ('materializa o que resume o que a gente tá falando' — escolha UMA metáfora boa pro que foi dito), ou espontaneamente só quando liberado e a conversa trouxer algo vívido de verdade (viagem, comemoração, conquista, saudade, comida, jogo) — nunca durante perguntas de agenda/tarefa/diário nem ações do painel. Se o pedido for exatamente uma bola, um bolo, um coração, um sol, uma casa ou uma flor, USE O PARÂMETRO forma (vira uma escultura em partículas 3D, mais bonita que um emoji achatado) em vez de cena. Pra qualquer outro pedido, componha com cena de emojis: um elemento principal GRANDE no centro (x e y perto de 0, s grande) com até 5 apoios menores nas bordas (x/y entre -150 e 150, s menor) — no máximo 6 itens ao todo, nunca texto, só emoji. Exemplos — praia: [{\"e\":\"🏖️\",\"x\":0,\"y\":0,\"s\":200},{\"e\":\"☀️\",\"x\":100,\"y\":-100,\"s\":80},{\"e\":\"🌊\",\"x\":-100,\"y\":100,\"s\":70}]; aniversário: [{\"e\":\"🎂\",\"x\":0,\"y\":0,\"s\":190},{\"e\":\"🎈\",\"x\":-100,\"y\":-80,\"s\":80},{\"e\":\"🎉\",\"x\":100,\"y\":-90,\"s\":70}]; conquista: [{\"e\":\"🏆\",\"x\":0,\"y\":0,\"s\":180},{\"e\":\"🎉\",\"x\":-100,\"y\":-90,\"s\":70},{\"e\":\"✨\",\"x\":100,\"y\":-80,\"s\":60}]. Só use svg se emojis realmente não derem conta de representar a ideia — um desenho simples e colorido, até 6KB. IMPORTANTE: materializar é uma AÇÃO (chamar esta ferramenta de verdade) — nunca responda um pedido de materializar só com um emoji na fala, sem chamar a ferramenta.",
     parameters: {
       type: "object",
       properties: {
         titulo: { type: "string", description: "Título curto da criação, poucas palavras." },
+        forma: { type: "string", enum: FORMAS_MATERIALIZAR, description: "Use quando o pedido for exatamente um destes objetos (biblioteca de esculturas 3D) — nesse caso NÃO preencha cena nem svg: bola, bolo, coracao, sol, casa ou flor." },
         cena: {
           type: "array",
           description: "1 a 6 itens {e, x, y, s}. e = emoji; x,y = posição em px a partir do centro (y pra baixo), entre -150 e 150; s = tamanho do emoji, entre 40 e 220.",
@@ -1848,6 +1901,7 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
   ]);
 
   let contasTextos = [];
+  let tarefasItens = [];
   let idsContasVivas = new Set();
   let idsTarefasVivas = new Set();
   try {
@@ -1856,6 +1910,9 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
     contasTextos = triggers.filter((g) => g.tipo === "conta").map((g) => g.texto);
     idsContasVivas = new Set(triggers.filter((g) => g.tipo === "conta").map((g) => g.id));
     idsTarefasVivas = new Set(triggers.filter((g) => g.tipo === "tarefa").map((g) => g.id));
+    // PARTE B: tarefas/contas ESTRUTURADAS (com status), pro cartão do resumo do dia e
+    // pro fallback determinístico contarem/destacarem em vez de despejar texto cru.
+    tarefasItens = Array.isArray(mudancas?.tarefas?.itens) ? mudancas.tarefas.itens : [];
   } catch (err) {
     console.error("gather_day_data_contas_failed:", String(err?.message || err));
   }
@@ -1863,7 +1920,7 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
   const dia = hojeISO || saoPauloNow().dateStr;
   const pendenciasTextos = selecionarPendenciasVencidas(items, dia).map((p) => `"${p.text}"`);
 
-  return { agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas };
+  return { agendaTexto, tarefasTexto, tarefasItens, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas };
 }
 
 async function collectRoutineIngredients(env, ingredients, links, companionState) {
@@ -1938,17 +1995,19 @@ async function runRoutine(env, ingredients, links, companionState) {
   return parsed;
 }
 
-const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso, dando bom dia pra pessoa com o resumo do dia dela. Você vai receber dados brutos já verificados (clima, agenda, tarefas, contas, pendências que ela tinha dito que ia resolver, e coisas que aconteceram enquanto ela dormia). Conte isso numa fala só, corrida e natural, como um amigo contaria pela manhã — nunca uma lista seca, nunca mencione fontes técnicas ("segundo o painel"). Se algum dado vier vazio ou "não consegui consultar", simplesmente não mencione essa parte. Se não houver nada urgente, seja breve e leve, sem inventar urgência que não existe.
+const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso, dando bom dia pra pessoa com o resumo do dia dela. Você vai receber dados brutos já verificados (clima, agenda, tarefas, contas, pendências que ela tinha dito que ia resolver, e coisas que aconteceram enquanto ela dormia). A fala tem NO MÁXIMO 450 caracteres, em 4 a 6 frases curtas e naturais, como um amigo contaria pela manhã num fôlego só — NUNCA leia listas inteiras nem mencione fontes técnicas ("segundo o painel"). Diga só o que importa: o primeiro compromisso, quantas tarefas pedem atenção, e 2 ou 3 destaques — o resto fica disponível num cartão na tela, você não precisa (e não deve) falar tudo. Se algum dado vier vazio ou "não consegui consultar", simplesmente não mencione essa parte. Se não houver nada urgente, seja breve e leve, sem inventar urgência que não existe.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"title":"Bom dia","body":"texto da fala"}
+{"title":"Bom dia","fala":"texto curto da fala, até 450 caracteres"}
 Nunca deixe o JSON incompleto.`;
 
-// ---------- F2-3b: monta o briefing matinal — SEM IA reúne os dados (clima, agenda,
-// tarefas, contas, pendências, fila de avisos adiados durante o sono), e só então faz
-// UMA chamada ao modelo pra narrar tudo numa fala só. Se a chamada falhar, cai pro texto
-// determinístico puro (montarBriefingDeterministico), que é sempre calculado de qualquer
-// jeito — nunca fica sem briefing só porque o LLM falhou. ----------
+// ---------- F2-3b/PARTE B: monta o briefing matinal — SEM IA reúne os dados (clima,
+// agenda, tarefas, contas, pendências, fila de avisos adiados durante o sono) e monta o
+// `card` (estrutura completa, pro pop-up/cartão) sempre determinístico. Só então faz UMA
+// chamada ao modelo pra narrar a `fala` curta. Se a chamada falhar ou vier longa demais,
+// cai pro texto determinístico puro (montarBriefingDeterministico) — nunca fica sem
+// briefing só porque o LLM falhou, e nunca fala a lista crua (ver bug real: o resumo
+// aparecia como um bloco gigante cobrindo o rosto e era lido inteiro em voz alta). ----------
 async function gerarBriefing(env, config, companionState) {
   const cidade = companionState?.location?.cidade || "";
   let climaTexto = "";
@@ -1958,25 +2017,26 @@ async function gerarBriefing(env, config, companionState) {
   }
 
   const { dateStr: hoje } = saoPauloNow();
-  const { agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas } =
+  const { agendaTexto, tarefasTexto, tarefasItens, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas } =
     await gatherDayData(env, { items: companionState?.items, hojeISO: hoje });
 
   const agoraMin = minutesOfDaySaoPaulo(new Date());
   const filaBruta = await readPushQueue(env);
   const filaFiltrada = filtrarFilaParaBriefing(filaBruta, { hoje, agoraMin, idsContasVivas, idsTarefasVivas });
-  const filaTextos = filaFiltrada.map((item) => item.texto);
 
-  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, filaTextos });
+  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens: filaFiltrada });
 
   let llmCalls = 0;
   try {
+    const filaTextos = filaFiltrada.map((item) => item.texto);
     const content = `Clima: ${climaTexto || "(sem dados)"}\nAgenda de hoje: ${agendaTexto}\nTarefas de hoje: ${tarefasTexto}\nContas do dia/atrasadas: ${contasTextos.join(" ") || "(nenhuma)"}\nPendências que ela tinha dito que ia resolver: ${pendenciasTextos.join(" ") || "(nenhuma)"}\nEnquanto ela dormia: ${filaTextos.join(" ") || "(nada)"}`;
     const raw = await callGroq(env, BRIEFING_PROMPT, [{ role: "user", content }], 400);
     llmCalls = 1;
     const clean = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
-    if (!parsed.body) throw new Error("no_body_field");
-    return { title: parsed.title || "Bom dia", body: parsed.body, llmCalls };
+    if (!parsed.fala) throw new Error("no_fala_field");
+    const fala = truncarNaUltimaFrase(parsed.fala, 450);
+    return { title: parsed.title || "Bom dia", fala, card: determinado.card, body: truncarNaUltimaFrase(fala, 140), llmCalls };
   } catch (err) {
     console.error("briefing_llm_failed, usando texto determinístico:", String(err?.message || err));
     return { ...determinado, llmCalls };
@@ -2263,7 +2323,7 @@ function selectToolsForMessage(userText, canSearch, canPainel, companionState = 
   // "resum" sozinho é ambíguo (pode ser resumo de texto/link) mas materializar também
   // cobre "resumo visual da conversa" — e espontâneo precisa da ferramenta disponível
   // mesmo sem nenhuma palavra-gatilho na mensagem.
-  if (/\b(materializa|desenha|mostra|imagina|resum)/.test(n) || companionState?.podeMaterializarEspontaneo) add(MATERIALIZAR_TOOL);
+  if (MATERIALIZAR_PEDIDO_REGEX.test(n) || /\bresum/.test(n) || companionState?.podeMaterializarEspontaneo) add(MATERIALIZAR_TOOL);
 
   if (!matchedAny && canPainel) selected.add(CONSULTAR_PAINEL_TOOL);
   return Array.from(selected);
@@ -2316,6 +2376,19 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       } catch (err) {
         console.error("diary_safety_net_failed:", String(err?.message || err));
       }
+    }
+    // PARTE C: rede de segurança — pedido explícito de materializar ("materialize uma
+    // bola") que o modelo respondeu só com emoji, sem chamar a ferramenta de verdade.
+    // Materializa por conta própria aqui e troca a fala por uma confirmação curta —
+    // materializar é ação, nunca só um emoji falado/escrito.
+    if (!materialize && MATERIALIZAR_PEDIDO_REGEX.test(normalizeText(lastUserText)) && respostaSoEmoji(text)) {
+      materialize = construirMaterializeDeRespostaEmoji(text);
+      text = "Pronto, aqui está!";
+      pushLogEvent(logBatch, {
+        tipo: "acao_pedida", origem: "jarbas",
+        resumo: `Rede de segurança: pedido de materializar respondido só com emoji — materializado "${materialize.titulo}" automaticamente.`,
+        detalhes: { ferramenta: "materializar", redeSeguranca: true, criacao: materialize },
+      });
     }
     logCalls();
     return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, metrics: metrics() };
@@ -2847,19 +2920,116 @@ export function filtrarFilaParaBriefing(fila, { hoje, agoraMin, idsContasVivas, 
   });
 }
 
-// Monta o texto do briefing SEM IA — usado como fallback se o LLM falhar, e também
-// serve de base (o conteúdo) pro prompt de narração. Nunca lista cru: já frasea cada
-// parte numa linha curta, pra mesmo o fallback determinístico sair natural.
-export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasTexto, contasTextos, pendenciasTextos, filaTextos }) {
-  const partes = [];
-  if (climaTexto) partes.push(climaTexto);
-  if (agendaTexto) partes.push(agendaTexto);
-  if (tarefasTexto) partes.push(tarefasTexto);
-  if (contasTextos?.length) partes.push(`Contas: ${contasTextos.join(" ")}`);
-  if (pendenciasTextos?.length) partes.push(`Pendências: ${pendenciasTextos.join(" ")}`);
-  if (filaTextos?.length) partes.push(`Enquanto você dormia: ${filaTextos.join(" ")}`);
-  const body = partes.length ? partes.join(" ") : "Bom dia! Hoje tá tranquilo, nada de urgente pra te contar agora.";
-  return { title: "Bom dia", body };
+// PARTE B: corta `text` em `limit` caracteres na ÚLTIMA frase completa que caiba (nunca
+// no meio de uma palavra) — usado pra garantir fala <= 450 chars e body (push) <= 140,
+// tanto no fallback determinístico quanto pós-processando a fala que o LLM devolveu.
+export function truncarNaUltimaFrase(text, limit) {
+  const s = String(text || "").trim();
+  if (s.length <= limit) return s;
+  const cortado = s.slice(0, limit);
+  const ultimoFim = Math.max(cortado.lastIndexOf(". "), cortado.lastIndexOf("! "), cortado.lastIndexOf("? "));
+  if (ultimoFim > 0) return cortado.slice(0, ultimoFim + 1).trim();
+  return cortado.trim(); // nenhuma frase completa coube — corta mesmo assim, nunca passa do limite
+}
+
+// PARTE B: extrai [{hora, titulo}] do texto de agenda devolvido pelo painel (mesmo
+// formato "HH:MM Título; HH:MM Título" que o cron já faz o parse em
+// checkAgendaProximosGatilhos — duplicado aqui de propósito, sem tocar naquela função
+// de avisos, que é escopo de outra frente).
+export function parseAgendaTexto(agendaTexto) {
+  if (typeof agendaTexto !== "string" || !agendaTexto) return [];
+  return [...agendaTexto.matchAll(/(\d{2}:\d{2})\s+([^;]+)/g)].map(([, hora, tituloRaw]) => ({ hora, titulo: tituloRaw.trim() }));
+}
+
+// PARTE B: cartão de tarefas (total/porColuna/destaques) a partir dos itens
+// ESTRUTURADOS de `?action=mudancas` — nunca da string crua "(🔥 Para Agora) ...".
+// "now" (Para Agora) é tratado como prioridade alta nos destaques.
+function construirCardTarefas(tarefasItens) {
+  const itens = Array.isArray(tarefasItens) ? tarefasItens : [];
+  const porColuna = {};
+  for (const t of itens) {
+    const col = (t && t.status) || "outro";
+    porColuna[col] = (porColuna[col] || 0) + 1;
+  }
+  const ordenados = [...itens].sort((a, b) => (a?.status === "now" ? 0 : 1) - (b?.status === "now" ? 0 : 1));
+  const destaques = ordenados.slice(0, 5).map((t) => String((t && t.titulo) || "").trim()).filter(Boolean);
+  return { total: itens.length, porColuna, destaques };
+}
+
+// PARTE B: limita uma lista a `max` itens, acrescentando um marcador "e mais N" quando
+// há mais — nunca despeja a lista inteira no cartão (nem, por extensão, na fala).
+function comMaisN(lista, max, criarMarcador) {
+  const arr = Array.isArray(lista) ? lista : [];
+  if (arr.length <= max) return arr;
+  return [...arr.slice(0, max), criarMarcador(arr.length - max)];
+}
+
+// PARTE B: a fila de avisos adiados durante o sono SEMPRE virava uma frase por item
+// ("Tarefa X está parada em Para Agora." repetido pra cada uma) — vira UMA frase
+// agregada por tipo (ex: "7 tarefas continuam paradas em Para Agora").
+function resumirFilaDoSono(filaItens) {
+  const itens = Array.isArray(filaItens) ? filaItens : [];
+  if (!itens.length) return "";
+  const porTipo = new Map();
+  for (const it of itens) {
+    const tipo = (it && it.tipo) || "outro";
+    porTipo.set(tipo, (porTipo.get(tipo) || 0) + 1);
+  }
+  const LABEL = {
+    tarefa: (n) => `${n} ${n === 1 ? "tarefa continua parada" : "tarefas continuam paradas"} em Para Agora`,
+    conta: (n) => `${n} ${n === 1 ? "conta ainda está pendente" : "contas ainda estão pendentes"}`,
+    agenda: (n) => `${n} ${n === 1 ? "compromisso passou" : "compromissos passaram"} sem aviso`,
+  };
+  const clausulas = [...porTipo.entries()].map(([tipo, n]) => (LABEL[tipo] ? LABEL[tipo](n) : `${n} ${n === 1 ? "coisa aconteceu" : "coisas aconteceram"}`));
+  return `Enquanto você dormia, ${clausulas.join(" e ")}.`;
+}
+
+// Monta o briefing SEM IA — usado como fallback se o LLM falhar, e também pra montar
+// sempre o `card` (nunca gerado por IA). Nunca despeja lista crua: `fala` conta e
+// destaca (nunca mais que ~3 destaques), nunca uma frase por item.
+export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens }) {
+  const agendaLista = parseAgendaTexto(agendaTexto);
+  const cardTarefas = construirCardTarefas(tarefasItens);
+  const contas = Array.isArray(contasTextos) ? contasTextos : [];
+  const pendencias = Array.isArray(pendenciasTextos) ? pendenciasTextos : [];
+  const fila = Array.isArray(filaItens) ? filaItens : [];
+
+  const frases = [];
+  if (climaTexto) frases.push(climaTexto.trim());
+  if (agendaLista.length) {
+    const primeiro = agendaLista[0];
+    frases.push(agendaLista.length === 1
+      ? `Você tem 1 compromisso hoje: ${primeiro.titulo}, às ${primeiro.hora}.`
+      : `Você tem ${agendaLista.length} compromissos hoje; o primeiro é ${primeiro.titulo}, às ${primeiro.hora}.`);
+  }
+  if (cardTarefas.total) {
+    const destaquesTxt = cardTarefas.destaques.slice(0, 3).join(", ");
+    frases.push(cardTarefas.total === 1
+      ? `Tem 1 tarefa pedindo atenção${destaquesTxt ? `: ${destaquesTxt}` : ""}.`
+      : `São ${cardTarefas.total} tarefas pedindo atenção${destaquesTxt ? `, as principais: ${destaquesTxt}` : ""}.`);
+  }
+  if (contas.length) frases.push(contas.length === 1 ? contas[0] : `Você tem ${contas.length} contas pra olhar.`);
+  if (pendencias.length) {
+    frases.push(pendencias.length === 1
+      ? `Você tinha dito que ia resolver ${pendencias[0].replace(/^"|"$/g, "")}.`
+      : `Você tinha dito que ia resolver ${pendencias.length} coisas que ainda estão pendentes.`);
+  }
+  const filaFrase = resumirFilaDoSono(fila);
+  if (filaFrase) frases.push(filaFrase);
+
+  const fala = frases.length ? frases.join(" ") : "Bom dia! Hoje tá tranquilo, nada de urgente pra te contar agora.";
+  const falaFinal = truncarNaUltimaFrase(fala, 450);
+
+  const card = {
+    clima: climaTexto || "",
+    agenda: comMaisN(agendaLista, 8, (n) => ({ hora: "", titulo: `e mais ${n}` })),
+    tarefas: cardTarefas,
+    contas: comMaisN(contas, 8, (n) => `e mais ${n}`),
+    pendencias: comMaisN(pendencias, 8, (n) => `e mais ${n}`),
+    aoDormir: comMaisN(fila.map((i) => i && i.texto).filter(Boolean), 8, (n) => `e mais ${n}`),
+  };
+
+  return { title: "Bom dia", fala: falaFinal, card, body: truncarNaUltimaFrase(falaFinal, 140) };
 }
 
 // Upsert por endpoint, capado em PUSH_SUBSCRIPTIONS_MAX — se já existe (mesmo
@@ -3120,8 +3290,8 @@ async function readBriefingUltimo(env) {
   }
 }
 
-async function writeBriefingUltimo(env, { title, body, criadoEm }) {
-  await env.COMPANION_KV.put(BRIEFING_LAST_KEY, JSON.stringify({ title, body, criadoEm, lido: false }));
+async function writeBriefingUltimo(env, { title, fala, card, body, criadoEm }) {
+  await env.COMPANION_KV.put(BRIEFING_LAST_KEY, JSON.stringify({ title, fala, card, body, criadoEm, lido: false }));
 }
 
 async function marcarBriefingLido(env) {
@@ -3367,7 +3537,7 @@ async function runScheduledPush(env, ctx) {
           if (deveBriefing) {
             const briefing = await gerarBriefing(env, config, { location, items });
             cronMetrics.llmCalls += briefing.llmCalls || 0;
-            await writeBriefingUltimo(env, { title: briefing.title, body: briefing.body, criadoEm: new Date().toISOString() });
+            await writeBriefingUltimo(env, { title: briefing.title, fala: briefing.fala, card: briefing.card, body: briefing.body, criadoEm: new Date().toISOString() });
             await markBriefingDoneToday(env, dateStr);
             notification = { title: briefing.title, body: briefing.body, briefing: true };
             pushLogEvent(logBatch, {
@@ -3641,7 +3811,7 @@ export default {
           detalhes: { chamadasLLM: briefing.llmCalls || 0 },
         });
         await flushLogBatch(env, ctx, logBatch);
-        return json({ title: briefing.title, body: briefing.body });
+        return json({ title: briefing.title, fala: briefing.fala, card: briefing.card, body: briefing.body });
       } catch (err) {
         return json({ error: "briefing_failed", detail: String(err.message || err) }, 502);
       }

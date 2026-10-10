@@ -45,38 +45,34 @@
   #face{ position:absolute; inset:0; width:100%; height:100%; display:block; }
   /* moldura antiga (motor "classic") — fica oculta no modo padrão */
   .classic-only{ display:none; }
+  /* ---------- PARTE A: dock no rodapé igual à incubadora (rosto não perde espaço pra
+     isso — a interface é fina e fica POR CIMA do canvas de tela cheia, nunca descontada
+     do cálculo de tamanho/posição do rosto, ver geom()/faceFrameBody()). ---------- */
   .bottom-ui{
     position:fixed; left:0; right:0; bottom:0; z-index:2;
-    display:flex; flex-direction:column; align-items:center;
-    padding:0 20px calc(env(safe-area-inset-bottom,0px) + 22px);
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    padding:0 16px calc(env(safe-area-inset-bottom,0px) + 18px);
     pointer-events:none;
   }
   .caption{
-    z-index:2; min-height:52px; max-width:560px; width:100%; text-align:center;
-    font-size:16px; line-height:1.5; color:var(--text); opacity:0.92;
-    padding:16px 18px 6px; margin-top:0; pointer-events:auto;
-    text-shadow:0 2px 12px rgba(0,0,0,0.85);
-    background:linear-gradient(180deg, rgba(5,7,9,0) 0%, rgba(5,7,9,0.55) 45%, rgba(5,7,9,0.74) 100%);
-    border-radius:26px 26px 0 0;
+    z-index:2; max-width:560px; width:fit-content; text-align:center;
+    font-size:15px; line-height:1.4; color:var(--text);
+    padding:10px 16px; pointer-events:none;
+    text-shadow:0 2px 10px rgba(0,0,0,0.85);
+    background:rgba(5,7,9,0.68); border-radius:16px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+    opacity:0; transition:opacity .4s ease;
   }
-  .caption .who{ color:var(--muted); font-size:12px; letter-spacing:0.08em; text-transform:uppercase; display:block; margin-bottom:4px; }
-  .history-panel{
-    z-index:2; width:100%; max-width:520px; max-height:96px; overflow-y:auto;
-    font-size:11px; line-height:1.6; color:var(--muted); opacity:0.75;
-    padding:0 18px 8px; text-align:left; scrollbar-width:thin; pointer-events:auto;
-    text-shadow:0 1px 8px rgba(0,0,0,0.9);
-    background:rgba(5,7,9,0.6);
-  }
-  .history-panel:empty{ display:none; padding:0; background:none; }
-  .history-panel .h-row{ white-space:pre-wrap; word-break:break-word; }
-  .history-panel .h-time{ opacity:0.75; margin-right:5px; }
-  .history-panel .h-who{ font-weight:600; margin-right:4px; }
-  .controls{
-    z-index:2; display:flex; flex-direction:column; align-items:center; gap:14px; width:100%;
-    padding-top:16px; pointer-events:auto;
+  .caption.visible{ opacity:1; pointer-events:auto; }
+  .caption:empty{ display:none; padding:0; background:none; }
+  .caption .who{ color:var(--muted); font-size:11px; letter-spacing:0.08em; text-transform:uppercase; display:block; margin-bottom:2px; }
+  .hint{ z-index:2; font-size:12px; color:var(--muted); text-align:center; pointer-events:none; }
+  .dock{
+    z-index:2; display:flex; align-items:center; justify-content:center; gap:14px;
+    max-width:100%; pointer-events:auto;
   }
   .mic-btn{
-    width:76px; height:76px; border-radius:50%; border:none; cursor:pointer;
+    width:68px; height:68px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
     background:radial-gradient(circle at 35% 30%, var(--cyan-soft), var(--cyan) 60%, #0C9BC4);
     display:flex; align-items:center; justify-content:center;
     box-shadow:0 0 30px -4px rgba(0,224,255,0.55), 0 8px 26px -8px rgba(0,0,0,0.8);
@@ -84,8 +80,54 @@
   }
   .mic-btn:active{ transform:scale(0.94); }
   .mic-btn.on{ background:radial-gradient(circle at 35% 30%, #FFE9C8, #FFB199 55%, #E8654F); box-shadow:0 0 30px -4px rgba(232,101,79,0.6); }
-  .mic-btn svg{ width:28px; height:28px; }
-  .hint{ font-size:13px; color:var(--muted); text-align:center; }
+  .mic-btn svg{ width:26px; height:26px; }
+  .pill{
+    border:1px solid rgba(0,224,255,0.3); background:rgba(14,19,25,0.82); color:var(--text);
+    border-radius:999px; padding:9px 14px; font:600 11px 'Manrope', sans-serif;
+    letter-spacing:0.03em; cursor:pointer; backdrop-filter:blur(8px); white-space:nowrap;
+    max-width:40vw; overflow:hidden; text-overflow:ellipsis;
+  }
+  .pill.on{ border-color:var(--cyan); background:rgba(0,224,255,0.14); }
+  .pill-icon{ padding:9px 13px; font-size:16px; line-height:1; max-width:none; flex-shrink:0; }
+  @media (max-width:360px){
+    .dock{ gap:8px; }
+    .pill{ padding:7px 10px; font-size:9.5px; max-width:32vw; }
+  }
+  /* ---------- Histórico (pop-up) e cartão "Resumo do dia" ---------- */
+  .history-overlay, .briefing-card-overlay{
+    position:fixed; inset:0; z-index:40; background:rgba(0,0,0,0.72);
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .history-overlay.hidden, .briefing-card-overlay.hidden{ display:none; }
+  .history-sheet, .briefing-card-sheet{
+    background:var(--surface); border:1px solid rgba(79,201,255,0.18); border-radius:22px;
+    width:100%; max-width:480px; max-height:80vh; display:flex; flex-direction:column; overflow:hidden;
+  }
+  .history-sheet-header, .briefing-card-header{
+    display:flex; align-items:center; justify-content:space-between; flex-shrink:0;
+    padding:16px 18px; border-bottom:1px solid rgba(255,255,255,0.06);
+  }
+  .history-sheet-header h3, .briefing-card-header h3{ margin:0; font-size:15px; color:var(--text); }
+  .sheet-close-btn{ background:none; border:none; color:var(--muted); font-size:18px; cursor:pointer; padding:4px 8px; line-height:1; }
+  .history-panel{
+    flex:1; overflow-y:auto; padding:14px 18px; font-size:13px; line-height:1.6; color:var(--text); text-align:left;
+  }
+  .history-panel:empty::after{ content:"Nenhuma conversa ainda."; color:var(--muted); }
+  .history-panel .h-row{ white-space:pre-wrap; word-break:break-word; margin-bottom:8px; }
+  .history-panel .h-time{ opacity:0.65; margin-right:5px; font-size:11px; }
+  .history-panel .h-who{ font-weight:600; margin-right:4px; color:var(--cyan-soft); }
+  .history-sheet-footer{ display:flex; gap:10px; padding:14px 18px; border-top:1px solid rgba(255,255,255,0.06); flex-shrink:0; }
+  .history-sheet-footer button{
+    flex:1; border-radius:12px; border:1px solid rgba(0,224,255,0.3); background:rgba(0,224,255,0.08);
+    color:var(--text); padding:10px; font-weight:600; font-size:12.5px; cursor:pointer;
+  }
+  .history-sheet-footer button.hidden{ display:none; }
+  .briefing-card-body{ flex:1; overflow-y:auto; padding:16px 18px; font-size:13.5px; line-height:1.55; color:var(--text); }
+  .briefing-card-body h4{ margin:16px 0 6px; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); }
+  .briefing-card-body h4:first-child{ margin-top:0; }
+  .briefing-card-body ul{ margin:0; padding-left:18px; }
+  .briefing-card-body li{ margin-bottom:4px; }
+  .briefing-card-body .briefing-fala{ margin:0 0 14px; opacity:0.85; }
 
   /* ---------- FACE-1b: painel de teste "Aparência" ---------- */
   .test-grid{ display:flex; flex-wrap:wrap; gap:8px; }
@@ -119,10 +161,8 @@
   body.classic-face .caption{
     position:static; width:auto; max-width:560px; padding:0 12px; margin-top:18px;
     text-shadow:none; background:none; border-radius:0;
+    opacity:1; display:block; -webkit-line-clamp:unset; overflow:visible;
   }
-  body.classic-face .history-panel{ max-width:520px; opacity:0.6; margin-top:6px; padding:0 18px; text-shadow:none; background:none; }
-  body.classic-face .history-panel:empty{ display:none; }
-  body.classic-face .controls{ padding-top:0; }
 
   .setup{
     z-index:3; position:fixed; inset:0; background:rgba(0,0,0,0.9);
@@ -184,14 +224,38 @@
     toque no botão e comece a falar comigo.
   </div>
 
-  <div class="history-panel" id="historyPanel"></div>
+  <div class="hint" id="hint">toque para falar</div>
 
-  <div class="controls">
+  <div class="dock" id="dock">
     <button class="mic-btn" id="micBtn" aria-label="Falar">
       <svg viewBox="0 0 24 24" fill="none" stroke="#031018" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
     </button>
-    <div class="hint" id="hint">toque para falar</div>
-    <button id="handsFreeBtn" type="button" style="background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.25); color:var(--text); font-size:12px; border-radius:20px; padding:6px 14px; cursor:pointer; margin-top:8px;">🎙️ mãos livres: desligado</button>
+    <button id="handsFreeBtn" class="pill" type="button">🎙️ mãos livres: desligado</button>
+    <button id="historyBtn" class="pill pill-icon" type="button" aria-label="Histórico da conversa">🕐</button>
+  </div>
+</div>
+
+<div class="history-overlay hidden" id="historyOverlay">
+  <div class="history-sheet">
+    <div class="history-sheet-header">
+      <h3>Histórico da conversa</h3>
+      <button class="sheet-close-btn" id="historyCloseBtn" aria-label="Fechar">✕</button>
+    </div>
+    <div class="history-panel" id="historyPanel"></div>
+    <div class="history-sheet-footer">
+      <button id="historyCopyBtn" type="button">Copiar conversa</button>
+      <button id="historyBriefingBtn" type="button" class="hidden">📋 Resumo do dia</button>
+    </div>
+  </div>
+</div>
+
+<div class="briefing-card-overlay hidden" id="briefingCardOverlay">
+  <div class="briefing-card-sheet">
+    <div class="briefing-card-header">
+      <h3 id="briefingCardTitle">Resumo do dia</h3>
+      <button class="sheet-close-btn" id="briefingCardCloseBtn" aria-label="Fechar">✕</button>
+    </div>
+    <div class="briefing-card-body" id="briefingCardBody"></div>
   </div>
 </div>
 
@@ -514,9 +578,11 @@ function listenLevel(now){
   return G.listen.x > .5 ? (.35+.5*Math.abs(Math.sin(now/130))*Math.abs(Math.sin(now/310+1))) : .1;
 }
 
-/* ---------- layout: rosto centrado em ~42% da altura livre, sem painel lateral (sem WebGL/lab UI nesta etapa) ---------- */
+/* ---------- layout: rosto nas mesmas proporções da incubadora — S = min(W*.30, H*.34),
+   centro a 43% da altura, SEM descontar a altura do rodapé (ver faceFrameBody abaixo) —
+   a interface (legenda/dock) é fina e fica POR CIMA do canvas de tela cheia. ---------- */
 function geom(){
-  const aw=W, ah=availHeight(), rob=G.rob.x;
+  const aw=W, ah=H, rob=G.rob.x;
   return {
     cx:vcx.x, S: vS.x*(1-.46*rob), gap: vS.x*(1-.46*rob)*.8, cy: lerp(vcy.x, ah*.15, clamp(rob,0,1.2)),
     oy: ah*.6, sc: Math.min(aw*.78, ah*.5)/310
@@ -701,13 +767,6 @@ function resizeFace(){
   resizeGL(); // FACE-1b: redimensiona o canvas WebGL junto (no-op se ainda não carregou)
 }
 let needSnap = true, lastFrameAt = performance.now();
-const bottomUiEl = document.querySelector('.bottom-ui');
-// Área livre = tela inteira menos a faixa inferior (legenda/histórico/dock) — assim o
-// rosto nunca fica atrás do texto, nem em telas estreitas nem em desktop bem alto.
-function availHeight(){
-  const reserved = (bottomUiEl && !CLASSIC_FACE) ? bottomUiEl.getBoundingClientRect().height : 0;
-  return Math.max(200, H - reserved);
-}
 function faceFrameBody(now){
   const dt = clamp((now-lastFrameAt)/1000, 0, .12);
   lastFrameAt = now;
@@ -721,8 +780,9 @@ function faceFrameBody(now){
   if(P.mode==='holding' || P.mode==='forming'){ gazeTarget=[0,.7]; } // FACE-1b: olha pra criação
   G.gx.t=gazeTarget[0]; G.gy.t=gazeTarget[1];
   readAudio(dt);
-  const ah = availHeight();
-  vcx.t = W/2; vcy.t = ah*.42; vS.t = Math.max(46, Math.min(W*.30, ah*.34));
+  // PARTE A: mesmas proporções da incubadora (lab-1-2.html) — rosto grande, centrado,
+  // tela cheia, nunca descontando a altura do dock/legenda (eles ficam por cima).
+  vcx.t = W/2; vcy.t = H*.43; vS.t = Math.max(46, Math.min(W*.30, H*.34));
   if(needSnap){ vcx.x=vcx.t; vcy.x=vcy.t; vS.x=vS.t; vcx.v=vcy.v=vS.v=0; needSnap=false; }
   vcx.step(dt); vcy.step(dt); vS.step(dt);
   // FACE-1b: fundo animado e materialização — carregados sob demanda, nunca bloqueiam o resto
@@ -1668,6 +1728,81 @@ function renderHistoryPanel(){
   }).join('');
   historyPanel.scrollTop = historyPanel.scrollHeight;
 }
+
+/* ---------- PARTE A: pop-up de histórico + cartão "Resumo do dia" ----------
+   O histórico deixou de ficar sempre visível na tela principal — agora mora só dentro
+   deste pop-up (mesmos dados de `history`/renderHistoryPanel de sempre, só mudou de
+   lugar). O cartão guarda o último `card` de briefing recebido (mem.ultimoBriefingCard)
+   pra poder ser reaberto depois, mesmo após já ter sido falado/fechado. */
+const historyOverlay = document.getElementById('historyOverlay');
+const historyCloseBtn = document.getElementById('historyCloseBtn');
+const historyCopyBtn = document.getElementById('historyCopyBtn');
+const historyBriefingBtn = document.getElementById('historyBriefingBtn');
+const historyBtn = document.getElementById('historyBtn');
+const briefingCardOverlay = document.getElementById('briefingCardOverlay');
+const briefingCardCloseBtn = document.getElementById('briefingCardCloseBtn');
+const briefingCardTitle = document.getElementById('briefingCardTitle');
+const briefingCardBody = document.getElementById('briefingCardBody');
+
+function openHistoryOverlay(){
+  renderHistoryPanel();
+  historyBriefingBtn.classList.toggle('hidden', !mem.ultimoBriefingCard);
+  historyOverlay.classList.remove('hidden');
+}
+function closeHistoryOverlay(){ historyOverlay.classList.add('hidden'); }
+historyBtn.addEventListener('click', openHistoryOverlay);
+historyCloseBtn.addEventListener('click', closeHistoryOverlay);
+historyOverlay.addEventListener('click', (e)=>{ if(e.target === historyOverlay) closeHistoryOverlay(); });
+historyCopyBtn.addEventListener('click', async ()=>{
+  const texto = (history || []).map(m => {
+    const time = formatHistoryTime(m.at);
+    const who = m.role === 'assistant' ? 'jarbas' : 'você';
+    return `[${time}] ${who}: ${m.content}`;
+  }).join('\n');
+  try{
+    await navigator.clipboard.writeText(texto);
+    historyCopyBtn.textContent = 'Copiado!';
+  }catch(e){
+    historyCopyBtn.textContent = 'Não foi possível copiar';
+  }
+  setTimeout(()=>{ historyCopyBtn.textContent = 'Copiar conversa'; }, 1800);
+});
+
+function renderBriefingCardSection(titulo, itens, renderItem){
+  const lista = Array.isArray(itens) ? itens : [];
+  if(!lista.length) return '';
+  return `<h4>${titulo}</h4><ul>${lista.map(renderItem).join('')}</ul>`;
+}
+function openBriefingCard(card, title){
+  if(!card) return;
+  briefingCardTitle.textContent = title || 'Resumo do dia';
+  const partes = [];
+  if(card.clima) partes.push(`<p class="briefing-fala">${escapeHtml(card.clima)}</p>`);
+  partes.push(renderBriefingCardSection('Agenda', card.agenda, (a) => `<li>${a && a.hora ? `${escapeHtml(a.hora)} — ` : ''}${escapeHtml((a && a.titulo) || '')}</li>`));
+  if(card.tarefas && card.tarefas.total){
+    const destaques = Array.isArray(card.tarefas.destaques) ? card.tarefas.destaques : [];
+    partes.push(`<h4>Tarefas</h4><p>${card.tarefas.total} no total.</p>${destaques.length ? `<ul>${destaques.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : ''}`);
+  }
+  partes.push(renderBriefingCardSection('Contas', card.contas, (c) => `<li>${escapeHtml(c)}</li>`));
+  partes.push(renderBriefingCardSection('Pendências', card.pendencias, (p) => `<li>${escapeHtml(p)}</li>`));
+  partes.push(renderBriefingCardSection('Enquanto você dormia', card.aoDormir, (a) => `<li>${escapeHtml(a)}</li>`));
+  briefingCardBody.innerHTML = partes.join('') || '<p>Nada de novo pra te contar hoje.</p>';
+  briefingCardOverlay.classList.remove('hidden');
+}
+function closeBriefingCard(){ briefingCardOverlay.classList.add('hidden'); }
+briefingCardCloseBtn.addEventListener('click', closeBriefingCard);
+briefingCardOverlay.addEventListener('click', (e)=>{ if(e.target === briefingCardOverlay) closeBriefingCard(); });
+historyBriefingBtn.addEventListener('click', ()=>{
+  if(!mem.ultimoBriefingCard) return;
+  closeHistoryOverlay();
+  openBriefingCard(mem.ultimoBriefingCard, mem.ultimoBriefingTitle);
+});
+document.addEventListener('keydown', (e)=>{
+  if(e.key !== 'Escape') return;
+  if(!briefingCardOverlay.classList.contains('hidden')) closeBriefingCard();
+  else if(!historyOverlay.classList.contains('hidden')) closeHistoryOverlay();
+});
+
 function getSyncKey(){ return localStorage.getItem(SYNC_KEY_STORAGE) || ''; }
 
 async function syncMemoryFromServer(workerUrl){
@@ -1711,8 +1846,26 @@ if(!CLASSIC_FACE) applyAparencia();
 let history = mem.history || [];
 renderHistoryPanel();
 
+// PARTE A: legenda mínima — no máximo ~2 linhas/560px (o corte "…" é por caractere aqui,
+// o CSS com -webkit-line-clamp é só a rede de segurança visual), aparece enquanto fala e
+// some com fade ~4s depois. Nunca o motor "classic" (ver overrides de .caption nesse modo
+// — lá a legenda continua mostrando o texto inteiro, sem corte nem fade, como sempre foi).
+function truncarLegenda(text, maxChars){
+  const s = String(text == null ? '' : text).trim();
+  const limite = maxChars || 180;
+  if(s.length <= limite) return s;
+  return s.slice(0, limite - 1).trim() + '…';
+}
+let captionFadeTimer = null;
 function setCaption(who, text){
-  caption.innerHTML = `<span class="who">${who}</span>${text}`;
+  if(CLASSIC_FACE){
+    caption.innerHTML = `<span class="who">${who}</span>${text}`;
+    return;
+  }
+  caption.innerHTML = `<span class="who">${who}</span>${truncarLegenda(text)}`;
+  caption.classList.add('visible');
+  if(captionFadeTimer) clearTimeout(captionFadeTimer);
+  captionFadeTimer = setTimeout(()=>{ caption.classList.remove('visible'); }, 4000);
 }
 
 // Comando explícito: "aprenda/guarda/anota/lembra [que] <frase>" grava direto na base de
@@ -2000,6 +2153,19 @@ async function speakChunksStreaming(chunks, myGen){
   }
 }
 
+// PARTE C: a voz nunca lê emoji (Azure/Edge via Worker, nem a voz do navegador) — a
+// legenda e o histórico continuam com o texto original, só o que vai pro TTS passa por
+// aqui. Remove o emoji em si (\p{Extended_Pictographic}), o ZWJ (junta emojis compostos)
+// e o variation selector (força apresentação emoji), e colapsa os espaços duplos que sobram.
+function stripEmojiForSpeech(text){
+  if(typeof text !== 'string') return text;
+  return text
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/[‍️]/gu, '')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
 // Resolve `true` se a fala terminou normalmente, `false` se foi interrompida no meio
 // (por voz ou toque) — quem chama usa isso pra não sobrescrever o hint de "pode falar,
 // estou ouvindo" que a interrupção já deixou na tela.
@@ -2009,9 +2175,10 @@ async function speak(text){
   isSpeaking = true;
   pauseHandsFreeForSpeech(); // supressão de eco: para de ouvir enquanto o Jarbas fala
   startInterruptMonitor(myGen);
+  const falado = stripEmojiForSpeech(text) || text;
   try{
     if(edgeVoiceEnabled()){
-      const chunks = splitIntoSpeechChunks(text);
+      const chunks = splitIntoSpeechChunks(falado);
       if(chunks.length){
         await speakChunksStreaming(chunks, myGen);
         return myGen === speechState.generation;
@@ -2019,7 +2186,7 @@ async function speak(text){
     }
     if(myGen !== speechState.generation) return false;
     try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, 'browser'); updateVoiceProviderLabel(); }catch{}
-    await speakBrowser(text);
+    await speakBrowser(falado);
     return myGen === speechState.generation;
   } finally {
     if(myGen === speechState.generation){
@@ -2462,7 +2629,7 @@ function registerCreation(m){
   mem.creations.unshift({
     id: Date.now(),
     title: String(m.titulo).slice(0, 80),
-    kind: m.kind === 'svg' ? 'svg' : 'cena',
+    kind: m.kind === 'forma' ? 'forma' : (m.kind === 'svg' ? 'svg' : 'cena'),
     data: m.data,
     origem: ['pedido','conversa','espontaneo'].includes(m.origem) ? m.origem : 'pedido',
     motivo: String(m.motivo || '').slice(0, 300),
@@ -2470,6 +2637,10 @@ function registerCreation(m){
   });
   mem.creations = mem.creations.slice(0, 200);
 }
+
+// PARTE C: o Worker manda "coracao" (sem acento, pra caber num enum JSON) — a biblioteca
+// de formas 3D do app (FACE-1b, SHAPES) usa a chave acentuada 'coração'.
+const FORMA_NOME_PARA_CHAVE = { coracao: 'coração' };
 
 // Dispara a materialização de verdade (visual) — NUNCA bloqueia nem atrasa a fala: é
 // chamado sem await, logo antes de `speak()`. Espontâneo começa com um "curioso" breve
@@ -2494,7 +2665,8 @@ function triggerJarbasMaterialize(m){
   try{
     if(!m || !window.Jarbas || CLASSIC_FACE) return;
     const launch = () => {
-      if(m.kind === 'svg') window.Jarbas.materializeSVG(m.data, m.titulo, m.origem);
+      if(m.kind === 'forma') window.Jarbas.materialize(FORMA_NOME_PARA_CHAVE[m.data] || m.data);
+      else if(m.kind === 'svg') window.Jarbas.materializeSVG(m.data, m.titulo, m.origem);
       else window.Jarbas.materializeScene(m.data, m.titulo, m.origem);
       if(m.origem === 'espontaneo') registerSpontMaterialization();
       watchMaterializeDissolve();
@@ -3640,11 +3812,16 @@ briefingNowBtn.addEventListener('click', async ()=>{
       body: JSON.stringify({ mode:'briefing_now', key: syncKey, companionState: { location: mem.location || null, items: mem.items || [] } })
     });
     const data = await resp.json();
-    if(!resp.ok || !data.body) throw new Error(data.error || 'briefing_failed');
+    if(!resp.ok || !data.fala) throw new Error(data.error || 'briefing_failed');
     sleepRoutineEl.classList.add('hidden');
     setEmotion('confirmado');
-    setCaption('jarbas', data.body);
-    await speak(data.body).catch(()=>{ showTapToHearCard(data.body); });
+    // PARTE B: fala só o texto curto (`fala`); o resumo completo vira o cartão, nunca a legenda/voz.
+    mem.ultimoBriefingCard = data.card || null;
+    mem.ultimoBriefingTitle = data.title || 'Resumo do dia';
+    saveMemoryState();
+    setCaption('jarbas', 'Resumo do dia');
+    if(data.card) openBriefingCard(data.card, mem.ultimoBriefingTitle);
+    await speak(data.fala).catch(()=>{ showTapToHearCard(data.fala); });
     setEmotion('neutro');
   }catch(e){
     alert('Não consegui montar o resumo agora. Tenta de novo em um instante.');
@@ -3675,8 +3852,54 @@ function showTapToHearCard(text, onSpoken){
   document.body.appendChild(card);
 }
 
+// PARTE B: fala só `briefing.fala` (curta, até 450 chars), abre o cartão com
+// `briefing.card` (nunca fala/mostra a lista crua) e marca como lido só depois de
+// realmente falado — isso também esvazia push:fila no Worker.
+async function handleBriefingPush(briefing){
+  const fala = briefing.fala || briefing.body || '';
+  if(!fala) return;
+
+  const estado = await callWorkerSyncMode('estado_get');
+  if(estado && estado.dormindo) return;
+
+  history.push({ role:'assistant', content: fala, at: new Date().toISOString() });
+  mem.history = history;
+  mem.ultimoBriefingCard = briefing.card || null;
+  mem.ultimoBriefingTitle = briefing.title || 'Resumo do dia';
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) pushMemoryToServer(workerUrl);
+
+  const marcarBriefingLido = ()=> callWorkerSyncMode('briefing_lido');
+
+  setEmotion('alerta');
+  setCaption('jarbas', 'Resumo do dia');
+  if(briefing.card) openBriefingCard(briefing.card, mem.ultimoBriefingTitle);
+  await new Promise(r=>setTimeout(r, 3000));
+  setEmotion('feliz');
+  try{
+    await speak(fala);
+    setEmotion('neutro');
+    marcarBriefingLido();
+  }catch(e){
+    showTapToHearCard(fala, marcarBriefingLido);
+  }
+}
+
 async function handleProactivePush(data){
-  const text = (data && (data.body || data.title)) || '';
+  let payload = data;
+  if(payload && payload.briefing && !payload.card){
+    // O push ao vivo só traz o resumo curto (body, pensado pra notificação, <=140
+    // chars) — busca o objeto completo (fala/card) pra falar e abrir o cartão certo,
+    // igual ao primeiro open do dia (checkBriefingOnOpen).
+    try{
+      const full = await callWorkerSyncMode('briefing_get');
+      if(full && full.briefing) payload = { ...full.briefing, briefing: true };
+    }catch(e){}
+  }
+  if(payload && payload.briefing) return handleBriefingPush(payload);
+
+  const text = (payload && (payload.body || payload.title)) || '';
   if(!text) return;
 
   // Defesa em profundidade: o cron já deveria ter bloqueado isso dormindo, mas o
@@ -3690,22 +3913,17 @@ async function handleProactivePush(data){
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(workerUrl) pushMemoryToServer(workerUrl);
 
-  // F2-3b: se for o briefing matinal (sinalizado pelo próprio push/consulta), marca
-  // como lido só depois de realmente falado — isso também esvazia push:fila no Worker.
-  const marcarBriefingLidoSeNecessario = ()=>{ if(data.briefing) callWorkerSyncMode('briefing_lido'); };
-
   // FACE-1a: alerta por ~3s antes de falar qualquer aviso proativo — dá um instante
-  // pro rosto "chamar atenção" antes do áudio começar. Briefing (F2-3b) fala em "feliz".
+  // pro rosto "chamar atenção" antes do áudio começar.
   setEmotion('alerta');
   setCaption('jarbas', text);
   await new Promise(r=>setTimeout(r, 3000));
-  setEmotion(data.briefing ? 'feliz' : 'confirmado');
+  setEmotion('confirmado');
   try{
     await speak(text);
     setEmotion('neutro');
-    marcarBriefingLidoSeNecessario();
   }catch(e){
-    showTapToHearCard(text, marcarBriefingLidoSeNecessario);
+    showTapToHearCard(text);
   }
 }
 
@@ -3726,8 +3944,8 @@ async function checkBriefingOnOpen(){
   checkingBriefing = true;
   try{
     const d = await callWorkerSyncMode('briefing_get');
-    if(!d || !d.briefing || !d.briefing.body) return;
-    await handleProactivePush({ title: d.briefing.title, body: d.briefing.body, briefing: true });
+    if(!d || !d.briefing || !(d.briefing.fala || d.briefing.body)) return;
+    await handleProactivePush({ ...d.briefing, briefing: true });
   }finally{
     checkingBriefing = false;
   }
