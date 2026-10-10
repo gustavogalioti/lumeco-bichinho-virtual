@@ -49,13 +49,13 @@
      isso — a interface é fina e fica POR CIMA do canvas de tela cheia, nunca descontada
      do cálculo de tamanho/posição do rosto, ver geom()/faceFrameBody()). ---------- */
   .bottom-ui{
-    position:fixed; left:0; right:0; bottom:0; z-index:2;
+    position:fixed; left:0; right:0; bottom:0; z-index:4;
     display:flex; flex-direction:column; align-items:center; gap:10px;
     padding:0 16px calc(env(safe-area-inset-bottom,0px) + 18px);
     pointer-events:none;
   }
   .caption{
-    z-index:2; max-width:560px; width:fit-content; text-align:center;
+    z-index:4; max-width:560px; width:fit-content; text-align:center;
     font-size:15px; line-height:1.4; color:var(--text);
     padding:10px 16px; pointer-events:none;
     text-shadow:0 2px 10px rgba(0,0,0,0.85);
@@ -66,9 +66,9 @@
   .caption.visible{ opacity:1; pointer-events:auto; }
   .caption:empty{ display:none; padding:0; background:none; }
   .caption .who{ color:var(--muted); font-size:11px; letter-spacing:0.08em; text-transform:uppercase; display:block; margin-bottom:2px; }
-  .hint{ z-index:2; font-size:12px; color:var(--muted); text-align:center; pointer-events:none; }
+  .hint{ z-index:4; font-size:12px; color:var(--muted); text-align:center; pointer-events:none; }
   .dock{
-    z-index:2; display:flex; align-items:center; justify-content:center; gap:14px;
+    z-index:4; display:flex; align-items:center; justify-content:center; gap:14px;
     max-width:100%; pointer-events:auto;
   }
   .mic-btn{
@@ -93,6 +93,69 @@
     .dock{ gap:8px; }
     .pill{ padding:7px 10px; font-size:9.5px; max-width:32vw; }
   }
+
+  /* ---------- PARTE: telas ao redor, sinapses, balões e cartões (portado do Lab 3+4
+     da incubadora, incubadora/lab-3-4.html — mesmos nomes de classe sempre que possível;
+     removido o que é só do painel de laboratório). A interface continua fina, por cima
+     do canvas de tela cheia; dock/legenda (z-index:4) sempre por cima das telas. ---------- */
+  #links{ position:fixed; inset:0; width:100%; height:100%; z-index:1; pointer-events:none; }
+  #overlay{ position:fixed; inset:0; z-index:2; pointer-events:none; overflow:hidden; }
+  #overlay.sem-telas .tela{ opacity:0 !important; }
+  .tela{
+    position:absolute; width:var(--tw,200px); padding:9px 11px;
+    border:1px solid rgba(0,229,255,0.24);
+    background:linear-gradient(160deg, rgba(6,18,26,0.66), rgba(4,10,16,0.5));
+    backdrop-filter:blur(6px); border-radius:12px;
+    box-shadow:0 0 22px -8px rgba(0,229,255,0.4);
+    opacity:var(--pres,0.8); font:12px/1.35 'Manrope', sans-serif; color:var(--text);
+    transition:opacity .5s, border-color .4s, box-shadow .4s;
+    animation:tela-flutua 7s ease-in-out infinite;
+  }
+  .tela.upd{ border-color:rgba(0,229,255,0.85); box-shadow:0 0 28px -2px rgba(0,229,255,0.7); }
+  .tela h4{ margin:0 0 6px; font:700 10px 'Chakra Petch',sans-serif; letter-spacing:0.14em; text-transform:uppercase; color:var(--cyan); display:flex; align-items:center; gap:6px; }
+  .tela h4 b{ width:6px; height:6px; border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
+  .tela .lin{ display:flex; justify-content:space-between; gap:8px; padding:2px 0; border-bottom:1px dashed rgba(255,255,255,0.07); }
+  .tela .lin span{ color:var(--muted); font-variant-numeric:tabular-nums; }
+  .tela .lin em{ font-style:normal; text-align:right; }
+  .tela .prox{ color:#fff; } .tela .prox span{ color:var(--cyan); } .tela .pas{ opacity:0.4; }
+  .tela .cont{ margin:6px 0 0; font:600 11px 'Chakra Petch',sans-serif; color:var(--cyan); }
+  .tela .bar{ display:grid; grid-template-columns:68px 1fr 22px; align-items:center; gap:6px; margin:4px 0; }
+  .tela .bar i{ height:6px; border-radius:4px; background:rgba(255,255,255,0.08); overflow:hidden; display:block; }
+  .tela .bar u{ display:block; height:100%; background:linear-gradient(90deg, var(--cyan), #9B6BFF); transition:width .6s; }
+  .tela .bar b{ text-align:right; font:600 11px 'Chakra Petch',sans-serif; }
+  .tela .sem-fonte{ color:var(--muted); font-size:11px; }
+  .t-agenda{ left:2.5%; top:9%; --tw:190px; }
+  .t-tv{ right:2.5%; top:9%; --tw:200px; animation-delay:-2s; }
+  .t-tarefas{ left:2.5%; bottom:14%; --tw:190px; animation-delay:-4s; }
+  .t-mercado{ right:2.5%; bottom:14%; --tw:190px; animation-delay:-5.5s; }
+  @media (max-width:759px){ .t-agenda,.t-tv{ --tw:150px; top:8%; font-size:11px; } }
+  @keyframes tela-flutua{ 0%,100%{ translate:0 0; } 50%{ translate:0 -6px; } }
+  #bolhas, #cartoes{ position:fixed; inset:0; z-index:2; pointer-events:none; overflow:hidden; }
+  .bolha{
+    position:absolute; max-width:min(205px,56vw); padding:8px 12px; border-radius:16px;
+    font:13px/1.35 'Manrope', sans-serif; opacity:0; animation:bolha-anim 7.6s ease-out forwards;
+  }
+  .bolha.eu{ left:2.5%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.16); border-bottom-left-radius:4px; }
+  .bolha.jarbas{ right:2.5%; background:rgba(0,229,255,0.13); border:1px solid rgba(0,229,255,0.38); border-bottom-right-radius:4px; }
+  .bolha small{ display:block; font:700 9px 'Chakra Petch',sans-serif; letter-spacing:0.12em; color:var(--muted); margin-bottom:2px; text-transform:uppercase; }
+  @keyframes bolha-anim{ 0%{ opacity:0; transform:translateY(14px) scale(.96); } 8%,86%{ opacity:1; transform:none; } 100%{ opacity:0; transform:translateY(-10px); } }
+  .cartao{
+    position:absolute; top:32%; min-width:140px; max-width:185px; padding:12px 14px;
+    border-radius:14px; background:rgba(5,16,24,0.86); border:1px solid rgba(0,229,255,0.4);
+    box-shadow:0 0 26px -6px rgba(0,229,255,0.55); animation:cartao-pop .35s cubic-bezier(.2,1.4,.4,1) both;
+    pointer-events:auto; cursor:pointer;
+  }
+  .cartao.e{ left:2.5%; } .cartao.d{ right:2.5%; }
+  .cartao.sai{ animation:cartao-sai .4s forwards; }
+  .cartao small{ font:700 9px 'Chakra Petch',sans-serif; letter-spacing:0.14em; color:var(--cyan); }
+  .cartao .big{ font:700 32px 'Chakra Petch',sans-serif; line-height:1.1; margin:4px 0; } .cartao .big b{ color:var(--cyan); }
+  .cartao .mid{ font:600 15px 'Chakra Petch',sans-serif; margin:5px 0; }
+  .cartao p{ margin:4px 0 0; color:var(--muted); font-size:12px; }
+  .cartao ul{ margin:6px 0 0; padding-left:16px; font-size:12px; }
+  @keyframes cartao-pop{ from{ opacity:0; transform:scale(.6); } to{ opacity:1; transform:none; } }
+  @keyframes cartao-sai{ to{ opacity:0; transform:translateY(-8px); } }
+  body.classic-face #links, body.classic-face #overlay, body.classic-face #bolhas, body.classic-face #cartoes{ display:none; }
+
   /* ---------- Histórico (pop-up) e cartão "Resumo do dia" ---------- */
   .history-overlay, .briefing-card-overlay{
     position:fixed; inset:0; z-index:40; background:rgba(0,0,0,0.72);
@@ -217,6 +280,16 @@
   <canvas id="face"></canvas>
   <div class="classic-only"><div class="visor"><div class="eye-wrap"><canvas id="eyeClassic"></canvas></div></div></div>
 </div>
+
+<canvas id="links"></canvas>
+<div id="overlay">
+  <div class="tela t-agenda" id="tAgenda"></div>
+  <div class="tela t-tarefas" id="tTarefas"></div>
+  <div class="tela t-tv" id="tTv"></div>
+  <div class="tela t-mercado" id="tMercado"></div>
+</div>
+<div id="bolhas"></div>
+<div id="cartoes"></div>
 
 <div class="bottom-ui">
   <div class="caption" id="caption">
@@ -465,7 +538,7 @@ Spring.prototype.step = function(dt){
 Spring.prototype.kick = function(v){ this.v += v; };
 
 const tune = { speed:1, damp:1, intensity:1 };
-const opts = { olharVivo:true, piscadas:true, autoReturn:true, expressoesAtivas:null };
+const opts = { olharVivo:true, piscadas:true, autoReturn:true, expressoesAtivas:null, telas:true, baloes:true, sinapses:true };
 
 const EK = { sx:[1,12,.72], sy:[1,12,.72], r:[.32,9,.9], hole:[.42,9,.9], tilt:[0,12,.7], lidTop:[0,15,.72], lidTilt:[0,12,.85], lidBot:[0,14,.85], cheek:[0,11,.66], ex:[0,12,.85], ey:[0,12,.85], alpha:[1,10,1], hx:[0,16,.85], hy:[0,16,.85] };
 function mkEye(){ const o={}; for(const k in EK) o[k]=new Spring(EK[k][0],EK[k][1],EK[k][2]); return o; }
@@ -734,7 +807,9 @@ const APARENCIA_DEFAULTS = {
   velocidade:1, elasticidade:.5, intensidadeExpressoes:1, olharVivo:true, piscadas:true, voltarAoNeutro:true, expressoesAtivas:null,
   // FACE-1b: cenário animado e materialização
   fundoIntensidade:.3, fundoSegueHumor:true, particulas:12000, tamanhoTriangulos:4.5, girar:.5,
-  manterSegundos:9, manterAteDissolver:false, coresMateriais:'neon', qualidadeAutomatica:true, efeitosReduzidos:false
+  manterSegundos:9, manterAteDissolver:false, coresMateriais:'neon', qualidadeAutomatica:true, efeitosReduzidos:false,
+  // PARTE: telas ao redor, balões de conversa e linhas de sinapse (Lab 3+4)
+  telas:true, baloes:true, sinapses:true
 };
 function applyAparencia(){
   const ap = { ...APARENCIA_DEFAULTS, ...((typeof mem!=='undefined' && mem && mem.config && mem.config.aparencia) || {}) };
@@ -757,6 +832,10 @@ function applyAparencia(){
   opts.coresMateriais = ap.coresMateriais === 'reais' ? 'reais' : 'neon';
   opts.qualidadeAutomatica = ap.qualidadeAutomatica !== false;
   opts.efeitosReduzidos = !!ap.efeitosReduzidos;
+  opts.telas = ap.telas !== false;
+  opts.baloes = ap.baloes !== false;
+  opts.sinapses = ap.sinapses !== false;
+  if(!CLASSIC_FACE) aplicarVisibilidadeTelas();
 }
 
 function resizeFace(){
@@ -767,6 +846,7 @@ function resizeFace(){
   resizeGL(); // FACE-1b: redimensiona o canvas WebGL junto (no-op se ainda não carregou)
 }
 let needSnap = true, lastFrameAt = performance.now();
+let faceScale = 1; // PARTE: rosto cede espaço às telas — 1 sem telas, 0.8/0.76/0.9 com (ver ajustarFaceScale)
 function faceFrameBody(now){
   const dt = clamp((now-lastFrameAt)/1000, 0, .12);
   lastFrameAt = now;
@@ -782,13 +862,14 @@ function faceFrameBody(now){
   readAudio(dt);
   // PARTE A: mesmas proporções da incubadora (lab-1-2.html) — rosto grande, centrado,
   // tela cheia, nunca descontando a altura do dock/legenda (eles ficam por cima).
-  vcx.t = W/2; vcy.t = H*.43; vS.t = Math.max(46, Math.min(W*.30, H*.34));
+  vcx.t = W/2; vcy.t = H*.43; vS.t = Math.max(46, Math.min(W*.30, H*.34)) * faceScale;
   if(needSnap){ vcx.x=vcx.t; vcy.x=vcy.t; vS.x=vS.t; vcx.v=vcy.v=vS.v=0; needSnap=false; }
   vcx.step(dt); vcy.step(dt); vS.step(dt);
   // FACE-1b: fundo animado e materialização — carregados sob demanda, nunca bloqueiam o resto
   maybeStartGL();
   renderGL(now, t, dt, idleBand(now));
   drawFace(now, t, effectiveQuality()==='leve');
+  drawLinks(now); // PARTE: sinapses das telas/balões/cartões até o rosto (Lab 3+4)
 }
 
 /* ========== FACE-1b: cenário animado (fundo) + materialização (partículas) ==========
@@ -1309,6 +1390,281 @@ window.Jarbas.materializeSVG = materializeSVG;
 window.Jarbas.dissolve = dissolve;
 window.Jarbas.isMaterialized = () => P.mode !== 'home'; // FACE-2: pro comando de voz "pode guardar"/dissolver saber se há algo pra dissolver
 if(typeof window.Jarbas.onMaterialized !== 'function') window.Jarbas.onMaterialized = null;
+
+/* ========== Telas ao redor, sinapses, balões e cartões — portado de
+   incubadora/lab-3-4.html (Lab 3+4), mesmos nomes de classe/função sempre que possível.
+   Removido o que é só do painel de laboratório (controles, dados de exemplo gerados na
+   página) — aqui os dados vêm de verdade do Worker (mode:'telas'), sem IA. Nunca roda no
+   motor "classic" (gaze/geom()/faceScale são só do motor novo). ========== */
+function narrowScreen(){ return innerWidth < 760; }
+function compactScreen(){ return innerWidth < 880; }
+
+// ---------- faceScale: o rosto cede espaço às telas (0.8 largo / 0.76 "compacto" /
+// 0.9 estreito; 1 se as telas estiverem desligadas) — mesma regra do lab (ajustarLayout). ----------
+let ajustarFaceScaleAnterior = null;
+function ajustarFaceScale(){
+  if(CLASSIC_FACE) return;
+  const alvo = !opts.telas ? 1 : (narrowScreen() ? .9 : (compactScreen() ? .76 : .8));
+  if(alvo !== ajustarFaceScaleAnterior){ ajustarFaceScaleAnterior = alvo; faceScale = alvo; }
+}
+
+// ---------- olhar: aponta o gaze pro centro de um elemento da tela (Lab 3: olhar) ----------
+function olharPara(el){
+  if(!opts.sinapses && !opts.telas) return; // sem telas nem sinapses, não há pra onde "olhar"
+  if(window.Jarbas.isMaterialized()) return;
+  const r = el.getBoundingClientRect();
+  if(!r.width) return;
+  const g = geom();
+  gazeTarget = [
+    clamp((r.left + r.width/2 - g.cx) / (innerWidth*.35), -1, 1),
+    clamp((r.top + r.height/2 - g.cy) / (innerHeight*.45), -.8, .8),
+  ];
+  gazeHold = performance.now() + 1500;
+}
+
+// ---------- Telas: dados reais (agenda/tarefas/contas), sem IA ----------
+const T_TELAS = { agenda:null, tarefas:null, tv:null, mercado:null };
+let dadosTelas = { agenda:[], proximoEmMin:null, tarefas:{porColuna:{}}, contas:{vencendo:0,total:0}, noticias:[], mercado:[] };
+let telasPulso = {};
+let telasFalhou = false;
+function telaEl(nome){
+  if(!T_TELAS[nome]) T_TELAS[nome] = document.getElementById({ agenda:'tAgenda', tarefas:'tTarefas', tv:'tTv', mercado:'tMercado' }[nome]);
+  return T_TELAS[nome];
+}
+function escapeHtmlTela(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function renderTelaAgenda(){
+  const el = telaEl('agenda'); if(!el) return;
+  const itens = dadosTelas.agenda || [];
+  let h = '<h4><b></b>Agenda · hoje</h4>';
+  if(!itens.length){ h += '<p class="sem-fonte">Nada na agenda de hoje.</p>'; }
+  else {
+    itens.forEach(it => { h += `<div class="lin"><span>${escapeHtmlTela(it.hora)}</span><em>${escapeHtmlTela(it.titulo)}</em></div>`; });
+    const d = dadosTelas.proximoEmMin;
+    h += d==null ? '<p class="cont">nada mais hoje</p>' : `<p class="cont">próximo em ${d>=60?Math.floor(d/60)+'h ':''}${d%60}min</p>`;
+  }
+  el.innerHTML = h;
+}
+function renderTelaTarefas(){
+  const el = telaEl('tarefas'); if(!el) return;
+  const porColuna = (dadosTelas.tarefas && dadosTelas.tarefas.porColuna) || {};
+  const linhas = [['Para agora', porColuna.now||0], ['De hoje', porColuna.hoje||0], ['Pendentes', porColuna.pendente||0]];
+  const mx = Math.max(1, ...linhas.map(l=>l[1]));
+  let h = '<h4><b></b>Tarefas</h4>';
+  linhas.forEach(([label,v]) => { h += `<div class="bar"><span>${label}</span><i><u style="width:${Math.round(v/mx*100)}%"></u></i><b>${v}</b></div>`; });
+  el.innerHTML = h;
+}
+function renderTelaTv(){
+  const el = telaEl('tv'); if(!el) return;
+  const itens = dadosTelas.noticias || [];
+  if(!itens.length){ el.innerHTML = '<h4><b></b>Notícias</h4><p class="sem-fonte">sem fonte configurada</p>'; return; }
+  const n = itens[0];
+  el.innerHTML = `<h4><b class="live"></b>Notícias</h4><div class="tvscr"><small>${escapeHtmlTela(n.categoria||'')}</small><p>${escapeHtmlTela(n.titulo||'')}</p></div>`;
+}
+function renderTelaMercado(){
+  const el = telaEl('mercado'); if(!el) return;
+  const itens = dadosTelas.mercado || [];
+  if(!itens.length){ el.innerHTML = '<h4><b></b>Mercado</h4><p class="sem-fonte">sem fonte configurada</p>'; return; }
+  let h = '<h4><b></b>Mercado</h4>';
+  itens.forEach(it => { h += `<div class="lin"><span>${escapeHtmlTela(it.nome)}</span><em>${escapeHtmlTela(it.valor)}</em></div>`; });
+  el.innerHTML = h;
+}
+const RENDER_TELA = { agenda:renderTelaAgenda, tarefas:renderTelaTarefas, tv:renderTelaTv, mercado:renderTelaMercado };
+function telaTemDados(nome){
+  if(nome==='tv') return (dadosTelas.noticias||[]).length>0;
+  if(nome==='mercado') return (dadosTelas.mercado||[]).length>0;
+  return true; // agenda/tarefas sempre têm dados reais do painel
+}
+// Mostra/esconde cada tela: telas desligadas -> some tudo (via classe sem-telas, ver
+// CSS); senão, decide por tamanho de tela + se aquela tela de fato tem dados — nunca
+// deixa uma tela vazia/de exemplo visível (sem fonte configurada -> escondida).
+function aplicarVisibilidadeTelas(){
+  if(CLASSIC_FACE) return;
+  OV.classList.toggle('sem-telas', !opts.telas);
+  let visiveis;
+  if(narrowScreen()){
+    visiveis = telaTemDados('tv') ? ['agenda','tv'] : ['agenda','tarefas'];
+  } else {
+    visiveis = Object.keys(T_TELAS).filter(n => telaTemDados(n) && !((n==='tarefas'||n==='mercado') && compactScreen()));
+  }
+  Object.keys(RENDER_TELA).forEach(n => {
+    const el = telaEl(n);
+    if(el) el.style.display = (opts.telas && visiveis.includes(n)) ? '' : 'none';
+  });
+  ajustarFaceScale();
+}
+function atualizarTela(nome, parcial){
+  dadosTelas = { ...dadosTelas, ...parcial };
+  if(RENDER_TELA[nome]) RENDER_TELA[nome]();
+  const el = telaEl(nome);
+  if(el){
+    el.classList.add('upd'); setTimeout(()=>el.classList.remove('upd'), 1500);
+    telasPulso[nome] = performance.now();
+    olharPara(el);
+  }
+  aplicarVisibilidadeTelas();
+}
+async function fetchTelas(){
+  if(CLASSIC_FACE) return;
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  const syncKey = getSyncKey();
+  if(!workerUrl || !syncKey) return;
+  try{
+    const resp = await fetch(workerUrl, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'telas', key:syncKey, companionState:{ items: mem.items || [] } }),
+    });
+    if(!resp.ok) throw new Error('telas_http_' + resp.status);
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error);
+    const mudouAgenda = JSON.stringify(dadosTelas.agenda) !== JSON.stringify(data.agenda);
+    const mudouTarefas = JSON.stringify(dadosTelas.tarefas) !== JSON.stringify(data.tarefas);
+    const mudouTv = JSON.stringify(dadosTelas.noticias) !== JSON.stringify(data.noticias);
+    const mudouMercado = JSON.stringify(dadosTelas.mercado) !== JSON.stringify(data.mercado);
+    telasFalhou = false;
+    dadosTelas = data;
+    if(mudouAgenda) atualizarTela('agenda', {}); else renderTelaAgenda();
+    if(mudouTarefas) atualizarTela('tarefas', {}); else renderTelaTarefas();
+    if(mudouTv) atualizarTela('tv', {}); else renderTelaTv();
+    if(mudouMercado) atualizarTela('mercado', {}); else renderTelaMercado();
+    aplicarVisibilidadeTelas();
+    OV.style.opacity = '';
+  }catch(e){
+    // Falha de rede: mantém o último dado bom, só marca visualmente (opacidade menor)
+    // — nunca quebra a UI nem apaga o que já estava mostrando.
+    telasFalhou = true;
+    OV.style.opacity = '0.55';
+    console.warn('fetch_telas_failed:', e);
+  }
+}
+
+// ---------- Sinapses: curvas da tela/balão/cartão até o rosto, com pulsos (Lab 3: drawLinks) ----------
+const linksCanvas = document.getElementById('links');
+const linksCtx = linksCanvas.getContext('2d');
+let linksDpr = 1;
+function sizeLinksCanvas(){
+  linksDpr = Math.min(devicePixelRatio||1, 2);
+  linksCanvas.width = Math.round(innerWidth*linksDpr);
+  linksCanvas.height = Math.round(innerHeight*linksDpr);
+}
+sizeLinksCanvas();
+window.addEventListener('resize', sizeLinksCanvas);
+// Guarda de desempenho dedicada às sinapses (independente da de materialização, que só
+// amostra fora do modo "home") — fps sustentado baixo desliga ramificação fina e reduz
+// os pulsos antes de qualquer outra coisa, como pedido.
+let linksFpsAcc=0, linksFpsN=0, linksQualidadeBaixa=false;
+function trackLinksFps(dt){
+  linksFpsAcc+=dt; linksFpsN++;
+  if(linksFpsAcc<=1) return;
+  const fps = linksFpsN/linksFpsAcc; linksFpsAcc=0; linksFpsN=0;
+  linksQualidadeBaixa = fps < 40;
+}
+function drawLinks(now){
+  const lx = linksCtx;
+  lx.setTransform(linksDpr,0,0,linksDpr,0,0);
+  lx.clearRect(0,0,innerWidth,innerHeight);
+  trackLinksFps(clamp((now-(drawLinks.last||now))/1000, 0, .12));
+  drawLinks.last = now;
+  if(CLASSIC_FACE || !opts.sinapses || !opts.telas) return;
+  const g = geom();
+  const alvos = [];
+  Object.keys(T_TELAS).forEach(n => {
+    const el = telaEl(n);
+    if(el && el.style.display!=='none' && getComputedStyle(el).display!=='none') alvos.push([n, el, 1]);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#bolhas .bolha, #cartoes .cartao'), (el,i) => {
+    if(!el.classList.contains('sai')) alvos.push(['b'+i, el, .85]);
+  });
+  lx.lineCap = 'round';
+  alvos.forEach((a, idx) => {
+    const [n, el, forca] = a;
+    const r = el.getBoundingClientRect(); if(!r.width) return;
+    const left = (r.left + r.width/2) < g.cx, sx = left ? r.right : r.left, sy = r.top + r.height/2;
+    const dx = sx-g.cx, dy = sy-g.cy, dist = Math.hypot(dx,dy)||1, ex = g.cx+dx/dist*g.S*1.3, ey = g.cy+dy/dist*g.S*.95;
+    const c1x = (sx+ex)/2, c1y = Math.min(sy,ey) - (idx%2 ? 36 : -36);
+    const boost = telasPulso[n] ? Math.max(0, 1-(now-telasPulso[n])/1700) : 0;
+    lx.shadowColor = 'rgba(0,229,255,.9)'; lx.shadowBlur = 10+boost*10;
+    lx.strokeStyle = 'rgba(0,229,255,'+((.34+boost*.45)*forca)+')'; lx.lineWidth = 1.5+boost*1.3;
+    lx.beginPath(); lx.moveTo(sx,sy); lx.quadraticCurveTo(c1x,c1y,ex,ey); lx.stroke();
+    if(!linksQualidadeBaixa){
+      const mx=(sx+2*c1x+ex)/4, my=(sy+2*c1y+ey)/4, bx=mx+(idx%2?1:-1)*28, by=my+(idx%3?-26:26);
+      lx.shadowBlur=6; lx.strokeStyle='rgba(0,229,255,'+(.22*forca+boost*.3)+')'; lx.lineWidth=1;
+      lx.beginPath(); lx.moveTo(mx,my); lx.quadraticCurveTo((mx+bx)/2+8,(my+by)/2-8,bx,by); lx.stroke();
+      lx.fillStyle='rgba(120,240,255,'+(.55*forca+boost*.4)+')';
+      lx.beginPath(); lx.arc(bx,by,2,0,6.283); lx.fill();
+    }
+    lx.shadowBlur=12; lx.fillStyle='rgba(120,240,255,'+((.8+boost*.2)*forca)+')';
+    lx.beginPath(); lx.arc(sx,sy,3.2,0,6.283); lx.fill(); lx.beginPath(); lx.arc(ex,ey,2.8,0,6.283); lx.fill();
+    const np = linksQualidadeBaixa ? 1 : (boost>0 ? 5 : 3);
+    for(let k=0;k<np;k++){
+      const u = ((now/(boost>0?800:2200)) + k/np + idx*.19) % 1, q = 1-u;
+      const px = q*q*sx + 2*q*u*c1x + u*u*ex, py = q*q*sy + 2*q*u*c1y + u*u*ey;
+      lx.shadowBlur=14; lx.fillStyle='rgba(200,250,255,'+((.55+boost*.45)*Math.sin(u*3.1416))+')';
+      lx.beginPath(); lx.arc(px,py,2.4+boost*1.5,0,6.283); lx.fill();
+    }
+    lx.shadowBlur=0;
+  });
+}
+
+// ---------- Balões de conversa (Lab 4: bolha/layoutBolhas) ----------
+const bolhasEl = document.getElementById('bolhas');
+function layoutBolhas(){
+  const off = { eu:0, jarbas:0 };
+  Array.prototype.slice.call(bolhasEl.children).reverse().forEach(k => {
+    const w = k.classList.contains('eu') ? 'eu' : 'jarbas';
+    const base = narrowScreen() ? 96 : Math.round(innerHeight*.14 + 118);
+    k.style.bottom = (base+off[w]) + 'px';
+    off[w] += k.offsetHeight + 8;
+  });
+}
+// Texto longo é cortado com "…" no balão — o texto completo continua no histórico.
+function truncarBolha(text, max){
+  const s = String(text==null?'':text).trim();
+  const limite = max || 220;
+  if(s.length <= limite) return s;
+  return s.slice(0, limite-1).trim() + '…';
+}
+function bolha(who, text){
+  const d = document.createElement('div');
+  d.className = 'bolha ' + who;
+  const small = document.createElement('small'); small.textContent = who==='eu' ? 'você' : 'jarbas';
+  d.appendChild(small);
+  d.appendChild(document.createTextNode(truncarBolha(text)));
+  bolhasEl.appendChild(d);
+  while(bolhasEl.children.length>5) bolhasEl.removeChild(bolhasEl.firstChild);
+  layoutBolhas();
+  setTimeout(()=>{ if(d.parentNode){ d.parentNode.removeChild(d); layoutBolhas(); } }, 7700);
+}
+
+// ---------- Cartões de dados (Lab 4: cartao) — até 2 ao mesmo tempo, ~20s ou ao tocar ----------
+const cartoesEl = document.getElementById('cartoes');
+let cardSide = 0;
+function renderCard(c){
+  if(!c || !c.tipo) return;
+  let h = `<small>${escapeHtmlTela((c.titulo||'').toUpperCase())}</small>`;
+  if(c.tipo === 'clima' || c.tipo === 'valor'){
+    h += `<div class="big">${escapeHtmlTela(c.valor||'')}</div>`;
+    if(c.sub) h += `<p>${escapeHtmlTela(c.sub)}</p>`;
+  } else if(c.tipo === 'lista'){
+    const linhas = Array.isArray(c.linhas) ? c.linhas : [];
+    h += '<ul>' + linhas.map(l => `<li>${escapeHtmlTela(l)}</li>`).join('') + '</ul>';
+  } else return;
+  const d = document.createElement('div');
+  d.className = 'cartao ' + ((cardSide++ % 2) ? 'd' : 'e');
+  d.innerHTML = h;
+  const sair = () => { if(!d.parentNode) return; d.classList.add('sai'); setTimeout(()=>{ if(d.parentNode) d.parentNode.removeChild(d); }, 420); };
+  d.addEventListener('click', sair);
+  cartoesEl.appendChild(d);
+  while(cartoesEl.querySelectorAll('.cartao').length>2) cartoesEl.removeChild(cartoesEl.querySelector('.cartao'));
+  setTimeout(sair, 20000);
+}
+function renderCards(cards){
+  if(!Array.isArray(cards)) return;
+  cards.slice(0,2).forEach(renderCard);
+}
+
+const OV = document.getElementById('overlay');
+setInterval(ajustarVisibilidadeTelasSeguro, 600);
+function ajustarVisibilidadeTelasSeguro(){ try{ aplicarVisibilidadeTelas(); }catch(e){} }
 
 /* ========== Motor "classic" — desenho original, preservado como reversão ========== */
 const eyeClassicCanvas = document.getElementById('eyeClassic');
@@ -1857,9 +2213,16 @@ function truncarLegenda(text, maxChars){
   return s.slice(0, limite - 1).trim() + '…';
 }
 let captionFadeTimer = null;
+// PARTE: balões de conversa (Lab 4) — quando ligados, a fala de cada um aparece como
+// balão (como conversa() do lab) em vez da legenda mínima; a legenda só volta a ser
+// usada quando os balões estão desligados (mem.config.aparencia.baloes=false).
 function setCaption(who, text){
   if(CLASSIC_FACE){
     caption.innerHTML = `<span class="who">${who}</span>${text}`;
+    return;
+  }
+  if(opts.baloes){
+    bolha(who==='jarbas' ? 'jarbas' : 'eu', text);
     return;
   }
   caption.innerHTML = `<span class="who">${who}</span>${truncarLegenda(text)}`;
@@ -2754,6 +3117,12 @@ async function askRaiz(userText, isRetry){
     // FACE-2: dispara a materialização visual só depois de iniciar a fala — nunca
     // espera a animação, e uma falha aqui nunca afeta a fala (ver triggerJarbasMaterialize).
     if(parsed.materialize) triggerJarbasMaterialize(parsed.materialize);
+    // PARTE: cartões de dados determinísticos (clima/agenda de hoje) que o Worker já
+    // montou a partir da ferramenta usada nesta mesma resposta — nunca bloqueia a fala.
+    if(!CLASSIC_FACE && parsed.cards) renderCards(parsed.cards);
+    // PARTE: qualquer resposta pode ter mexido em agenda/tarefas — reconsulta as telas
+    // (o Worker cacheia 5min, então isso nunca pesa de verdade quando nada mudou).
+    if(!CLASSIC_FACE) fetchTelas();
     const finishedNormally = await speak(parsed.reply);
     if(finishedNormally){
       hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
@@ -3478,6 +3847,10 @@ async function completeStartup(url, syncKey){
     setupErr.style.display = 'none';
     setupEl.classList.add('hidden');
     checkBriefingOnOpen(); // F2-3b: nunca atrasa o início do app, roda em segundo plano
+    if(!CLASSIC_FACE){
+      fetchTelas(); // consulta ao abrir
+      setInterval(()=>{ if(!document.hidden) fetchTelas(); }, 5*60*1000); // a cada 5min com a aba visível
+    }
     return true;
   }catch(e){
     setupErr.textContent = 'Precisamos da permissão do microfone para continuar.';
