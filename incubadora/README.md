@@ -28,17 +28,21 @@ laboratórios disponíveis.
 | Lab | Nome | Estado |
 |---|---|---|
 | 1 + 2 | Rosto e materialização | ✅ disponível (`lab-1-2.html`) |
-| 3 | Cenário e telas que o Jarbas acompanha | 🔜 em breve |
-| 4 | Balões, cartões de dados, lousa e quadro de pensamento | 🔜 em breve |
+| 3 + 4 | Telas ao redor, balões, cartões, lousa e quadro de pensamento | ✅ disponível (`lab-3-4.html`) |
 | 5 | Onde o Jarbas gosta de estar quando está sozinho | 🔜 em breve |
 
 ## Dependências
 
 Cada lab carrega o que precisa diretamente via CDN, na própria página — sem
-`npm install`, sem build. O Lab 1+2 carrega o **Three.js r128** via cdnjs.
+`npm install`, sem build. O Lab 1+2 e o Lab 3+4 carregam o **Three.js r128**
+via cdnjs.
 
 ## Aviso
 
 Nos laboratórios, o microfone real **não é usado** — a escuta é sempre
 simulada (um botão "escuta simulada" ou similar). Nenhum lab pede permissão
 de áudio de verdade.
+
+O Lab 3+4 (telas, balões, cartões, lousa e quadro de pensamento) roda só com
+**dados de exemplo**, gerados na própria página — não lê nem escreve nada do
+app, do Worker ou do painel de controle.
