@@ -289,6 +289,12 @@
 </head>
 <body>
 
+<!-- PARTE voz-mobile: elemento de áudio único, reaproveitado pra toda fala da voz
+     unificada (ver "Voz unificada" no script) — iOS só destrava o elemento que
+     recebeu o play() de dentro de um gesto real; um `new Audio()` por frase nunca
+     fica destravado. playsinline evita tela cheia de vídeo em iOS mesmo sendo áudio. -->
+<audio id="ttsEl" playsinline></audio>
+
 <div class="top">
   <div class="brand">Jarbas</div>
   <div style="position:fixed; top:calc(env(safe-area-inset-top,0px) + 18px); right:calc(env(safe-area-inset-right,0px) + 18px); display:flex; gap:10px; z-index:5;">
@@ -2606,20 +2612,108 @@ function stripTimestampPrefix(text){
 }
 
 const LAST_VOICE_PROVIDER_KEY = 'raiz_last_voice_provider';
+// PARTE voz-mobile: motivo (e quando) da última vez que a voz caiu pro navegador —
+// só diagnóstico local, nunca sobe pro servidor. Limpo sempre que a voz unificada
+// toca com sucesso (ver playAudioForGen.onplay).
+const LAST_VOICE_REASON_KEY = 'raiz_last_voice_reason';
+const LAST_VOICE_REASON_AT_KEY = 'raiz_last_voice_reason_at';
+function recordVoiceFallbackReason(reason){
+  if(!reason) return;
+  try{
+    localStorage.setItem(LAST_VOICE_REASON_KEY, reason);
+    localStorage.setItem(LAST_VOICE_REASON_AT_KEY, new Date().toISOString());
+  }catch(e){}
+}
+function clearVoiceFallbackReason(){
+  try{ localStorage.removeItem(LAST_VOICE_REASON_KEY); localStorage.removeItem(LAST_VOICE_REASON_AT_KEY); }catch(e){}
+}
+// Classifica o erro real (nunca adivinha) pra um dos 4 motivos que a Config mostra.
+function classifyTtsError(err){
+  if(err && err.name === 'NotAllowedError') return 'bloqueio de áudio do aparelho';
+  if(err && err.name === 'AbortError') return 'rede/tempo esgotado';
+  if(err && typeof err.message === 'string' && /^tts_http_[45]\d\d$/.test(err.message)) return 'Worker sem voz';
+  if(err && err.message === 'no_worker') return 'Worker sem voz';
+  return 'rede/tempo esgotado';
+}
 function updateVoiceProviderLabel(){
   const el = document.getElementById('voiceProviderLabel');
   if(!el) return;
   const provider = localStorage.getItem(LAST_VOICE_PROVIDER_KEY);
   const labels = { azure: 'última voz: Azure (oficial)', edge: 'última voz: Edge TTS', browser: 'última voz: navegador (reserva)' };
-  el.textContent = labels[provider] || '';
+  let text = labels[provider] || '';
+  if(provider === 'browser'){
+    const reason = localStorage.getItem(LAST_VOICE_REASON_KEY);
+    if(reason){
+      const atRaw = localStorage.getItem(LAST_VOICE_REASON_AT_KEY);
+      const at = atRaw ? new Date(atRaw) : null;
+      const quando = (at && !isNaN(at)) ? at.toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+      text += ` — motivo: ${reason}${quando ? ' (' + quando + ')' : ''}`;
+    }
+  }
+  el.textContent = text;
+}
+
+// ---------- Destravar áudio no mobile (iOS/Safari sobretudo) ----------
+// iOS só deixa tocar um elemento de áudio se ele foi destravado por um gesto REAL do
+// usuário (toque/tecla) — e, uma vez destravado, o MESMO elemento continua liberado
+// depois, mesmo pra play() assíncronos sem gesto novo (ver <audio id="ttsEl"> acima,
+// reaproveitado pra toda fala em vez de `new Audio()` por frase, que nunca destravava).
+const ttsEl = document.getElementById('ttsEl');
+function isIOS(){
+  const ua = navigator.userAgent || '';
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiUAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQEAAACA';
+let audioUnlocked = false;
+function performAudioUnlock(){
+  try{
+    ttsEl.src = SILENT_WAV;
+    const p = ttsEl.play();
+    if(p && p.catch) p.catch(()=>{});
+    ttsEl.pause();
+  }catch(e){}
+  try{ const ctx = ensureAudioCtx(); if(ctx) ctx.resume().catch(()=>{}); }catch(e){}
+  try{
+    // Destrava também a voz de reserva (speechSynthesis) no iOS, com volume 0 — pra
+    // que, se precisar cair pro navegador mais tarde, ela já saia na hora.
+    if('speechSynthesis' in window){
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0;
+      speechSynthesis.speak(u);
+    }
+  }catch(e){}
+}
+const UNLOCK_EVENTS = ['pointerdown', 'touchend', 'click', 'keydown'];
+function onFirstUserGesture(){
+  if(audioUnlocked) return;
+  audioUnlocked = true;
+  performAudioUnlock();
+  UNLOCK_EVENTS.forEach(ev => document.removeEventListener(ev, onFirstUserGesture, true));
+}
+UNLOCK_EVENTS.forEach(ev => document.addEventListener(ev, onFirstUserGesture, { capture:true, passive:true }));
+// Nome público — chamado explicitamente pelo botão do microfone e o de mãos livres,
+// além dos listeners genéricos acima (qualquer toque já cobre isso, mas garantir nos
+// dois pontos de entrada de voz deixa explícito, como pedido).
+function unlockAudio(){ onFirstUserGesture(); }
+// Espera o PRÓXIMO gesto (toque/tecla) pra resolver uma fala que ficou bloqueada —
+// sempre um listener novo e descartável, independente do destravo "de vida inteira"
+// acima (cobre o caso raro de um play() ser recusado de novo mesmo já destravado).
+function waitForNextGesture(){
+  return new Promise(resolve => {
+    const handler = () => { UNLOCK_EVENTS.forEach(ev => document.removeEventListener(ev, handler, true)); resolve(); };
+    UNLOCK_EVENTS.forEach(ev => document.addEventListener(ev, handler, { capture:true, passive:true }));
+  });
 }
 
 // ---------- Fala em pedaços (streaming por frase) + interrupção (barge-in) ----------
 // `speechState.generation` é o "token" da fala atual: toda vez que uma nova fala começa
 // ou é cancelada, incrementa. Qualquer callback assíncrono pendente de uma fala antiga
 // checa `myGen !== speechState.generation` pra saber que foi superado e para de agir.
-let speechState = { generation: 0, audio: null, pending: [], settleCurrentAudio: null };
+let speechState = { generation: 0, pending: [], settleCurrentAudio: null };
 let isSpeaking = false;
+// MediaElementSourceNode só pode ser criado UMA VEZ por elemento — por isso fica
+// guardado aqui fora, amarrado ao ttsEl (que também só existe uma vez), nunca recriado.
+let ttsMediaSource = null, ttsAnalyser = null;
 
 function cancelSpeech(){
   speechState.generation++;
@@ -2631,11 +2725,8 @@ function cancelSpeech(){
     speechState.settleCurrentAudio = null;
     fn();
   }
-  if(speechState.audio){
-    try{ speechState.audio.pause(); }catch(e){}
-    try{ speechState.audio.src = ''; }catch(e){}
-    speechState.audio = null;
-  }
+  try{ ttsEl.pause(); }catch(e){}
+  try{ ttsEl.removeAttribute('src'); ttsEl.load(); }catch(e){} // limpa sem recriar o elemento (continua destravado)
   for(const c of speechState.pending){ try{ c.abort(); }catch(e){} }
   speechState.pending = [];
   if('speechSynthesis' in window){ try{ speechSynthesis.cancel(); }catch(e){} }
@@ -2684,20 +2775,44 @@ async function fetchTtsAudio(text, signal){
   return { b64: data.audio_b64, provider: data.provider || 'edge' };
 }
 
+// 20s (era 12s — curto pra rede móvel/Worker frio) + 1 nova tentativa antes de render-se
+// à voz do navegador (uma segunda chance resolve boa parte dos timeouts passageiros).
+const TTS_TIMEOUT_MS = 20000;
+async function fetchTtsAudioOnce(text, timeoutMs){
+  const controller = new AbortController();
+  speechState.pending.push(controller);
+  const timer = setTimeout(()=>controller.abort(), timeoutMs);
+  try{
+    return await fetchTtsAudio(text, controller.signal);
+  } finally {
+    clearTimeout(timer);
+    const idx = speechState.pending.indexOf(controller);
+    if(idx !== -1) speechState.pending.splice(idx, 1);
+  }
+}
+async function fetchTtsAudioWithRetry(text){
+  try{
+    return await fetchTtsAudioOnce(text, TTS_TIMEOUT_MS);
+  }catch(err1){
+    try{
+      return await fetchTtsAudioOnce(text, TTS_TIMEOUT_MS);
+    }catch(err2){
+      return { error: err2 };
+    }
+  }
+}
+
 function playAudioForGen(ttsResult, myGen){
   return new Promise((resolve, reject)=>{
     if(myGen !== speechState.generation){ resolve(); return; }
-    const audio = new Audio('data:audio/mpeg;base64,' + ttsResult.b64);
-    speechState.audio = audio;
+    ttsEl.src = 'data:audio/mpeg;base64,' + ttsResult.b64;
     let pulseTimer = null;
-    let localAnalyser = null;
     let settled = false;
     const cleanup = ()=>{
       if(pulseTimer) clearInterval(pulseTimer);
-      if(speechState.audio === audio) speechState.audio = null;
       if(speechState.settleCurrentAudio === settleResolve) speechState.settleCurrentAudio = null;
       state.targetTalk = 0;
-      if(localAnalyser && analyserNode === localAnalyser) analyserNode = null;
+      ttsEl.onplay = null; ttsEl.onended = null; ttsEl.onerror = null;
     };
     const settleResolve = ()=>{ if(settled) return; settled = true; cleanup(); resolve(); };
     const settleReject = (err)=>{ if(settled) return; settled = true; cleanup(); reject(err); };
@@ -2706,21 +2821,27 @@ function playAudioForGen(ttsResult, myGen){
       if(pulseTimer) return;
       pulseTimer = setInterval(()=>{ state.targetTalk = 0.35 + Math.random()*0.45; }, 110);
     };
-    audio.onplay = ()=>{
+    ttsEl.onplay = ()=>{
       // FACE-1a: liga a boca ao áudio real (TTS Azure/Edge) via AnalyserNode. Se o
-      // AudioContext falhar, estiver suspenso (sem gesto do usuário) ou o motor "classic"
-      // estiver ativo, cai sem drama pro envelope de reserva (state.targetTalk), que já
-      // existia e continua funcionando igual (nunca quebra a fala).
-      if(!CLASSIC_FACE){
+      // AudioContext falhar, estiver suspenso, o motor "classic" estiver ativo, OU o
+      // aparelho for iOS (onde o áudio sai pelo AudioContext e fica mudo com a chave de
+      // silêncio ligada), cai sem drama pro envelope de reserva (state.targetTalk), que
+      // já existia e continua funcionando igual (nunca quebra a fala).
+      if(!CLASSIC_FACE && !isIOS()){
         const audioCtxForAnalysis = ensureAudioCtx();
         const wireAnalyser = ()=>{
           try{
-            const src = audioCtxForAnalysis.createMediaElementSource(audio);
-            const an = audioCtxForAnalysis.createAnalyser();
-            an.fftSize = 256; an.smoothingTimeConstant = .55;
-            src.connect(an); an.connect(audioCtxForAnalysis.destination);
+            // createMediaElementSource só pode ser chamado UMA VEZ por elemento — como
+            // o ttsEl agora é um singleton reaproveitado, o source/analyser também são
+            // criados só na primeira vez e reconectados nas falas seguintes.
+            if(!ttsMediaSource) ttsMediaSource = audioCtxForAnalysis.createMediaElementSource(ttsEl);
+            if(!ttsAnalyser){
+              ttsAnalyser = audioCtxForAnalysis.createAnalyser();
+              ttsAnalyser.fftSize = 256; ttsAnalyser.smoothingTimeConstant = .55;
+              ttsMediaSource.connect(ttsAnalyser); ttsAnalyser.connect(audioCtxForAnalysis.destination);
+            }
             if(pulseTimer){ clearInterval(pulseTimer); pulseTimer = null; }
-            localAnalyser = an; analyserNode = an;
+            analyserNode = ttsAnalyser;
           }catch(e){ startFallbackPulse(); }
         };
         if(audioCtxForAnalysis && audioCtxForAnalysis.state === 'running'){
@@ -2737,11 +2858,11 @@ function playAudioForGen(ttsResult, myGen){
       } else {
         startFallbackPulse();
       }
-      try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, ttsResult.provider); updateVoiceProviderLabel(); }catch{}
+      try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, ttsResult.provider); clearVoiceFallbackReason(); updateVoiceProviderLabel(); }catch{}
     };
-    audio.onended = settleResolve;
-    audio.onerror = ()=>settleReject(new Error('audio_playback_failed'));
-    audio.play().catch(settleReject);
+    ttsEl.onended = settleResolve;
+    ttsEl.onerror = ()=>settleReject(new Error('audio_playback_failed'));
+    ttsEl.play().catch(settleReject);
   });
 }
 
@@ -2759,12 +2880,7 @@ async function speakChunksStreaming(chunks, myGen){
 
   function ensureFetching(i){
     if(i < 0 || i >= chunks.length || ttsCache[i]) return;
-    const controller = new AbortController();
-    speechState.pending.push(controller);
-    const timer = setTimeout(()=>controller.abort(), 12000);
-    ttsCache[i] = fetchTtsAudio(chunks[i], controller.signal)
-      .then(res => { clearTimeout(timer); return res; })
-      .catch(err => { clearTimeout(timer); return { error: err }; });
+    ttsCache[i] = fetchTtsAudioWithRetry(chunks[i]);
   }
 
   ensureFetching(0);
@@ -2776,6 +2892,7 @@ async function speakChunksStreaming(chunks, myGen){
     const result = await ttsCache[i];
     if(myGen !== speechState.generation) return;
     if(!result || result.error){
+      recordVoiceFallbackReason(classifyTtsError(result && result.error));
       await speakBrowserForGen(chunks[i], myGen);
       continue;
     }
@@ -2783,6 +2900,27 @@ async function speakChunksStreaming(chunks, myGen){
       await playAudioForGen(result, myGen);
     }catch(err){
       if(myGen !== speechState.generation) return;
+      // PARTE voz-mobile: bloqueio de autoplay NÃO cai direto pro navegador — espera o
+      // próximo toque/tecla (já destrava de vez, se ainda não tinha) e tenta tocar o
+      // MESMO áudio já buscado mais uma vez. Só cai pro navegador se esse retry também falhar.
+      if(err && err.name === 'NotAllowedError'){
+        const hintAntes = hint.textContent;
+        hint.textContent = 'Toque na tela para ativar a voz';
+        await waitForNextGesture();
+        if(myGen !== speechState.generation) return;
+        if(hint.textContent === 'Toque na tela para ativar a voz') hint.textContent = hintAntes;
+        onFirstUserGesture(); // garante o destravo mesmo se chegou aqui sem passar pelos listeners genéricos
+        try{
+          await playAudioForGen(result, myGen);
+          continue;
+        }catch(err2){
+          if(myGen !== speechState.generation) return;
+          recordVoiceFallbackReason(classifyTtsError(err2));
+          await speakBrowserForGen(chunks[i], myGen);
+          continue;
+        }
+      }
+      recordVoiceFallbackReason(classifyTtsError(err));
       await speakBrowserForGen(chunks[i], myGen);
     }
   }
@@ -2818,6 +2956,8 @@ async function speak(text){
         await speakChunksStreaming(chunks, myGen);
         return myGen === speechState.generation;
       }
+    } else {
+      recordVoiceFallbackReason('voz desligada no aparelho');
     }
     if(myGen !== speechState.generation) return false;
     try{ localStorage.setItem(LAST_VOICE_PROVIDER_KEY, 'browser'); updateVoiceProviderLabel(); }catch{}
@@ -4039,6 +4179,7 @@ async function finishTapRecording(blob, mimeType, spokeAtLeastOnce){
 }
 
 micBtn.addEventListener('click', ()=>{
+  unlockAudio(); // PARTE voz-mobile: primeiro toque no microfone já destrava a voz unificada
   dissolve(); // FACE-1b: tocar no microfone dissolve com elegância o que estava materializado
   if(interruptNow()){
     if(!handsFree) startTapRecording();
@@ -4068,6 +4209,7 @@ function updateHandsFreeBtn(){
   hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
 }
 handsFreeBtn.addEventListener('click', ()=>{
+  unlockAudio(); // PARTE voz-mobile: ligar mãos livres já destrava a voz unificada — a primeira fala por voz sai na voz unificada, sem toque extra
   handsFree = !handsFree;
   localStorage.setItem(HANDS_FREE_KEY, handsFree ? '1' : '0');
   updateHandsFreeBtn();
