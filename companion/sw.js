@@ -24,6 +24,8 @@ self.addEventListener('push', (event) => {
       return self.registration.showNotification(title, {
         body,
         tag: 'jarbas-notification',
+        icon: new URL('icons/icon-192.png', self.registration.scope).href,
+        badge: new URL('icons/badge-96.png', self.registration.scope).href,
       });
     })
   );
