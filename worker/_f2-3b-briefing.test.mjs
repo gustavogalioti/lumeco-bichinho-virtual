@@ -106,7 +106,7 @@ console.log("filtrarFilaParaBriefing: OK");
     agendaTexto: "09:00 Reunião com o time; 14:00 Dentista",
     tarefasItens: [
       { id: "1", titulo: "Revisar relatório", status: "now" },
-      { id: "2", titulo: "Responder e-mail", status: "hoje" },
+      { id: "2", titulo: "Responder e-mail", status: "today" },
     ],
     contasTextos: ['Conta "Luz" vence hoje.'],
     pendenciasTextos: ['"ligar pro Pedro"'],
