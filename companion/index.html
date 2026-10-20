@@ -412,6 +412,7 @@
         <p id="pushStatus" style="color:var(--muted); font-size:13px; margin:0 0 10px;">desativadas</p>
         <button id="pushBtn" type="button" class="btn-secondary" style="margin-top:0;">ativar notificações</button>
       </div>
+      <p id="painelScanStatus" style="color:var(--muted); font-size:11px; margin:0 0 10px; opacity:0.6;"></p>
     </div>
 
     <div id="routinesTab" class="hidden">
@@ -3491,7 +3492,7 @@ async function askRaiz(userText, isRetry){
       body: JSON.stringify({
         mode:'companion',
         messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO(), aparencia: buildAparenciaForWorker(), podeMaterializarEspontaneo: podeMaterializarEspontaneo() }
+        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO(), aparencia: buildAparenciaForWorker(), podeMaterializarEspontaneo: podeMaterializarEspontaneo(), perfil: mem.perfil || null, ideias: mem.ideias || [] }
       })
     });
     if(!resp.ok) throw new Error('worker_error_' + resp.status);
@@ -4770,6 +4771,18 @@ async function checkBriefingOnOpen(){
   }
 }
 
+// PARTE H: "última varredura: há X h" — só leitura do relógio que o cron já mantém
+// (painel:scan:last); nenhum cálculo novo do lado do Worker, o app só formata.
+const painelScanStatusEl = document.getElementById('painelScanStatus');
+async function updatePainelScanStatusLabel(){
+  const d = await callWorkerSyncMode('painel_scan_status');
+  if(!painelScanStatusEl) return;
+  if(!d || !d.ultimaVarreduraISO){ painelScanStatusEl.textContent = ''; return; }
+  const horas = Math.max(0, Math.round((Date.now() - new Date(d.ultimaVarreduraISO).getTime()) / 3600000));
+  painelScanStatusEl.textContent = `última varredura do painel: há ${horas}h`;
+}
+updatePainelScanStatusLabel();
+
 const voiceModeBtn = document.getElementById('voiceModeBtn');
 function updateVoiceModeBtn(){
   voiceModeBtn.textContent = edgeVoiceEnabled() ? 'voz: unificada' : 'voz: padrão do aparelho';
@@ -4894,6 +4907,10 @@ async function resyncMemoryOnFocus(){
     if(data && data.knowledge && JSON.stringify(data.knowledge) !== JSON.stringify(mem.knowledge)){ mem.knowledge = data.knowledge; changed = true; }
     if(data && data.location && JSON.stringify(data.location) !== JSON.stringify(mem.location)){ mem.location = data.location; changed = true; }
     if(data && Array.isArray(data.routines) && JSON.stringify(data.routines) !== JSON.stringify(mem.routines)){ mem.routines = data.routines; changed = true; }
+    // PARTE H: perfil/ideias são escritos pela consolidação diária do PRÓPRIO Worker
+    // (cron), nunca pelo app — só esse resync traz a atualização pra tela.
+    if(data && data.perfil && JSON.stringify(data.perfil) !== JSON.stringify(mem.perfil)){ mem.perfil = data.perfil; changed = true; }
+    if(data && Array.isArray(data.ideias) && JSON.stringify(data.ideias) !== JSON.stringify(mem.ideias)){ mem.ideias = data.ideias; changed = true; }
     // F2-3b/painel: mem.config (inclusive config.aparencia) também pode ter mudado em
     // outro aparelho (ex: Aparência editada no painel) — reaplica se for o caso.
     if(data && data.config && JSON.stringify(data.config) !== JSON.stringify(mem.config)){
