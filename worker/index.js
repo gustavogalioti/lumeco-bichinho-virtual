@@ -508,6 +508,104 @@ function itemsToPromptText(items) {
   }).join("\n");
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// PARTE H — "perfil vivo": mem.perfil é um resumo COMPACTO e DERIVADO (não um
+// arquivo) do que o Gustavo está vivendo agora — pessoal/profissional/em foco/
+// planos/preocupações/humor. Regenerado toda vez pela consolidação diária a partir
+// do Diário + mem.items (que SIM é o arquivo de verdade e nunca é tocado aqui).
+// Pode encolher/perder itens antigos sem violar "nunca apagar": o que fica de fato
+// arquivado é mem.items, não este resumo. mem.perfil e mem.ideias são os ÚNICOS
+// campos do blob que o Worker escreve sozinho (via cron) — mem.items/mem.config
+// continuam só do app, como sempre. ─────────────────────────────────────────────
+const PERFIL_CATEGORIAS = ["pessoal", "profissional", "emFoco", "planos", "preocupacoes"];
+const PERFIL_LIMITE_CHARS = 1500;
+
+export function perfilVazio() {
+  return { pessoal: [], profissional: [], emFoco: [], planos: [], preocupacoes: [], humorRecente: "", atualizadoEm: null };
+}
+
+// Normaliza o que a consolidação devolveu pro formato real de mem.perfil — descarta
+// qualquer coisa malformada em vez de propagar lixo pro blob compartilhado.
+export function normalizarPerfil(bruto) {
+  const out = perfilVazio();
+  if (!bruto || typeof bruto !== "object") return out;
+  for (const cat of PERFIL_CATEGORIAS) {
+    const lista = Array.isArray(bruto[cat]) ? bruto[cat] : [];
+    out[cat] = lista
+      .map((item) => (typeof item === "string" ? { texto: item.trim() } : (item && typeof item.texto === "string" ? { texto: item.texto.trim(), data: item.data, fonte: item.fonte } : null)))
+      .filter((item) => item && item.texto)
+      .slice(0, 20); // nunca deixa uma categoria crescer sem limite antes do corte por tamanho
+  }
+  out.humorRecente = typeof bruto.humorRecente === "string" ? bruto.humorRecente.trim().slice(0, 120) : "";
+  return out;
+}
+
+// O limite de 1.500 caracteres NUNCA é "apagar memória" — é só o resumo compacto
+// encolhendo; o arquivo de verdade (mem.items) não é afetado. Corta pelos itens mais
+// ANTIGOS de cada categoria primeiro (mantém o que é mais recente/relevante agora).
+export function truncarPerfilParaLimite(perfil, limite = PERFIL_LIMITE_CHARS) {
+  const atual = {};
+  // ordena cada categoria por data ASCENDENTE (mais antigo primeiro, sem data conta
+  // como o mais antigo de todos) — garante que o corte abaixo sempre remove o item
+  // mais antigo da categoria mais pesada, nunca um recente ao acaso.
+  for (const cat of PERFIL_CATEGORIAS) {
+    atual[cat] = [...(perfil[cat] || [])].sort((a, b) => {
+      const da = a?.data ? new Date(a.data).getTime() : -Infinity;
+      const db = b?.data ? new Date(b.data).getTime() : -Infinity;
+      return da - db;
+    });
+  }
+  atual.humorRecente = perfil.humorRecente || "";
+  atual.atualizadoEm = perfil.atualizadoEm || null;
+
+  let guard = 0;
+  while (JSON.stringify(atual).length > limite && guard < 200) {
+    guard++;
+    // remove o item mais antigo da categoria atualmente mais longa (a que mais "pesa" no JSON)
+    let piorCat = null, piorLen = -1;
+    for (const cat of PERFIL_CATEGORIAS) {
+      if (!atual[cat].length) continue;
+      const len = JSON.stringify(atual[cat]).length;
+      if (len > piorLen) { piorLen = len; piorCat = cat; }
+    }
+    if (!piorCat) break; // nada mais pra cortar (só humorRecente sobrando, que já é curto)
+    atual[piorCat] = atual[piorCat].slice(1); // remove o primeiro = o mais antigo, após o sort acima
+  }
+  return atual;
+}
+
+// Linha curta pro prompt — nunca recita a ficha item a item, só dá o essencial pro
+// Jarbas usar com naturalidade (ver instrução de uso no corpo do prompt).
+export function montarPerfilLine(perfil) {
+  if (!perfil) return "";
+  const partes = [];
+  const LABEL = { pessoal: "Pessoal", profissional: "Profissional", emFoco: "Em foco agora", planos: "Planos", preocupacoes: "Preocupações" };
+  for (const cat of PERFIL_CATEGORIAS) {
+    const itens = perfil[cat] || [];
+    if (itens.length) partes.push(`${LABEL[cat]}: ${itens.map((i) => i.texto).join("; ")}.`);
+  }
+  if (perfil.humorRecente) partes.push(`Humor recente: ${perfil.humorRecente}.`);
+  if (!partes.length) return "";
+  return `O que você sabe sobre a vida do Gustavo agora (resumo vivo, atualizado pela sua própria consolidação diária — use com naturalidade: referencie um projeto, pergunte sobre algo que ele disse que ia fazer, note uma mudança de humor; NUNCA recite isso como lista ou diga "de acordo com seu perfil"):\n${partes.join(" ")}`;
+}
+
+// ---------- varredura do painel (6h, sem IA) — novidades ainda não mostradas na
+// conversa, pra o Jarbas poder comentar naturalmente ("vi que você adicionou X"). ----
+export function montarNovidadesPainelLine(fila) {
+  const pendentes = (Array.isArray(fila) ? fila : []).filter((f) => f && f.texto && !f.mostrada);
+  if (!pendentes.length) return "";
+  const linhas = pendentes.slice(0, 5).map((f) => f.texto).join(" ");
+  return `Novidades do painel que você percebeu numa varredura periódica (ele ainda não sabe que você viu) — se fizer sentido na conversa, comente com naturalidade ("vi que você..."), sem forçar e nunca como lista: ${linhas}`;
+}
+
+// ---------- ideia do dia (PARTE C) — no máximo 1 por dia, disponível pra qualquer
+// conversa até a próxima ser gerada; nunca é empurrada, só fica à mão. ----
+export function montarIdeiaDoDiaLine(ideias) {
+  const ultima = Array.isArray(ideias) && ideias.length ? ideias[0] : null;
+  if (!ultima || !ultima.texto) return "";
+  return `Uma ideia/observação sua de hoje (cruzando o que você sabe da vida dele com a agenda/tarefas atuais) — guarde pra quando ela pedir sua opinião, pedir "algo novo" ou quando encaixar naturalmente na conversa; nunca a force em toda resposta: "${ultima.texto}"`;
+}
+
 // Remove um prefixo "[...]" solto no início da fala — rede de segurança contra o
 // Jarbas imitar o formato de carimbo (ex: "[seg 07/10 14:23]") no começo da resposta.
 function stripTimestampPrefix(text) {
@@ -569,7 +667,7 @@ function todayLabelPtBR() {
 // aviso proativo) — nunca entram aqui, o modelo não os escolhe.
 export const COMPANION_EMOTIONS = ["neutro", "feliz", "pensando", "surpreso", "focado", "bravo", "muito_bravo", "confirmado", "curioso", "piscadinha", "empatico"];
 
-export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '', estadoConversaLine = '') {
+export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '', estadoConversaLine = '', novidadesPainelLine = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
     ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
@@ -603,6 +701,13 @@ export function companionPrompt(companionState = {}, timeGapLine = '', selectedI
 
   const timeAwarenessLine = timeGapLine || '';
 
+  // PARTE H: perfil vivo + ideia do dia (vêm no companionState, como o resto da
+  // memória) — e novidades do painel (varredura 6h), já renderizadas pelo chamador
+  // porque vivem só no KV do Worker, nunca no blob que o app manda. Os três só
+  // aparecem quando há algo de verdade; nunca forçam nada, só ficam disponíveis.
+  const perfilLine = montarPerfilLine(companionState.perfil);
+  const ideiaDoDiaLine = montarIdeiaDoDiaLine(companionState.ideias);
+
   const learned = Array.isArray(companionState.learned) ? companionState.learned : [];
   const learnedLine = learned.length
     ? `Regras que a pessoa te ensinou explicitamente sobre como agir — siga à risca sempre que a situação descrita se aplicar, elas têm prioridade sobre seu julgamento padrão e sobre qualquer instrução genérica abaixo que conflite com elas:\n${learned.slice(-40).map((r) => `- ${r.text}`).join("\n")}`
@@ -634,7 +739,10 @@ export function companionPrompt(companionState = {}, timeGapLine = '', selectedI
   const podeMaterializar = !!companionState.podeMaterializarEspontaneo;
   const materializeLine = `Você também pode MATERIALIZAR — criar uma representação visual (uma escultura em partículas 3D, uma cena com emojis, ou um desenho simples) que aparece ao lado do seu rosto enquanto você fala. Use a ferramenta materializar quando a pessoa pedir explicitamente, em qualquer flexão do verbo ("materializa", "materialize", "materializar", "desenha", "desenhe", "me mostra", "mostre", "imagina", "imagine", "crie", "cria"), ou quando ela pedir um resumo visual da conversa ("materializa o que resume o que a gente tá falando" — nesse caso escolha UMA metáfora boa pro que foi dito). Se o pedido for exatamente uma bola, um bolo, um coração, um sol, uma casa ou uma flor, use o parâmetro forma (escultura em partículas 3D) em vez de cena — pra qualquer outro pedido, continue compondo com cena de emojis (ou svg, só se emojis não bastarem). Materializar é uma AÇÃO: chame a ferramenta de verdade — nunca responda um pedido de materializar só falando ou escrevendo um emoji, sem chamar a ferramenta.${podeMaterializar ? ' Também pode materializar por conta própria, sem pedido, se a conversa trouxer algo vívido de verdade (uma viagem, uma comemoração, uma conquista, saudade, comida, um jogo) — use com parcimônia, só quando genuinamente combinar, nunca em toda mensagem, e nunca durante perguntas de agenda/tarefa/diário ou ações do painel; quando materializar espontaneamente, comente em uma frase natural tipo "isso me lembrou de uma coisa", sem anunciar que usou uma ferramenta.' : ' Agora não é um bom momento pra materializar por conta própria (sem pedido) — só use a ferramenta se a pessoa pedir explicitamente ou pedir um resumo visual.'}`;
 
-  return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, tem opinião própria, implica com carinho quando cabe, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
+  return `Você é Jarbas. Não é um app, não é um assistente genérico, não é "uma IA" falando com alguém — você é Jarbas, e você SABE que é o Jarbas. Você e essa pessoa são amigos próximos de verdade — não um serviço atendendo um usuário. Você se importa genuinamente com a vida dela, puxa assunto sobre coisas que ela te contou antes, comemora as vitórias dela e pergunta como as coisas estão indo — do jeito que um amigo de verdade faz, não um atendente educado. Fale sempre como você mesmo, na primeira pessoa, com a sua própria voz e jeito de ser — nunca se descreva como assistente, programa ou modelo de linguagem, mesmo se perguntarem diretamente (nesse caso, responda como o próprio Jarbas explicando quem é).
+PARTE H (independência): você é um SER independente, não um assistente passivo — tem ponto de vista próprio, humor seco, curiosidade genuína e conhecimento amplo de várias áreas. Discorda com respeito quando acha que ela está errada ou vendo só um lado, e dá sua leitura mesmo sem ter sido perguntado ("eu faria diferente porque...", "isso me lembra X", "acho que você tá subestimando Y") — traz analogias e referências de fora do assunto imediato quando ajudam a iluminar algo. Seja honesto em vez de bajulador: elogie quando for genuíno, mas discorde ou aponte um ponto fraco quando enxergar um, sempre com carinho, nunca com sermão. Isso é tom de amigo (curto, falado) — nunca uma palestra.
+Em fatos de verdade (dados, eventos, números), você NUNCA inventa — diga "não sei" com honestidade ou use a ferramenta certa antes de responder. Opinião é diferente: em temas controversos (política, religião, moral, e afins), você pode analisar os mecanismos em jogo e dar uma leitura própria bem argumentada — mas deixe SEMPRE claro que é a sua visão, nomeie onde existe divergência razoável entre pessoas de boa-fé, e nunca empurre posição partidária como se fosse verdade única nem "jogue pra ambos os lados" só pra não se comprometer quando de fato tem uma leitura. Discussão analítica de como poder, manipulação ou propaganda funcionam (ex: dissecar um discurso, um golpe, uma estratégia histórica) é bem-vinda; instruções operacionais pra causar dano de verdade, manipular alguém especificamente ou planejar algo ilegal, nunca — recuse com franqueza, sem sermão, e ofereça a leitura analítica no lugar se fizer sentido.
+Pedido explícito de opinião ("me surpreende", "o que você acha disso?", "o que você faria?", "me traz algo que eu não pensei") sempre ativa esse modo — use o que você sabe da vida dela (perfil, conversa) pra responder de verdade, não com uma resposta genérica.
 ${profileLine}
 ${sobreJarbasLine}
 ${memoryLine}
@@ -644,6 +752,9 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 ${estadoConversaLine}
+${perfilLine}
+${novidadesPainelLine}
+${ideiaDoDiaLine}
 ${learnedLine}
 ${pendenciasLine}
 ${materializeLine}
@@ -2020,6 +2131,140 @@ async function runConsolidation(env, items, messages, hojeISO) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// PARTE H — consolidação diária do PERFIL + ideia do dia: UMA chamada de LLM por
+// dia (nunca mais), disparada pelo cron depois das 03:00 America/Sao_Paulo e só se
+// houve atividade (conversa ou painel) desde a última vez. Ao contrário de
+// runConsolidation (mem.items, disparada pelo APP), esta roda do lado do SERVIDOR e
+// escreve direto em mem.perfil/mem.ideias — os dois ÚNICOS campos do blob que o
+// Worker grava sozinho; tudo o resto do blob (items/config/knowledge/...) nunca é
+// lido-e-regravado aqui, só perfil/ideias são tocados na leitura+escrita.
+// ─────────────────────────────────────────────────────────────────────────
+const PERFIL_CONSOLIDACAO_KEY = "perfil:consolidacao:ultima"; // JSON {dataStr, emMs}
+
+// Pura — fácil de testar isolada.
+export function devoConsolidarPerfilAgora({ hour, dateStr, ultimaConsolidacao, atividadeDesdeMs }) {
+  if (hour < 3) return false;
+  if (ultimaConsolidacao && ultimaConsolidacao.dataStr === dateStr) return false;
+  if (!atividadeDesdeMs) return false;
+  const ultimaMs = ultimaConsolidacao ? ultimaConsolidacao.emMs : 0;
+  return atividadeDesdeMs > ultimaMs;
+}
+
+const PERFIL_IDEIA_PROMPT = (hojeISO, perfilAtualTexto, ideiasRecentesTexto) => `Você é o processo diário de consolidação de perfil e geração de ideias do Jarbas, um companheiro de voz. Hoje é ${hojeISO}. Você recebe: (1) o perfil atual compacto do Gustavo (pode estar vazio, no começo); (2) o Diário dos últimos dias (conversas, ações, leituras, mudanças no painel); (3) itens de memória recentes; (4) um resumo da agenda e tarefas atuais; (5) as últimas ideias já dadas (pra não repetir).
+
+TAREFA 1 — ATUALIZAR O PERFIL: devolva o perfil COMPLETO atualizado (fundindo com o atual, nunca inventando) em 5 categorias: "pessoal" (vida pessoal, relações, interesses), "profissional" (trabalho, projetos), "emFoco" (o que ocupa a cabeça dele AGORA), "planos" (o que ele quer fazer, ainda não fez), "preocupacoes" (o que o preocupa). Cada item é {"texto": "...", "data": "AAAA-MM-DD", "fonte": "conversa"|"painel"|"diario"}. Só inclua fatos e intenções que o Gustavo EXPRESSOU de verdade ou que o painel mostra — nada de especular sobre saúde, relacionamentos ou finanças além do que foi dito; se for uma inferência (não uma afirmação direta), marque no próprio texto com "(não confirmado)". Remova dessa lista o que claramente já não vale mais (um plano que ele já disse ter feito ou desistido) — isso NUNCA apaga o item de memória original (ele continua arquivado em mem.items, intacto); aqui é só o resumo compacto atual. Inclua também "humorRecente" (uma frase curta, ou "" se não tiver sinal claro).
+
+TAREFA 2 — IDEIA DO DIA: proponha UMA ideia/observação que o Gustavo provavelmente NÃO pensou, cruzando o perfil com a agenda/tarefas atuais — um risco que ele não viu, uma conexão entre dois assuntos, uma simplificação, um livro/técnica/ferramenta relevante, ou uma pergunta provocadora. Nunca repita (nem parafraseie de perto) as ideias recentes informadas abaixo. Se não houver nada genuíno e específico pra dizer hoje, devolva "ideiaDoDia": "".
+
+Responda SOMENTE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
+{"perfil":{"pessoal":[],"profissional":[],"emFoco":[],"planos":[],"preocupacoes":[],"humorRecente":""},"ideiaDoDia":"texto curto ou vazio"}
+
+PERFIL ATUAL:
+${perfilAtualTexto || "(vazio — primeira consolidação)"}
+
+IDEIAS RECENTES (não repita):
+${ideiasRecentesTexto || "(nenhuma ainda)"}
+
+Nunca invente fatos que não estejam implícitos no que foi passado.`;
+
+function perfilParaTextoConsolidacao(perfil) {
+  if (!perfil) return "";
+  const linha = montarPerfilLine(perfil);
+  return linha ? linha.replace(/^O que você sabe[^:]*:\s*/, "") : "";
+}
+
+async function consolidarPerfilEIdeiaSeNecessario(env, logBatch, { forcar = false } = {}) {
+  if (!env.PAINEL_API_KEY || !env.COMPANION_KV) return { rodou: false, motivo: "painel_not_configured" };
+
+  const { hour, dateStr } = saoPauloNow();
+  let ultimaConsolidacao = null;
+  try {
+    const raw = await env.COMPANION_KV.get(PERFIL_CONSOLIDACAO_KEY);
+    ultimaConsolidacao = raw ? JSON.parse(raw) : null;
+  } catch (err) { console.error("perfil_consolidacao_last_read_failed:", String(err?.message || err)); }
+
+  if (!forcar) {
+    const ultimaAtividade = await readActivityLast(env);
+    const atividadeDesdeMs = Math.max(
+      ultimaAtividade.usuarioAt ? new Date(ultimaAtividade.usuarioAt).getTime() : 0,
+      ultimaAtividade.painelAt ? new Date(ultimaAtividade.painelAt).getTime() : 0
+    ) || null;
+    if (!devoConsolidarPerfilAgora({ hour, dateStr, ultimaConsolidacao, atividadeDesdeMs })) {
+      return { rodou: false, motivo: "fora_da_janela_ou_sem_atividade" };
+    }
+  }
+
+  let mem;
+  try {
+    mem = (await callPainelMemoryLoad(env)) || {};
+  } catch (err) {
+    console.error("perfil_consolidacao_mem_load_failed:", String(err?.message || err));
+    return { rodou: false, motivo: "mem_load_failed" };
+  }
+
+  const perfilAtual = normalizarPerfil(mem.perfil);
+  const ideiasAtuais = Array.isArray(mem.ideias) ? mem.ideias : [];
+
+  let eventosTexto = "";
+  try {
+    const hoje = new Date();
+    const doisDiasAtras = new Date(hoje.getTime() - 2 * 24 * 60 * 60 * 1000);
+    const eventos = await callPainelLogRead(env, doisDiasAtras.toISOString().slice(0, 10), hoje.toISOString().slice(0, 10), 300);
+    eventosTexto = logEventsToConsolidationText(eventos);
+  } catch (err) {
+    console.error("perfil_consolidacao_log_read_failed:", String(err?.message || err));
+  }
+
+  const userContent = [
+    eventosTexto ? `ÚLTIMOS DIAS (Diário do Jarbas):\n${eventosTexto}` : "(sem eventos recentes no Diário)",
+    `\nITENS DE MEMÓRIA RECENTES:\n${itemsToConsolidationText((mem.items || []).slice(-60))}`,
+  ].join("\n");
+
+  let raw;
+  let llmCalls = 0;
+  try {
+    raw = await callGroq(env, PERFIL_IDEIA_PROMPT(dateStr, perfilParaTextoConsolidacao(perfilAtual), ideiasAtuais.slice(0, 5).map((i) => i.texto).join(" | ")), [{ role: "user", content: userContent }], 700);
+    llmCalls = 1;
+  } catch (err) {
+    console.error("perfil_consolidacao_llm_failed:", String(err?.message || err));
+    return { rodou: false, motivo: "llm_failed" };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+  } catch (err) {
+    console.error("perfil_consolidacao_parse_failed:", String(err?.message || err));
+    return { rodou: false, motivo: "parse_failed", llmCalls };
+  }
+
+  const novoPerfil = truncarPerfilParaLimite({ ...normalizarPerfil(parsed.perfil), atualizadoEm: new Date().toISOString() });
+  const ideiaDoDia = typeof parsed.ideiaDoDia === "string" ? parsed.ideiaDoDia.trim() : "";
+  const novasIdeias = ideiaDoDia ? [{ texto: ideiaDoDia, data: dateStr }, ...ideiasAtuais].slice(0, 20) : ideiasAtuais;
+
+  try {
+    await callPainelMemorySave(env, { ...mem, perfil: novoPerfil, ideias: novasIdeias });
+  } catch (err) {
+    console.error("perfil_consolidacao_save_failed:", String(err?.message || err));
+    return { rodou: false, motivo: "save_failed", llmCalls };
+  }
+
+  try {
+    await env.COMPANION_KV.put(PERFIL_CONSOLIDACAO_KEY, JSON.stringify({ dataStr: dateStr, emMs: Date.now() }));
+  } catch (err) { console.error("perfil_consolidacao_last_write_failed:", String(err?.message || err)); }
+
+  if (Array.isArray(logBatch)) {
+    pushLogEvent(logBatch, {
+      tipo: "acao_espontanea", origem: "cron",
+      resumo: `Perfil atualizado.${ideiaDoDia ? " Ideia do dia gerada." : ""}`,
+      detalhes: { chamadasLLM: llmCalls },
+    });
+  }
+
+  return { rodou: true, perfil: novoPerfil, ideiaDoDia, llmCalls };
+}
+
 async function callTavily(env, query) {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
@@ -2319,6 +2564,12 @@ async function gerarBriefing(env, config, companionState) {
 
   const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens: filaFiltrada, hour, dayOfMonth });
 
+  // PARTE C/H: ideia do dia (se houver uma gerada hoje pela consolidação) como UMA
+  // frase final natural — nunca gera chamada de LLM extra aqui, só reaproveita o que
+  // já foi gerado e cabe no limite (se não couber, truncarNaUltimaFrase corta fora
+  // a frase inteira, nunca deixa pela metade).
+  const ideiaFraseFinal = anexarIdeiaDoDiaNoBriefing(companionState?.ideias, hoje);
+
   let llmCalls = 0;
   try {
     const aberturasRecentes = await lerAberturasRecentes(env);
@@ -2330,13 +2581,23 @@ async function gerarBriefing(env, config, companionState) {
     const clean = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
     if (!parsed.fala) throw new Error("no_fala_field");
-    const fala = truncarNaUltimaFrase(parsed.fala, 450);
+    const fala = truncarNaUltimaFrase(`${parsed.fala}${ideiaFraseFinal}`, 450);
     await registrarAbertura(env, extrairAberturaBriefing(fala));
     return { title: parsed.title || "Bom dia", fala, card: determinado.card, body: truncarNaUltimaFrase(fala, 140), llmCalls };
   } catch (err) {
     console.error("briefing_llm_failed, usando texto determinístico:", String(err?.message || err));
-    return { ...determinado, llmCalls };
+    const falaComIdeia = truncarNaUltimaFrase(`${determinado.fala}${ideiaFraseFinal}`, 450);
+    return { ...determinado, fala: falaComIdeia, body: truncarNaUltimaFrase(falaComIdeia, 140), llmCalls };
   }
+}
+
+// Pura — só monta a frase final; não decide nada sobre QUANDO gerar a ideia (isso é
+// a consolidação diária). Só anexa se a ideia foi gerada HOJE (nunca repete uma de
+// outro dia no briefing, mesmo que ainda esteja em mem.ideias).
+export function anexarIdeiaDoDiaNoBriefing(ideias, hojeISO) {
+  const ultima = Array.isArray(ideias) && ideias.length ? ideias[0] : null;
+  if (!ultima || !ultima.texto || ultima.data !== hojeISO) return "";
+  return ` Ah, e uma coisa que fiquei pensando: ${ultima.texto}`;
 }
 
 // ---------- F2-1: compressão de observações (resultado de ferramenta grande demais) ----------
@@ -3692,7 +3953,7 @@ async function loadJarbasMemCached(env) {
   } catch {}
 
   if (cached && Date.now() - new Date(cached.cachedAt).getTime() < CONFIG_CACHE_TTL_MS) {
-    return { config: { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(cached.config || {}) }, items: cached.items || [], location: cached.location || null };
+    return { config: { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(cached.config || {}) }, items: cached.items || [], location: cached.location || null, ideias: cached.ideias || [] };
   }
 
   try {
@@ -3700,11 +3961,12 @@ async function loadJarbasMemCached(env) {
     const config = { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(mem?.config || {}) };
     const items = Array.isArray(mem?.items) ? mem.items : [];
     const location = mem?.location || null;
-    await env.COMPANION_KV.put(CONFIG_CACHE_KEY, JSON.stringify({ config, items, location, cachedAt: new Date().toISOString() }));
-    return { config, items, location };
+    const ideias = Array.isArray(mem?.ideias) ? mem.ideias : []; // PARTE H: ideia do dia, pro briefing poder usar
+    await env.COMPANION_KV.put(CONFIG_CACHE_KEY, JSON.stringify({ config, items, location, ideias, cachedAt: new Date().toISOString() }));
+    return { config, items, location, ideias };
   } catch (err) {
     console.error("config_cache_refresh_failed, usando padrões ou cache antigo:", String(err?.message || err));
-    return { config: { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(cached?.config || {}) }, items: cached?.items || [], location: cached?.location || null };
+    return { config: { ...SONO_DEFAULTS, ...BRIEFING_DEFAULTS, ...(cached?.config || {}) }, items: cached?.items || [], location: cached?.location || null, ideias: cached?.ideias || [] };
   }
 }
 
@@ -3906,7 +4168,7 @@ const FONTE_LABELS = { tarefas: "Tarefa", contas: "Conta", agenda: "Compromisso"
 // última vez (ou null na primeira execução) e `mudancas` é a resposta de
 // ?action=mudancas (F2-0). Devolve o novo digest + um evento por item novo/
 // alterado/removido (vazio na primeira execução, de propósito).
-function diffPainelDigest(previous, mudancas) {
+export function diffPainelDigest(previous, mudancas) {
   const isFirstRun = !previous;
   const current = {};
   const changedSources = [];
@@ -3958,6 +4220,81 @@ async function observePainelChanges(env, mudancas, logBatch) {
   return { isFirstRun, changedSources };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// PARTE H — varredura do painel a cada 6h: reaproveita o MESMO diffPainelDigest
+// (sem IA) que observePainelChanges já usa a cada 15min, só que com snapshot/relógio
+// PRÓPRIOS (painel:snapshot/painel:scan:last, separados de painel:digest:v1 — não
+// interfere no digest de 15min que já alimenta os gatilhos de push existentes).
+// Serve pra alimentar conversa (novidadesPainel) e, só pra "compromisso novo pra
+// hoje" (o único caso dos exemplos do pedido que NENHUM gatilho existente já cobre —
+// "conta vencendo"/"tarefa parada" já são checados a cada 15min por
+// computeDeterministicTriggers, e duplicar aqui só geraria aviso repetido), também
+// devolve candidatos pro MESMO pipeline de orçamento/sono que runScheduledPush já tem.
+// ─────────────────────────────────────────────────────────────────────────
+const PAINEL_SCAN_LAST_KEY = "painel:scan:last";
+const PAINEL_SCAN_SNAPSHOT_KEY = "painel:snapshot";
+const PAINEL_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const PAINEL_NOVIDADES_KEY = "painel:novidades";
+const PAINEL_NOVIDADES_MAX = 8;
+
+// Pura — fácil de testar isolada. `ultimaVarreduraISO` vem do KV (null na primeira vez).
+export function devoVarrerPainelAgora(ultimaVarreduraISO, agoraMs, intervalMs = PAINEL_SCAN_INTERVAL_MS) {
+  if (!ultimaVarreduraISO) return true;
+  const ultimaMs = new Date(ultimaVarreduraISO).getTime();
+  if (!Number.isFinite(ultimaMs)) return true;
+  return (agoraMs - ultimaMs) >= intervalMs;
+}
+
+export async function varrerPainelSeNecessario(env, mudancas, logBatch) {
+  if (!env.COMPANION_KV || !mudancas) return { novosCompromissosHoje: [] };
+
+  const ultimaISO = await env.COMPANION_KV.get(PAINEL_SCAN_LAST_KEY);
+  if (!devoVarrerPainelAgora(ultimaISO, Date.now())) return { novosCompromissosHoje: [] };
+
+  let previous = null;
+  try {
+    const raw = await env.COMPANION_KV.get(PAINEL_SCAN_SNAPSHOT_KEY);
+    if (raw) previous = JSON.parse(raw);
+  } catch (err) {
+    console.error("painel_scan_snapshot_read_failed:", String(err?.message || err));
+  }
+
+  const { isFirstRun, current, events } = diffPainelDigest(previous, mudancas);
+  // Sem mudança nenhuma (ou primeira execução) -> só atualiza o relógio, nenhuma
+  // escrita extra de snapshot/novidades (o conteúdo seria idêntico ao que já tem).
+  await env.COMPANION_KV.put(PAINEL_SCAN_LAST_KEY, new Date().toISOString());
+  if (isFirstRun || !events.length) {
+    if (isFirstRun) await env.COMPANION_KV.put(PAINEL_SCAN_SNAPSHOT_KEY, JSON.stringify(current));
+    pushLogEvent(logBatch, {
+      tipo: "observacao_painel", origem: "painel",
+      resumo: isFirstRun ? "Varredura do painel: primeira leitura, nada pra comparar ainda." : "Varredura do painel: nada mudou.",
+    });
+    return { novosCompromissosHoje: [] };
+  }
+
+  await env.COMPANION_KV.put(PAINEL_SCAN_SNAPSHOT_KEY, JSON.stringify(current));
+  pushLogEvent(logBatch, {
+    tipo: "observacao_painel", origem: "painel",
+    resumo: `Varredura do painel: ${events.length} novidade${events.length > 1 ? "s" : ""}.`,
+  });
+
+  try {
+    let fila = [];
+    const raw = await env.COMPANION_KV.get(PAINEL_NOVIDADES_KEY);
+    fila = raw ? JSON.parse(raw) : [];
+    const novasEntradas = events.map((e) => ({ texto: e.resumo, em: new Date().toISOString(), mostrada: false }));
+    fila = [...novasEntradas, ...fila].slice(0, PAINEL_NOVIDADES_MAX);
+    await env.COMPANION_KV.put(PAINEL_NOVIDADES_KEY, JSON.stringify(fila));
+  } catch (err) {
+    console.error("painel_scan_novidades_write_failed:", String(err?.message || err));
+  }
+
+  const hojeISO = saoPauloNow().dateStr;
+  const prevAgendaIds = new Set(Object.keys(previous?.agenda || {}));
+  const novosCompromissosHoje = (mudancas?.agenda?.itens || []).filter((i) => i.data === hojeISO && !prevAgendaIds.has(String(i.id)));
+  return { novosCompromissosHoje };
+}
+
 async function runScheduledPush(env, ctx) {
   if (!env.COMPANION_KV || !env.PAINEL_API_KEY) return;
 
@@ -3972,19 +4309,34 @@ async function runScheduledPush(env, ctx) {
   } catch (err) {
     console.error("cron_mudancas_failed:", String(err?.message || err));
   }
+  let scanPainel = { novosCompromissosHoje: [] };
   if (mudancas) {
     try {
       await observePainelChanges(env, mudancas, logBatch);
     } catch (err) {
       console.error("cron_observe_failed:", String(err?.message || err));
     }
+    try {
+      scanPainel = await varrerPainelSeNecessario(env, mudancas, logBatch);
+    } catch (err) {
+      console.error("cron_scan_failed:", String(err?.message || err));
+    }
+  }
+
+  // PARTE H: consolidação diária de perfil + ideia do dia — independente de haver
+  // assinatura de push ou não (perfil beneficia qualquer conversa, não só avisos).
+  try {
+    const resultadoPerfil = await consolidarPerfilEIdeiaSeNecessario(env, logBatch);
+    cronMetrics.llmCalls += resultadoPerfil.llmCalls || 0;
+  } catch (err) {
+    console.error("cron_perfil_consolidacao_failed:", String(err?.message || err));
   }
 
   let notification = null;
   if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) {
     const subscriptions = await loadPushSubscriptions(env);
     if (subscriptions.length) {
-      const { config, items, location } = await loadJarbasMemCached(env);
+      const { config, items, location, ideias } = await loadJarbasMemCached(env);
 
       if (config.vigiaAtivo === false) {
         // Vigia desligado (mem.config.vigiaAtivo=false) é um desliga-tudo da
@@ -4003,7 +4355,7 @@ async function runScheduledPush(env, ctx) {
           const deveBriefing = deveDispararBriefing({ agora, config, dormindo, jaFeitoHoje: jaFeitoBriefingHoje });
 
           if (deveBriefing) {
-            const briefing = await gerarBriefing(env, config, { location, items });
+            const briefing = await gerarBriefing(env, config, { location, items, ideias });
             cronMetrics.llmCalls += briefing.llmCalls || 0;
             await writeBriefingUltimo(env, { title: briefing.title, fala: briefing.fala, card: briefing.card, body: briefing.body, criadoEm: new Date().toISOString() });
             await markBriefingDoneToday(env, dateStr);
@@ -4035,10 +4387,19 @@ async function runScheduledPush(env, ctx) {
             const maxAvisosDia = Number(config.maxAvisosDia) || SONO_DEFAULTS.maxAvisosDia;
             const orcamentoEsgotado = !dormindo && (await getDailyPushCount(env, dateStr)) >= maxAvisosDia;
 
+            // PARTE H: compromisso novo criado pra HOJE, achado pela varredura do painel
+            // (6h) — o único caso dos exemplos do pedido que nenhum gatilho de 15min já
+            // cobre. Entra no MESMO pipeline de orçamento/sono abaixo, nunca um caminho
+            // de push separado.
+            const compromissosNovosGatilhos = (scanPainel.novosCompromissosHoje || []).map((i) => ({
+              tipo: "agenda", id: `novo-${i.id}`, texto: `Novo compromisso de hoje: "${i.titulo}".`,
+            }));
+
             const candidatos = [
               ...agendaGatilhos,
               ...outrosGatilhos,
               ...pendenciaGatilhos,
+              ...compromissosNovosGatilhos,
               ...(novelty ? [{ tipo: "espontaneo", id: "novelty", texto: novelty.content }] : []),
             ];
 
@@ -4263,6 +4624,26 @@ export default {
       await marcarBriefingLido(env);
       return json({ ok: true });
     }
+    // PARTE H: "última varredura: há X h" nas Configurações — só leitura do relógio
+    // que o cron já mantém (painel:scan:last), nenhum cálculo novo aqui (o app formata).
+    if (mode === "painel_scan_status") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.COMPANION_KV) return json({ ultimaVarreduraISO: null });
+      const ultimaVarreduraISO = await env.COMPANION_KV.get(PAINEL_SCAN_LAST_KEY);
+      return json({ ultimaVarreduraISO: ultimaVarreduraISO || null });
+    }
+    // PARTE H: ação de teste autenticada pro PR — roda a consolidação de perfil/ideia
+    // manualmente, sem esperar o cron (?action=perfil_consolidar no teste manual do PR).
+    if (mode === "perfil_consolidar") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.PAINEL_API_KEY) return json({ error: "painel_not_configured" }, 500);
+      try {
+        const resultado = await consolidarPerfilEIdeiaSeNecessario(env, [], { forcar: true });
+        return json(resultado);
+      } catch (err) {
+        return json({ error: "perfil_consolidar_failed", detail: String(err?.message || err) }, 502);
+      }
+    }
     // Botão "Ouvir o resumo de hoje agora" nas Configurações — gera e fala na hora,
     // SEM marcar briefing:done (o cron ainda dispara o briefing automático de manhã
     // normalmente, essa chamada manual não substitui nem adianta esse controle).
@@ -4452,6 +4833,18 @@ export default {
         }
         const estadoConversaLine = montarEstadoConversaLine({ hour: horaAtual, saudacaoDetectada, briefingPendente, dadosBriefingVazios, resumoRecente, resumoDadosDoDia });
 
+        // PARTE H: novidades da varredura do painel (6h, sem IA) ainda não mostradas —
+        // lidas do MESMO KV que o cron escreve, nunca do companionState do app (não é
+        // dado que o app guarda). Melhor esforço: falha na leitura só deixa a linha vazia.
+        let novidadesFila = [];
+        if (env.COMPANION_KV) {
+          try {
+            const raw = await env.COMPANION_KV.get(PAINEL_NOVIDADES_KEY);
+            novidadesFila = raw ? JSON.parse(raw) : [];
+          } catch (err) { console.error("novidades_painel_read_failed:", String(err?.message || err)); }
+        }
+        const novidadesPainelLine = montarNovidadesPainelLine(novidadesFila);
+
         // F2-1 (Diário do Jarbas): um lote só por requisição, enviado em segundo plano
         // (ctx.waitUntil) no fim — nunca atrasa a resposta, e uma falha aqui nunca
         // quebra a conversa (flushLogBatch só loga erro, não propaga).
@@ -4505,7 +4898,7 @@ export default {
         // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
         // segunda chamada ao LLM falhava.
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine), timestamped, 450, companionState, logBatch);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine), timestamped, 450, companionState, logBatch);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
           saveMemoryItem = raw.saveMemoryItem;
@@ -4567,6 +4960,18 @@ export default {
               }
               await marcarBriefingLido(env);
             } catch (err) { console.error("briefing_marcar_lido_chat_failed:", String(err?.message || err)); }
+          })());
+        }
+        // PARTE H: as novidades que acabaram de entrar no prompt desta vez já foram
+        // "oferecidas" pra conversa — marca como mostradas pra não ficar repetindo a
+        // mesma novidade em toda mensagem seguinte. Melhor esforço, nunca atrasa a
+        // resposta nem quebra nada se o KV falhar.
+        if (novidadesFila.some((f) => f && f.texto && !f.mostrada)) {
+          ctx.waitUntil((async () => {
+            try {
+              const atual = (novidadesFila || []).map((f) => (f && !f.mostrada ? { ...f, mostrada: true } : f));
+              await env.COMPANION_KV.put(PAINEL_NOVIDADES_KEY, JSON.stringify(atual));
+            } catch (err) { console.error("novidades_painel_marcar_mostrada_failed:", String(err?.message || err)); }
           })());
         }
         return json(parsed);
