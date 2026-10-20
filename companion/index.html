@@ -5049,6 +5049,9 @@ async function resyncMemoryOnFocus(){
     // (cron), nunca pelo app — só esse resync traz a atualização pra tela.
     if(data && data.perfil && JSON.stringify(data.perfil) !== JSON.stringify(mem.perfil)){ mem.perfil = data.perfil; changed = true; }
     if(data && Array.isArray(data.ideias) && JSON.stringify(data.ideias) !== JSON.stringify(mem.ideias)){ mem.ideias = data.ideias; changed = true; }
+    // PARTE H (manual/veto): perfilVetos também é escrito do outro lado (painel, ao
+    // apagar/editar um item ou zerar o perfil) — mesmo mecanismo, nunca apaga nada local.
+    if(data && Array.isArray(data.perfilVetos) && JSON.stringify(data.perfilVetos) !== JSON.stringify(mem.perfilVetos)){ mem.perfilVetos = data.perfilVetos; changed = true; }
     // F2-3b/painel: mem.config (inclusive config.aparencia) também pode ter mudado em
     // outro aparelho (ex: Aparência editada no painel) — reaplica se for o caso.
     if(data && data.config && JSON.stringify(data.config) !== JSON.stringify(mem.config)){

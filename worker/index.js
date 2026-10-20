@@ -545,11 +545,15 @@ export function normalizarPerfil(bruto) {
 // ANTIGOS de cada categoria primeiro (mantém o que é mais recente/relevante agora).
 export function truncarPerfilParaLimite(perfil, limite = PERFIL_LIMITE_CHARS) {
   const atual = {};
-  // ordena cada categoria por data ASCENDENTE (mais antigo primeiro, sem data conta
-  // como o mais antigo de todos) — garante que o corte abaixo sempre remove o item
-  // mais antigo da categoria mais pesada, nunca um recente ao acaso.
+  // ordena cada categoria com os itens "fonte:manual" SEMPRE por último (protegidos —
+  // só são cortados se não houver mais nenhum não-manual pra cortar antes) e, dentro de
+  // cada grupo, por data ASCENDENTE (mais antigo primeiro) — garante que o corte abaixo
+  // sempre remove o item mais antigo e menos protegido primeiro, nunca ao acaso.
   for (const cat of PERFIL_CATEGORIAS) {
     atual[cat] = [...(perfil[cat] || [])].sort((a, b) => {
+      const am = a?.fonte === "manual" ? 1 : 0;
+      const bm = b?.fonte === "manual" ? 1 : 0;
+      if (am !== bm) return am - bm;
       const da = a?.data ? new Date(a.data).getTime() : -Infinity;
       const db = b?.data ? new Date(b.data).getTime() : -Infinity;
       return da - db;
@@ -604,6 +608,98 @@ export function montarIdeiaDoDiaLine(ideias) {
   const ultima = Array.isArray(ideias) && ideias.length ? ideias[0] : null;
   if (!ultima || !ultima.texto) return "";
   return `Uma ideia/observação sua de hoje (cruzando o que você sabe da vida dele com a agenda/tarefas atuais) — guarde pra quando ela pedir sua opinião, pedir "algo novo" ou quando encaixar naturalmente na conversa; nunca a force em toda resposta: "${ultima.texto}"`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PARTE H (manual/veto) — o Gustavo manda sobre o que o perfil acha que sabe:
+// - "fonte: manual" = item que ele mesmo escreveu/editou no painel — a consolidação
+//   NUNCA altera, mescla ou remove (preservarManuaisNoPerfil reimpõe isso depois da
+//   IA, não confia só na instrução do prompt); só é cortado por tamanho como ÚLTIMO
+//   recurso (ver truncarPerfilParaLimite acima).
+// - mem.perfilVetos = itens que ele apagou — a consolidação nunca pode trazer de
+//   volta algo equivalente (filtrarItensVetados, antes de gravar). Expira em 180
+//   dias (vetosAtivos), até 100 vetos guardados.
+// ─────────────────────────────────────────────────────────────────────────
+const PERFIL_VETOS_MAX = 100;
+const PERFIL_VETO_EXPIRA_DIAS = 180;
+
+export function normalizarPerfilVetos(bruto) {
+  const lista = Array.isArray(bruto) ? bruto : [];
+  return lista
+    .map((v) => (v && typeof v.texto === "string" ? { texto: normalizeText(v.texto), data: typeof v.data === "string" ? v.data : null } : null))
+    .filter((v) => v && v.texto)
+    .slice(0, PERFIL_VETOS_MAX);
+}
+
+// Só os vetos ainda dentro dos 180 dias — vetos sem data nunca expiram por segurança
+// (não deveria existir vindo do fluxo normal, mas um dado antigo malformado não deve
+// ganhar de volta o direito de reaparecer por acidente).
+export function vetosAtivos(bruto, hojeISO, expiraDias = PERFIL_VETO_EXPIRA_DIAS) {
+  const hojeMs = new Date(`${hojeISO}T00:00:00`).getTime();
+  return normalizarPerfilVetos(bruto).filter((v) => {
+    if (!v.data) return true;
+    const dataMs = new Date(v.data).getTime();
+    if (!Number.isFinite(dataMs)) return true;
+    return (hojeMs - dataMs) / 86400000 <= expiraDias;
+  });
+}
+
+// Comparação por TEXTO (perfil é escrito, não falado) — mais simples que a heurística
+// de eco de voz do app (que resolve um problema diferente: fala captada por microfone).
+// Contenção direta OU sobreposição forte de palavras, sobre texto JÁ normalizado.
+export function textoEquivalenteAVeto(textoNorm, vetoNorm) {
+  if (!textoNorm || !vetoNorm) return false;
+  if (textoNorm === vetoNorm) return true;
+  if (textoNorm.length >= 8 && vetoNorm.length >= 8 && (textoNorm.includes(vetoNorm) || vetoNorm.includes(textoNorm))) return true;
+  const wa = new Set(textoNorm.split(" ").filter(Boolean));
+  const wb = new Set(vetoNorm.split(" ").filter(Boolean));
+  if (!wa.size || !wb.size) return false;
+  let common = 0;
+  for (const w of wa) if (wb.has(w)) common++;
+  return common / Math.min(wa.size, wb.size) >= 0.7;
+}
+
+export function itemVetado(texto, vetosAtivosNormalizados) {
+  const n = normalizeText(texto);
+  if (!n) return false;
+  return (vetosAtivosNormalizados || []).some((v) => textoEquivalenteAVeto(n, v.texto));
+}
+
+// Adiciona um veto novo (dedupe pelo texto normalizado, mais recente primeiro, capado
+// em 100) — usado tanto quando o painel apaga um item quanto quando edita (veta o texto
+// antigo) ou zera o perfil inteiro.
+export function adicionarVeto(vetosBrutos, texto, hojeISO) {
+  const n = normalizeText(texto);
+  const atuais = normalizarPerfilVetos(vetosBrutos);
+  if (!n) return atuais;
+  const semDuplicata = atuais.filter((v) => v.texto !== n);
+  return [{ texto: n, data: hojeISO }, ...semDuplicata].slice(0, PERFIL_VETOS_MAX);
+}
+
+// A consolidação nunca pode trazer de volta um item equivalente a um veto ativo —
+// itens "fonte:manual" são isentos (são a própria vontade do Gustavo, não fazem
+// sentido serem vetados por ele mesmo).
+export function filtrarItensVetados(perfil, vetosAtivosNormalizados) {
+  if (!vetosAtivosNormalizados || !vetosAtivosNormalizados.length) return perfil;
+  const resultado = { ...perfil };
+  for (const cat of PERFIL_CATEGORIAS) {
+    resultado[cat] = (perfil[cat] || []).filter((item) => item.fonte === "manual" || !itemVetado(item.texto, vetosAtivosNormalizados));
+  }
+  return resultado;
+}
+
+// A consolidação NUNCA altera/mescla/remove um item manual — em vez de confiar só na
+// instrução do prompt, reimpõe isso aqui: descarta qualquer "fonte:manual" que a IA
+// tenha devolvido (ela nunca deveria gerar um, mas por segurança) e repõe os manuais
+// REAIS do perfil anterior, exatamente como estavam.
+export function preservarManuaisNoPerfil(perfilAnterior, perfilNovo) {
+  const resultado = { ...perfilNovo };
+  for (const cat of PERFIL_CATEGORIAS) {
+    const manuaisAnteriores = (perfilAnterior?.[cat] || []).filter((i) => i && i.fonte === "manual");
+    const semManuaisDaIA = (resultado[cat] || []).filter((i) => i && i.fonte !== "manual");
+    resultado[cat] = [...manuaisAnteriores, ...semManuaisDaIA];
+  }
+  return resultado;
 }
 
 // Remove um prefixo "[...]" solto no início da fala — rede de segurança contra o
@@ -2151,9 +2247,10 @@ export function devoConsolidarPerfilAgora({ hour, dateStr, ultimaConsolidacao, a
   return atividadeDesdeMs > ultimaMs;
 }
 
-const PERFIL_IDEIA_PROMPT = (hojeISO, perfilAtualTexto, ideiasRecentesTexto) => `Você é o processo diário de consolidação de perfil e geração de ideias do Jarbas, um companheiro de voz. Hoje é ${hojeISO}. Você recebe: (1) o perfil atual compacto do Gustavo (pode estar vazio, no começo); (2) o Diário dos últimos dias (conversas, ações, leituras, mudanças no painel); (3) itens de memória recentes; (4) um resumo da agenda e tarefas atuais; (5) as últimas ideias já dadas (pra não repetir).
+const PERFIL_IDEIA_PROMPT = (hojeISO, perfilAtualTexto, ideiasRecentesTexto, vetosTexto) => `Você é o processo diário de consolidação de perfil e geração de ideias do Jarbas, um companheiro de voz. Hoje é ${hojeISO}. Você recebe: (1) o perfil atual compacto do Gustavo (pode estar vazio, no começo); (2) o Diário dos últimos dias (conversas, ações, leituras, mudanças no painel); (3) itens de memória recentes; (4) um resumo da agenda e tarefas atuais; (5) as últimas ideias já dadas (pra não repetir); (6) textos que o Gustavo vetou explicitamente.
 
 TAREFA 1 — ATUALIZAR O PERFIL: devolva o perfil COMPLETO atualizado (fundindo com o atual, nunca inventando) em 5 categorias: "pessoal" (vida pessoal, relações, interesses), "profissional" (trabalho, projetos), "emFoco" (o que ocupa a cabeça dele AGORA), "planos" (o que ele quer fazer, ainda não fez), "preocupacoes" (o que o preocupa). Cada item é {"texto": "...", "data": "AAAA-MM-DD", "fonte": "conversa"|"painel"|"diario"}. Só inclua fatos e intenções que o Gustavo EXPRESSOU de verdade ou que o painel mostra — nada de especular sobre saúde, relacionamentos ou finanças além do que foi dito; se for uma inferência (não uma afirmação direta), marque no próprio texto com "(não confirmado)". Remova dessa lista o que claramente já não vale mais (um plano que ele já disse ter feito ou desistido) — isso NUNCA apaga o item de memória original (ele continua arquivado em mem.items, intacto); aqui é só o resumo compacto atual. Inclua também "humorRecente" (uma frase curta, ou "" se não tiver sinal claro).
+IMPORTANTE — itens marcados "fonte: manual" no perfil atual foram escritos pelo PRÓPRIO Gustavo no painel: são verdade absoluta, use-os pra contextualizar sua leitura, mas NUNCA os reescreva, mescle ou remova — nem devolva esses itens no JSON (eles são repostos automaticamente depois, exatamente como estavam). NUNCA volte a registrar nada equivalente ao que está listado em VETOS abaixo — o Gustavo já apagou isso de propósito.
 
 TAREFA 2 — IDEIA DO DIA: proponha UMA ideia/observação que o Gustavo provavelmente NÃO pensou, cruzando o perfil com a agenda/tarefas atuais — um risco que ele não viu, uma conexão entre dois assuntos, uma simplificação, um livro/técnica/ferramenta relevante, ou uma pergunta provocadora. Nunca repita (nem parafraseie de perto) as ideias recentes informadas abaixo. Se não houver nada genuíno e específico pra dizer hoje, devolva "ideiaDoDia": "".
 
@@ -2165,6 +2262,9 @@ ${perfilAtualTexto || "(vazio — primeira consolidação)"}
 
 IDEIAS RECENTES (não repita):
 ${ideiasRecentesTexto || "(nenhuma ainda)"}
+
+VETOS (nunca volte a registrar nada equivalente a isto):
+${vetosTexto || "(nenhum)"}
 
 Nunca invente fatos que não estejam implícitos no que foi passado.`;
 
@@ -2205,6 +2305,10 @@ async function consolidarPerfilEIdeiaSeNecessario(env, logBatch, { forcar = fals
 
   const perfilAtual = normalizarPerfil(mem.perfil);
   const ideiasAtuais = Array.isArray(mem.ideias) ? mem.ideias : [];
+  // PARTE H (veto): expira os vetos com mais de 180 dias AQUI (a lista salva de volta
+  // já sai podada — não precisa de um job separado só pra isso) e usa só os ativos
+  // tanto no prompt quanto no filtro antes de gravar.
+  const vetosAtivosAgora = vetosAtivos(mem.perfilVetos, dateStr);
 
   let eventosTexto = "";
   try {
@@ -2224,7 +2328,7 @@ async function consolidarPerfilEIdeiaSeNecessario(env, logBatch, { forcar = fals
   let raw;
   let llmCalls = 0;
   try {
-    raw = await callGroq(env, PERFIL_IDEIA_PROMPT(dateStr, perfilParaTextoConsolidacao(perfilAtual), ideiasAtuais.slice(0, 5).map((i) => i.texto).join(" | ")), [{ role: "user", content: userContent }], 700);
+    raw = await callGroq(env, PERFIL_IDEIA_PROMPT(dateStr, perfilParaTextoConsolidacao(perfilAtual), ideiasAtuais.slice(0, 5).map((i) => i.texto).join(" | "), vetosAtivosAgora.map((v) => v.texto).join(" | ")), [{ role: "user", content: userContent }], 700);
     llmCalls = 1;
   } catch (err) {
     console.error("perfil_consolidacao_llm_failed:", String(err?.message || err));
@@ -2239,12 +2343,18 @@ async function consolidarPerfilEIdeiaSeNecessario(env, logBatch, { forcar = fals
     return { rodou: false, motivo: "parse_failed", llmCalls };
   }
 
-  const novoPerfil = truncarPerfilParaLimite({ ...normalizarPerfil(parsed.perfil), atualizadoEm: new Date().toISOString() });
+  // PARTE H (manual/veto): filtra o que a IA devolveu contra os vetos ativos, repõe os
+  // itens manuais do perfil ANTERIOR exatamente como estavam (nunca o que a IA
+  // devolveu pra eles), e só então corta por tamanho — nessa ordem, pra o corte por
+  // tamanho já ver os manuais no lugar certo (protegidos, cortados por último).
+  const perfilFiltrado = filtrarItensVetados(normalizarPerfil(parsed.perfil), vetosAtivosAgora);
+  const perfilComManuais = preservarManuaisNoPerfil(perfilAtual, perfilFiltrado);
+  const novoPerfil = truncarPerfilParaLimite({ ...perfilComManuais, atualizadoEm: new Date().toISOString() });
   const ideiaDoDia = typeof parsed.ideiaDoDia === "string" ? parsed.ideiaDoDia.trim() : "";
   const novasIdeias = ideiaDoDia ? [{ texto: ideiaDoDia, data: dateStr }, ...ideiasAtuais].slice(0, 20) : ideiasAtuais;
 
   try {
-    await callPainelMemorySave(env, { ...mem, perfil: novoPerfil, ideias: novasIdeias });
+    await callPainelMemorySave(env, { ...mem, perfil: novoPerfil, ideias: novasIdeias, perfilVetos: vetosAtivosAgora });
   } catch (err) {
     console.error("perfil_consolidacao_save_failed:", String(err?.message || err));
     return { rodou: false, motivo: "save_failed", llmCalls };
