@@ -569,7 +569,7 @@ function todayLabelPtBR() {
 // aviso proativo) — nunca entram aqui, o modelo não os escolhe.
 export const COMPANION_EMOTIONS = ["neutro", "feliz", "pensando", "surpreso", "focado", "bravo", "muito_bravo", "confirmado", "curioso", "piscadinha", "empatico"];
 
-export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '') {
+export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '', estadoConversaLine = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
     ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
@@ -643,12 +643,13 @@ ${(memoryLine || profileLine || sobreJarbasLine || itemsLine) ? 'Atenção: se a
 ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
+${estadoConversaLine}
 ${learnedLine}
 ${pendenciasLine}
 ${materializeLine}
 ${lousaLine}
 Quando a pessoa contar algo pessoal e relevante sobre a vida dela (uma viagem, um plano, uma pessoa importante, como ela está se sentindo, uma conquista — não conversa fiada), use a ferramenta de guardar memória silenciosamente, além de responder normalmente — sem avisar, sem perguntar permissão, sem citar a ferramenta. Isso é diferente de anotar no diário: guardar memória é pra você mesmo lembrar depois numa conversa futura ("e aí, como foi aquilo que você me contou?"); o diário é só quando ela pedir explicitamente pra registrar algo lá. Escolha o tipo certo: "episodico" pra algo pontual/momentâneo (inclua a data de hoje no próprio texto, senão você pode ler isso numa conversa futura como se ainda estivesse acontecendo), "duradouro" pra trabalho/relacionamento/característica/preferência, "pendencia" com data de follow-up quando ela disser que vai fazer algo e você deve lembrá-la depois. Se ela corrigir algo que você entendeu errado ou que ela mesma tinha contado errado antes ("na verdade eu não fui, só marquei"), guarde como tipo "correcao" — isso tem prioridade sobre o fato antigo.
-Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de amanhã especificamente (não hoje), passe o parâmetro dia=amanha na ferramenta de agenda. Nunca invente esse tipo de informação. Se ela pedir especificamente tarefas, use a ferramenta de consultar tarefas com o filtro certo em vez da consulta geral: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora) — não confunda com "de hoje", que junta Para Agora + De Hoje (filtro hoje); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
+Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de previsão do tempo — se a pessoa não disser a cidade, deixe o parâmetro vazio em vez de perguntar, o sistema já sabe a localização atual dela quando disponível. Se ela perguntar SÓ pela agenda/compromissos, use consultar_agenda (nunca consultar_painel) — não junte tarefas ou contas numa resposta que ela só pediu a agenda. Se ela pedir um resumo geral de tudo junto (agenda+tarefas+contas), aí sim use consultar_painel. Se ela perguntar pela agenda de qualquer dia que não seja hoje (amanhã, um dia da semana, "dia 25", um período como "essa semana"/"semana que vem"), calcule os parâmetros "data" (e "ate", se for um período) em AAAA-MM-DD a partir da data de hoje informada acima e passe na ferramenta de agenda — nunca pergunte a data de volta se já dá pra calcular. Se ela perguntar se tem algo marcado ou se está livre/disponível/ocupada num horário específico ("tenho algo às 15h?", "estou livre de manhã?"), passe também o parâmetro "hora" — a ferramenta já diz se há conflito. Nunca invente compromisso que não veio da ferramenta; se a fonte falhar, diga honestamente que não conseguiu consultar agora. Se ela pedir especificamente tarefas sem dizer qual coluna, OMITA o filtro na ferramenta de consultar tarefas — o padrão já é Para Agora + De Hoje, que é o que ela normalmente quer ouvir (em qualquer lugar que você fale de tarefas: no chat, nos destaques, ao comentar o que mudou). Só passe filtro quando ela pedir coluna específica: "de agora"/"pra agora" é SÓ a coluna Para Agora (filtro agora); "pendentes" é a coluna Pendente; "em andamento" é a coluna Em Andamento; "todas as tarefas" é filtro todas. Se ela pedir pra criar, concluir ou apagar uma tarefa, pagar ou apagar uma conta, ou criar/apagar um compromisso, use a ferramenta de ação correspondente. Para criar compromisso, calcule a data no formato AAAA-MM-DD a partir da data de hoje informada acima (ex: "amanhã" = hoje + 1 dia; "hoje às 15h" = data de hoje, hora 15:00). Padrões comuns que você deve reconhecer sem hesitar: "anota/adiciona no meu diário que X" (X é o texto a registrar — ver a descrição da ferramenta de anotar pra como reescrever esse texto), "qual minha agenda pra hoje/amanhã", "adiciona na minha agenda hoje/amanhã/dia D às H:MM COMPROMISSO". Se ela pedir pra apagar, desfazer, corrigir ou trocar a ÚLTIMA coisa que você mesmo anotou no diário, use desfazer_anotacao_diario ou corrigir_anotacao_diario — elas só afetam anotações suas recentes; se a pessoa quiser apagar algo mais antigo ou que ela mesma escreveu no painel, essas ferramentas vão recusar, e você explica isso com franqueza em vez de insistir, oferecendo anotar uma correção nova. Pra ideias, lembretes ou listas, use as ferramentas de consultar/gerenciar correspondentes. Se ela perguntar se tem algum recado ou coisa pendente que o Gustavo deixou pra você, use a ferramenta de consultar recados — se houver algum, comente sobre ele naturalmente e depois marque como tratado silenciosamente. Quando exigir outra informação atual (notícias, preços, eventos recentes, ou qualquer coisa que você não tenha certeza por ser recente), use a ferramenta de busca antes de responder, em vez de inventar. Se a pessoa mandar, mencionar ou repetir um link/URL específico pra você resumir, ler ou comentar, use a ferramenta de resumir link. Se ela perguntar sobre e-mails, caixa de entrada ou mensagens recebidas, use a ferramenta de consultar e-mail (só leitura) — nunca invente o conteúdo de e-mails. Para perguntas de conhecimento geral, receitas, opiniões ou conversa comum, responda direto, sem precisar de ferramenta.
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde. Se ela disser algo como "vou dormir", "boa noite", "to indo dormir" (estado=dormir) ou "acordei", "bom dia", "já levantei" (estado=acordar), use a ferramenta de definir sono — ao marcar que vai dormir, responda curto e carinhoso (uma "boa noite" de volta) e NÃO puxe assunto nem faça pergunta, deixe ela descansar.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
 Ao relatar a agenda de HOJE (nunca a de amanhã), compare o horário de cada compromisso com a hora atual informada acima: se todo mundo que estava marcado pra hoje já passou do horário, diga isso com naturalidade — algo como "por hoje você não tem mais nada marcado, seu único/último compromisso era às 10h, a reunião com X — inclusive, como foi?" — nomeando o compromisso e perguntando como foi, em vez de só recitar o horário como se ainda fosse acontecer. Se ainda tiver algo pela frente hoje, relate normalmente sem esse comentário.
@@ -1015,18 +1016,21 @@ const CONSULTAR_PAINEL_TOOL = {
   },
 };
 
+// PARTE D: agenda por data/intervalo/horário — qualquer dia, não só hoje/amanhã.
 const CONSULTAR_AGENDA_TOOL = {
   type: "function",
   function: {
     name: "consultar_agenda",
     description:
-      "Consulta SÓ a agenda/compromissos (de hoje ou amanhã) da pessoa — sem tarefas, sem contas. Use sempre que ela perguntar especificamente pela agenda ou pelos compromissos dela, e nada mais.",
+      "Consulta SÓ a agenda/compromissos da pessoa num dia ou período — sem tarefas, sem contas. Use sempre que ela perguntar pela agenda, compromissos, reuniões, eventos, se tem algo marcado, ou se está livre/disponível/ocupada, pra hoje ou pra qualquer outra data (amanhã, um dia da semana, 'dia 25', uma semana). Calcule `data` (e `ate`, se for um período) em AAAA-MM-DD a partir da data de hoje informada no contexto da conversa — nunca pergunte a data de volta se já dá pra calcular (ex: 'sexta' = a próxima sexta-feira a partir de hoje; 'semana que vem' = de segunda a domingo da semana seguinte).",
     parameters: {
       type: "object",
       properties: {
-        dia: { type: "string", enum: ["hoje", "amanha"], description: "hoje (padrão, use se ela não especificar) ou amanha, se ela perguntar especificamente pela agenda de amanhã." },
+        data: { type: "string", description: "Data AAAA-MM-DD do início da consulta. Pra 'hoje', use a data de hoje informada no prompt; pra 'amanhã', hoje + 1 dia; etc. Obrigatório." },
+        ate: { type: "string", description: "Data AAAA-MM-DD do fim do período, só quando ela pedir um intervalo (ex: 'essa semana', 'semana que vem'). Omita pra consultar um dia só." },
+        hora: { type: "string", description: "Horário HH:MM, só quando ela perguntar especificamente sobre um horário (ex: 'tenho algo às 15h?', 'estou livre às 10?') — a resposta diz se há conflito ou se está livre nesse horário." },
       },
-      required: [],
+      required: ["data"],
     },
   },
 };
@@ -1067,13 +1071,13 @@ const CONSULTAR_TAREFAS_TOOL = {
   type: "function",
   function: {
     name: "consultar_tarefas",
-    description: "Consulta as tarefas do painel filtradas por coluna real. Use quando a pessoa pedir especificamente 'tarefas de agora/pra agora', 'tarefas de hoje', 'tarefas pendentes' ou 'tarefas em andamento' — pra pergunta genérica sobre tarefas, use consultar_painel em vez disso.",
+    description: "Consulta as tarefas do painel filtradas por coluna real. Se ela só disser 'tarefas' ou 'pendências' sem especificar coluna, OMITA `filtro` — o padrão já é Para Agora + De Hoje, que é o que ela normalmente quer ouvir. Só passe `filtro` quando ela pedir uma coluna específica ('de agora/pra agora', 'em Semana', 'pendentes', 'em andamento') ou 'todas as tarefas'.",
     parameters: {
       type: "object",
       properties: {
-        filtro: { type: "string", enum: ["agora", "hoje", "pendentes", "andamento"], description: "agora = SÓ a coluna Para Agora (use quando ela disser 'de agora'/'pra agora' especificamente); hoje = Para Agora + De Hoje juntas (visão geral do dia); pendentes = coluna Pendente; andamento = coluna Em Andamento." },
+        filtro: { type: "string", enum: ["agora", "hoje", "pendentes", "andamento", "todas"], description: "agora = SÓ a coluna Para Agora (quando ela disser 'de agora'/'pra agora' especificamente); hoje = Para Agora + De Hoje juntas (padrão, omita o campo pra usar este); pendentes = coluna Pendente; andamento = coluna Em Andamento; todas = todas as colunas, só quando ela pedir 'todas as tarefas' explicitamente." },
       },
-      required: ["filtro"],
+      required: [],
     },
   },
 };
@@ -1677,6 +1681,70 @@ async function callPainelAgenda(env, dia) {
   return data.texto || "Não consegui ler a agenda agora.";
 }
 
+// PARTE D: agenda por data/intervalo arbitrário — usa o MESMO endpoint ?action=agenda,
+// estendido no painel (painel-controle-pessoal) pra aceitar `data`/`ate` além do antigo
+// `dia=hoje|amanha`. Devolve `eventos` estruturados (pra checar conflito de horário e
+// montar o card), além do `texto` (pro parse e pra fala, igual ao fluxo de hoje).
+async function callPainelAgendaPorDataRaw(env, data, ate) {
+  const params = new URLSearchParams({ action: "agenda", data });
+  if (ate) params.set("ate", ate);
+  const resp = await fetchPainelJson(`${PAINEL_API_URL}?${params.toString()}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  return { texto: resp.texto || "Não consegui ler a agenda agora.", eventos: Array.isArray(resp.eventos) ? resp.eventos : [] };
+}
+
+const AGENDA_DATA_CACHE_TTL_MS = 5 * 60 * 1000; // PARTE D: cache curto de 5min por data/intervalo
+function agendaDataCacheKey(data, ate) {
+  return `agenda:data:${data}:${ate || data}`;
+}
+
+export async function callPainelAgendaPorDataCached(env, data, ate) {
+  const key = agendaDataCacheKey(data, ate);
+  if (env.COMPANION_KV) {
+    try {
+      const raw = await env.COMPANION_KV.get(key);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (Date.now() - cached.cachedAt < AGENDA_DATA_CACHE_TTL_MS) return cached.payload;
+      }
+    } catch (err) { console.error("agenda_data_cache_read_failed:", String(err?.message || err)); }
+  }
+  let payload;
+  try {
+    payload = await callPainelAgendaPorDataRaw(env, data, ate);
+  } catch (err) {
+    console.error("agenda_data_fetch_failed:", String(err?.message || err));
+    return { texto: "Não consegui ler a agenda agora.", eventos: [] };
+  }
+  if (env.COMPANION_KV) {
+    try { await env.COMPANION_KV.put(key, JSON.stringify({ payload, cachedAt: Date.now() }), { expirationTtl: 15 * 60 }); }
+    catch (err) { console.error("agenda_data_cache_write_failed:", String(err?.message || err)); }
+  }
+  return payload;
+}
+
+// PARTE D: diz se `horaAlvo` (HH:MM) bate com algum evento do dia — comparando só a
+// hora cheia (HH), que é a granularidade real da agenda hoje.
+export function verificarConflitoHorario(eventos, horaAlvo) {
+  const alvo = (horaAlvo || "").slice(0, 2);
+  if (!alvo) return null;
+  const itens = Array.isArray(eventos) ? eventos : [];
+  const bateu = itens.find((e) => (e && (e.time || e.hora) || "").slice(0, 2) === alvo);
+  return bateu ? { ocupado: true, titulo: bateu.title || bateu.titulo || "", hora: bateu.time || bateu.hora || "" } : { ocupado: false };
+}
+
+// PARTE D: card `lista` da agenda de uma data/intervalo específico (igual em espírito ao
+// construirCardAgendaHoje, mas pra qualquer data).
+export function construirCardAgendaPorData(eventos, data, ate) {
+  const itens = Array.isArray(eventos) ? eventos : [];
+  if (!itens.length) return null;
+  const fmt = (d) => (typeof d === "string" && d.length >= 10 ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : d);
+  const titulo = ate && ate !== data ? `Agenda — ${fmt(data)} a ${fmt(ate)}` : `Agenda — ${fmt(data)}`;
+  const linhas = itens.slice(0, 8).map((e) => `${e.time || e.hora ? `${e.time || e.hora} ` : ""}${e.title || e.titulo || ""}`.trim());
+  return { tipo: "lista", titulo, linhas };
+}
+
 async function callPainelCommandFull(env, comando, arg) {
   return await fetchPainelJson(PAINEL_API_URL, {
     method: "POST",
@@ -2182,10 +2250,17 @@ async function runRoutine(env, ingredients, links, companionState) {
   return parsed;
 }
 
-const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso, dando bom dia pra pessoa com o resumo do dia dela. Você vai receber dados brutos já verificados (clima, agenda, tarefas, contas, pendências que ela tinha dito que ia resolver, e coisas que aconteceram enquanto ela dormia). A fala tem NO MÁXIMO 450 caracteres, em 4 a 6 frases curtas e naturais, como um amigo contaria pela manhã num fôlego só — NUNCA leia listas inteiras nem mencione fontes técnicas ("segundo o painel"). Diga só o que importa: o primeiro compromisso, quantas tarefas pedem atenção, e 2 ou 3 destaques — o resto fica disponível num cartão na tela, você não precisa (e não deve) falar tudo. Se algum dado vier vazio ou "não consegui consultar", simplesmente não mencione essa parte. Se não houver nada urgente, seja breve e leve, sem inventar urgência que não existe.
+// PARTE A: o briefing é o Jarbas chegando pra contar o dia pro Gustavo, não um
+// relatório. A hora atual vem no `content` (veja gerarBriefing) pra saudação ser sempre a
+// certa; aberturas recentes também vêm no `content` pra o modelo variar sem nunca
+// sacrificar a saudação em si.
+const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso, chegando pra contar pro Gustavo como tá o dia dele — não lendo um relatório pra ele. Você vai receber a hora atual, dados brutos já verificados (clima, agenda, tarefas, contas, pendências que ele tinha dito que ia resolver, coisas que aconteceram enquanto ele dormia) e, às vezes, aberturas que você já usou recentemente.
+Abra SEMPRE com a saudação certa pra hora informada ("Bom dia, Gustavo" de manhã; "Boa tarde, Gustavo" à tarde; "Boa noite, Gustavo" de madrugada ou à noite), seguida de UMA frase de entrada curta e leve — nunca "Olá", nunca "aqui está o seu resumo", e nunca repita literalmente uma das aberturas recentes informadas, varie o jeito de dizer a cada vez. Depois da abertura, conte o essencial em 4 a 6 frases curtas e naturais, como você mesmo contaria pra ele num fôlego só: o primeiro compromisso, o que pede atenção hoje, e 1 ou 2 destaques — NUNCA leia listas inteiras nem mencione fontes técnicas ("segundo o painel"); o resto fica disponível num cartão na tela, você não precisa (e não deve) falar tudo.
+PROIBIDO: começar sem a saudação; usar listas faladas, numeração ("primeiro, segundo..."), o cabeçalho "resumo do dia:", o título/palavra "briefing", ou qualquer emoji.
+A fala tem NO MÁXIMO 450 caracteres no total, contando a saudação. Se algum dado vier vazio ou "não consegui consultar", simplesmente não mencione essa parte. Se não houver nada urgente, seja breve e leve, sem inventar urgência que não existe.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"title":"Bom dia","fala":"texto curto da fala, até 450 caracteres"}
+{"title":"Bom dia","fala":"texto curto da fala, até 450 caracteres, começando pela saudação"}
 Nunca deixe o JSON incompleto.`;
 
 // ---------- F2-3b/PARTE B: monta o briefing matinal — SEM IA reúne os dados (clima,
@@ -2195,6 +2270,37 @@ Nunca deixe o JSON incompleto.`;
 // cai pro texto determinístico puro (montarBriefingDeterministico) — nunca fica sem
 // briefing só porque o LLM falhou, e nunca fala a lista crua (ver bug real: o resumo
 // aparecia como um bloco gigante cobrindo o rosto e era lido inteiro em voz alta). ----------
+// PARTE A: guarda as últimas aberturas (a frase leve depois da saudação, sem a saudação
+// em si) pra pedir variação ao modelo sem repetir — nunca o texto inteiro da fala.
+const BRIEFING_ABERTURAS_KEY = "briefing:aberturas";
+const BRIEFING_ABERTURAS_MAX = 5;
+
+async function lerAberturasRecentes(env) {
+  try {
+    const raw = env.COMPANION_KV && (await env.COMPANION_KV.get(BRIEFING_ABERTURAS_KEY));
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (err) { console.error("briefing_aberturas_read_failed:", String(err?.message || err)); return []; }
+}
+
+async function registrarAbertura(env, abertura) {
+  if (!abertura || !env.COMPANION_KV) return;
+  try {
+    const atual = await lerAberturasRecentes(env);
+    const nova = [abertura, ...atual.filter((a) => a !== abertura)].slice(0, BRIEFING_ABERTURAS_MAX);
+    await env.COMPANION_KV.put(BRIEFING_ABERTURAS_KEY, JSON.stringify(nova));
+  } catch (err) { console.error("briefing_aberturas_write_failed:", String(err?.message || err)); }
+}
+
+// Extrai a "abertura" (frase de entrada depois da saudação) duma fala já pronta, pra
+// registrar no KV sem guardar o texto inteiro do briefing.
+export function extrairAberturaBriefing(fala) {
+  if (typeof fala !== "string") return "";
+  const semSaudacao = fala.replace(/^(Bom dia|Boa tarde|Boa noite)[,!]?\s*(Gustavo[,!]?\s*)?/i, "").trim();
+  const m = semSaudacao.match(/^[^.!?]{0,80}[.!?]/);
+  return (m ? m[0] : semSaudacao.slice(0, 80)).trim();
+}
+
 async function gerarBriefing(env, config, companionState) {
   const cidade = companionState?.location?.cidade || "";
   let climaTexto = "";
@@ -2203,7 +2309,7 @@ async function gerarBriefing(env, config, companionState) {
     catch (err) { console.error("briefing_clima_failed:", String(err?.message || err)); }
   }
 
-  const { dateStr: hoje } = saoPauloNow();
+  const { dateStr: hoje, hour, minute, dayOfMonth } = saoPauloNow();
   const { agendaTexto, tarefasTexto, tarefasItens, contasTextos, pendenciasTextos, idsContasVivas, idsTarefasVivas } =
     await gatherDayData(env, { items: companionState?.items, hojeISO: hoje });
 
@@ -2211,18 +2317,21 @@ async function gerarBriefing(env, config, companionState) {
   const filaBruta = await readPushQueue(env);
   const filaFiltrada = filtrarFilaParaBriefing(filaBruta, { hoje, agoraMin, idsContasVivas, idsTarefasVivas });
 
-  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens: filaFiltrada });
+  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens: filaFiltrada, hour, dayOfMonth });
 
   let llmCalls = 0;
   try {
+    const aberturasRecentes = await lerAberturasRecentes(env);
     const filaTextos = filaFiltrada.map((item) => item.texto);
-    const content = `Clima: ${climaTexto || "(sem dados)"}\nAgenda de hoje: ${agendaTexto}\nTarefas de hoje: ${tarefasTexto}\nContas do dia/atrasadas: ${contasTextos.join(" ") || "(nenhuma)"}\nPendências que ela tinha dito que ia resolver: ${pendenciasTextos.join(" ") || "(nenhuma)"}\nEnquanto ela dormia: ${filaTextos.join(" ") || "(nada)"}`;
+    const horaTexto = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    const content = `Hora atual: ${horaTexto}\nClima: ${climaTexto || "(sem dados)"}\nAgenda de hoje: ${agendaTexto}\nTarefas de hoje (só Para Agora e De Hoje): ${tarefasTexto}\nContas do dia/atrasadas: ${contasTextos.join(" ") || "(nenhuma)"}\nPendências que ele tinha dito que ia resolver: ${pendenciasTextos.join(" ") || "(nenhuma)"}\nEnquanto ele dormia: ${filaTextos.join(" ") || "(nada)"}${aberturasRecentes.length ? `\nAberturas recentes (não repita, varie): ${aberturasRecentes.join(" | ")}` : ""}`;
     const raw = await callGroq(env, BRIEFING_PROMPT, [{ role: "user", content }], 400);
     llmCalls = 1;
     const clean = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
     if (!parsed.fala) throw new Error("no_fala_field");
     const fala = truncarNaUltimaFrase(parsed.fala, 450);
+    await registrarAbertura(env, extrairAberturaBriefing(fala));
     return { title: parsed.title || "Bom dia", fala, card: determinado.card, body: truncarNaUltimaFrase(fala, 140), llmCalls };
   } catch (err) {
     console.error("briefing_llm_failed, usando texto determinístico:", String(err?.message || err));
@@ -2356,8 +2465,19 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}, las
     if (name === "buscar_na_web" && canSearch) return { content: await callTavily(env, args.query || "") };
     if (name === "consultar_painel" && canPainel) return { content: await callPainelSnapshot(env, args.dia || "") };
     if (name === "consultar_agenda" && canPainel) {
-      const agendaTexto = await callPainelAgenda(env, args.dia || "");
-      return { content: agendaTexto, card: construirCardAgendaHoje(agendaTexto, args.dia || "hoje") };
+      // PARTE D: qualquer data/intervalo/horário — data inválida ou ausente cai no dia
+      // de hoje (nunca quebra, nunca pergunta de volta o óbvio).
+      const hojeAgenda = saoPauloNow().dateStr;
+      const dataAlvo = /^\d{4}-\d{2}-\d{2}$/.test(args.data || "") ? args.data : hojeAgenda;
+      const ateAlvo = /^\d{4}-\d{2}-\d{2}$/.test(args.ate || "") && args.ate >= dataAlvo ? args.ate : null;
+      const horaAlvo = /^\d{2}:\d{2}$/.test(args.hora || "") ? args.hora : null;
+      const { texto: agendaTexto, eventos } = await callPainelAgendaPorDataCached(env, dataAlvo, ateAlvo);
+      let content = agendaTexto;
+      if (horaAlvo) {
+        const conflito = verificarConflitoHorario(eventos, horaAlvo);
+        content += conflito?.ocupado ? ` Às ${horaAlvo} tem: ${conflito.titulo}.` : ` Às ${horaAlvo} está livre.`;
+      }
+      return { content, card: construirCardAgendaPorData(eventos, dataAlvo, ateAlvo) };
     }
     if (name === "gerenciar_tarefa" && canPainel) return { content: await callPainelCommand(env, TAREFA_ACAO_MAP[args.acao], { texto: args.texto }) };
     if (name === "gerenciar_conta" && canPainel) return { content: await callPainelCommand(env, CONTA_ACAO_MAP[args.acao], { nome: args.nome }) };
@@ -2384,7 +2504,13 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}, las
       if (data?.ok) return { content: `Corrigi a anotação para: "${data.texto}"` };
       return { content: `Não consegui corrigir: ${data?.motivo || "não achei nenhuma anotação minha recente pra corrigir."}` };
     }
-    if (name === "consultar_tarefas" && canPainel) return { content: await callPainelTasks(env, args.filtro || "") };
+    if (name === "consultar_tarefas" && canPainel) {
+      // PARTE B: sem filtro explícito, o padrão é "hoje" (Para Agora + De Hoje) — nunca
+      // todas as colunas por padrão. "todas" vira filtro vazio, que no painel já cai no
+      // fallback de "todas as não concluídas" (getTasksFilteredText).
+      const filtro = args.filtro === "todas" ? "" : (args.filtro || "hoje");
+      return { content: await callPainelTasks(env, filtro) };
+    }
     if (name === "consultar_ideias" && canPainel) return { content: await callPainelRead(env, "ideias") };
     if (name === "gerenciar_ideia" && canPainel) return { content: await callPainelCommand(env, IDEIA_ACAO_MAP[args.acao], { texto: args.texto }) };
     if (name === "consultar_lembretes" && canPainel) return { content: await callPainelRead(env, "lembretes") };
@@ -2494,13 +2620,18 @@ function buildAllTools(canSearch, canPainel) {
 // conjunto mínimo (esses três + consultar_painel). Isso é uma heurística, não entendimento
 // de linguagem — por isso callGroqWithSearch reenvia com o conjunto completo se o
 // modelo pedir uma ferramenta que não foi incluída aqui.
+// PARTE D: pedidos de agenda cobrem bem mais que a palavra "agenda" — qualquer coisa
+// sobre compromissos/eventos marcados, estar livre/ocupado, ou uma data relativa
+// ("amanhã", um dia da semana, "semana que vem") também deve oferecer a ferramenta.
+export const AGENDA_PEDIDO_REGEX = /\b(agenda|compromiss\w*|reunia\w*|evento\w*|marcad\w*|livre|disponivel|ocupad\w*|tenho (algo|alguma coisa)|o que tenho|amanha|depois de amanha|semana que vem|proxim\w* semana|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/;
+
 function selectToolsForMessage(userText, canSearch, canPainel, companionState = {}) {
   const n = normalizeText(userText);
   const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL]);
   let matchedAny = false;
   const add = (...toolsToAdd) => { toolsToAdd.forEach((t) => selected.add(t)); matchedAny = true; };
 
-  if (canPainel && /\b(agenda|compromisso)/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
+  if (canPainel && AGENDA_PEDIDO_REGEX.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
   if (canPainel && /\btarefa/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_TAREFAS_TOOL, GERENCIAR_TAREFA_TOOL);
   if (canPainel && /\bconta(s)?\b/.test(n)) add(CONSULTAR_PAINEL_TOOL, GERENCIAR_CONTA_TOOL);
   if (canPainel && /\bdiari/.test(n)) add(ANOTAR_DIARIO_TOOL, DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL);
@@ -2916,6 +3047,80 @@ function saoPauloNow() {
   return { dateStr: `${get("year")}-${get("month")}-${get("day")}`, dayOfMonth: Number(get("day")), hour: Number(get("hour")), minute: Number(get("minute")) };
 }
 
+// ---------- PARTE G: briefing natural, consciência de hora/conversa, e agenda por data
+// — funções PURAS (recebem hora/dados já prontos, nunca leem o relógio/KV sozinhas). ----------
+export function periodoDoDia(hour) {
+  const h = Number(hour);
+  if (!Number.isFinite(h)) return "manha";
+  if (h < 6) return "madrugada";
+  if (h < 12) return "manha";
+  if (h < 18) return "tarde";
+  return "noite";
+}
+
+export function saudacaoPorHora(hour) {
+  const p = periodoDoDia(hour);
+  if (p === "manha") return "Bom dia";
+  if (p === "tarde") return "Boa tarde";
+  return "Boa noite"; // madrugada e noite usam a mesma saudação falada
+}
+
+// Detecta uma saudação de abertura de dia na fala da pessoa — dispara, em PARTE C, a
+// lógica de "ainda não contei o dia pra ela hoje, esse é o momento".
+export function detectarSaudacaoDeAbertura(userText) {
+  const n = normalizeText(userText);
+  if (/\bbom dia\b/.test(n)) return "manha";
+  if (/\bboa tarde\b/.test(n)) return "tarde";
+  if (/\bboa noite\b/.test(n)) return "noite";
+  return null;
+}
+
+// PARTE C: resume, numa linha curta, os assuntos (agenda/tarefas) que o próprio Jarbas já
+// comentou nos últimos turnos — vem do `messages` (histórico padrão do chat), nunca de um
+// campo novo. Usado pra ele nunca perguntar de novo o que ele mesmo acabou de responder.
+export function resumoAssuntosRecentes(messages) {
+  const msgs = Array.isArray(messages) ? messages.slice(-6) : [];
+  const assuntos = new Set();
+  for (const m of msgs) {
+    if (!m || m.role !== "assistant") continue;
+    const n = normalizeText(m.content);
+    if (/\b(agenda|compromisso|reuniao|evento)\b/.test(n)) assuntos.add("agenda");
+    if (/\btarefa/.test(n)) assuntos.add("tarefas");
+  }
+  if (!assuntos.size) return "";
+  const lista = [...assuntos].map((a) => (a === "agenda" ? "a agenda" : "as tarefas")).join(" e ");
+  return `Nos últimos turnos desta conversa você já comentou sobre ${lista} — não pergunte de novo o que já informou, nem repita a mesma coisa; se quiser oferecer algo, pergunte algo diferente (ex: "quer que eu reorganize alguma coisa?") ou não pergunte nada.`;
+}
+
+// PARTE C: monta a linha de "consciência de hora e conversa" injetada no prompt —
+// regras de quando entregar o briefing natural, quando NÃO perguntar como está o dia, e
+// quando não repetir pergunta redundante depois de já ter respondido. `resumoDadosDoDia`
+// só é usado quando há mesmo algo pra contar (dadosBriefingVazios=false).
+export function montarEstadoConversaLine({ hour, saudacaoDetectada, briefingPendente, dadosBriefingVazios, resumoRecente, resumoDadosDoDia }) {
+  const periodoLabel = { madrugada: "madrugada", manha: "manhã", tarde: "tarde", noite: "noite" }[periodoDoDia(hour)];
+  const saudacaoTexto = saudacaoDetectada === "manha" ? '"bom dia"' : saudacaoDetectada === "tarde" ? '"boa tarde"' : '"boa noite"';
+  let linha = `Consciência de hora e conversa: agora é período da ${periodoLabel} (${String(hour).padStart(2, "0")}h). Nunca pergunte "como está o dia até agora" ou equivalente antes do meio-dia — o dia pode nem ter começado de verdade pra ele ainda. Nunca pergunte de volta algo que você ACABOU de responder nesta mesma fala (ex: depois de listar a agenda ou as tarefas, não pergunte "tem algo planejado pra hoje?" — se quiser oferecer ajuda, pergunte algo diferente, tipo "quer que eu reorganize alguma coisa?", ou simplesmente não pergunte nada).`;
+  if (saudacaoDetectada && briefingPendente) {
+    linha += dadosBriefingVazios
+      ? ` A pessoa acabou de te cumprimentar (${saudacaoTexto}) e você ainda não contou o dia pra ela hoje — mas não há nada de especial pra contar agora, então devolva a saudação com naturalidade e pergunte com leveza algo como "qual é o plano pra hoje?" ou "o que você está pensando em fazer hoje?", sem inventar urgência.`
+      : ` A pessoa acabou de te cumprimentar (${saudacaoTexto}) e você AINDA NÃO contou o dia pra ela hoje — este é o momento: devolva a saudação e já conte o dia agora, de forma natural e em poucas frases (nunca uma lista), usando os dados abaixo. Não pergunte "quer que eu te conte o dia" — só conte. Dados de hoje pra você narrar: ${resumoDadosDoDia}`;
+  } else if (saudacaoDetectada) {
+    linha += ` A pessoa te cumprimentou de novo — você já contou o dia pra ela hoje, então só devolva a saudação com naturalidade, sem repetir o resumo.`;
+  }
+  if (resumoRecente) linha += ` ${resumoRecente}`;
+  return linha;
+}
+
+// PARTE C: validador simples por regex pra pegar, numa resposta SIMULADA de teste, as
+// duas violações mais óbvias das regras de consciência de hora/conversa — nunca usado
+// na resposta real (que vem do modelo); só pra testar a lógica de prompt isoladamente.
+export function respostaViolaConsciencia(resposta, { antesDoMeioDia = false, acabouDeListar = false } = {}) {
+  const n = normalizeText(resposta);
+  if (antesDoMeioDia && /como esta o dia( ate agora)?/.test(n)) return "pergunta_dia_antes_do_meio_dia";
+  if (acabouDeListar && /(tem|teria) (alguma coisa|algo).{0,25}(planejad[ao]|marcad[ao]) (para|pra) hoje/.test(n)) return "pergunta_redundante";
+  return null;
+}
+
 // ---------- F2-3a: sono (Jarbas "dorme quando o Gustavo dorme") ----------
 // Tudo abaixo até sendWebPushToAll é lógica PURA (sem KV, sem rede) — fácil de testar
 // isolada. Padrões editáveis em Configurações do app (mem.config); estes aqui só
@@ -3156,8 +3361,21 @@ export function parseAgendaTexto(agendaTexto) {
 // PARTE B: cartão de tarefas (total/porColuna/destaques) a partir dos itens
 // ESTRUTURADOS de `?action=mudancas` — nunca da string crua "(🔥 Para Agora) ...".
 // "now" (Para Agora) é tratado como prioridade alta nos destaques.
-function construirCardTarefas(tarefasItens) {
+// PARTE G/B: por padrão, o Jarbas só fala de tarefas das colunas "Para Agora" (status
+// "now") e "De Hoje" (status "today") — as outras (todo/doing/standby/done) só entram
+// se a pessoa pedir essa coluna explicitamente ou "todas as tarefas". Códigos reais
+// confirmados em painel-controle-pessoal/api/jarbas.js (TASK_FILTER_STATUSES) — nunca
+// usar os rótulos "hoje"/"pendente"/"andamento" como valor de status.
+export const TAREFAS_COLUNAS_PADRAO = ["now", "today"];
+
+export function filtrarTarefasPorColunas(tarefasItens, colunas) {
   const itens = Array.isArray(tarefasItens) ? tarefasItens : [];
+  const wanted = Array.isArray(colunas) && colunas.length ? colunas : TAREFAS_COLUNAS_PADRAO;
+  return itens.filter((t) => wanted.includes(t && t.status));
+}
+
+function construirCardTarefas(tarefasItens, colunas) {
+  const itens = filtrarTarefasPorColunas(tarefasItens, colunas);
   const porColuna = {};
   for (const t of itens) {
     const col = (t && t.status) || "outro";
@@ -3196,10 +3414,21 @@ function resumirFilaDoSono(filaItens) {
   return `Enquanto você dormia, ${clausulas.join(" e ")}.`;
 }
 
+// PARTE A: aberturas leves pra variar o início da fala sem sacrificar a saudação —
+// escolhidas por dia do mês (determinístico, sem IA, sem precisar de KV aqui).
+const BRIEFING_ABERTURAS_LEVES = [
+  "deixa eu te contar como tá o dia.",
+  "vem ver o que te espera hoje.",
+  "separei o que importa pra você.",
+  "um resumo rápido do que vem por aí.",
+  "olha só o que tem pela frente.",
+];
+
 // Monta o briefing SEM IA — usado como fallback se o LLM falhar, e também pra montar
 // sempre o `card` (nunca gerado por IA). Nunca despeja lista crua: `fala` conta e
-// destaca (nunca mais que ~3 destaques), nunca uma frase por item.
-export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens }) {
+// destaca (nunca mais que ~3 destaques), nunca uma frase por item. PARTE A: sempre abre
+// com a saudação certa pra hora (`hour`), seguida de uma frase de entrada leve que varia.
+export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens, hour, dayOfMonth }) {
   const agendaLista = parseAgendaTexto(agendaTexto);
   const cardTarefas = construirCardTarefas(tarefasItens);
   const contas = Array.isArray(contasTextos) ? contasTextos : [];
@@ -3229,7 +3458,12 @@ export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasI
   const filaFrase = resumirFilaDoSono(fila);
   if (filaFrase) frases.push(filaFrase);
 
-  const fala = frases.length ? frases.join(" ") : "Bom dia! Hoje tá tranquilo, nada de urgente pra te contar agora.";
+  const horaValida = Number.isFinite(hour) ? hour : 9;
+  const diaValido = Number.isFinite(dayOfMonth) ? dayOfMonth : 1;
+  const saudacao = `${saudacaoPorHora(horaValida)}, Gustavo!`;
+  const abertura = BRIEFING_ABERTURAS_LEVES[diaValido % BRIEFING_ABERTURAS_LEVES.length];
+  const corpo = frases.length ? frases.join(" ") : "Hoje tá tranquilo, nada de urgente pra te contar agora.";
+  const fala = `${saudacao} ${abertura} ${corpo}`;
   const falaFinal = truncarNaUltimaFrase(fala, 450);
 
   const card = {
@@ -3512,6 +3746,28 @@ async function marcarBriefingLido(env) {
     await env.COMPANION_KV.put(BRIEFING_LAST_KEY, JSON.stringify({ ...atual, lido: true }));
   }
   await clearPushQueue(env);
+}
+
+// PARTE C: "pendente" = ainda não contei o dia pra ele hoje — reaproveita exatamente o
+// mesmo estado que o cron (isBriefingDoneToday) e a tela (readBriefingUltimo.lido) usam,
+// nunca um controle novo. Se nada foi gerado ainda hoje (feitoHoje=false), também conta
+// como pendente: é o caso de "bom dia" antes do horário do cron.
+async function lerBriefingStatusHoje(env, hojeISO) {
+  if (!env.COMPANION_KV) return { lidoHoje: false, feitoHoje: false };
+  const [feitoHoje, ultimo] = await Promise.all([isBriefingDoneToday(env, hojeISO), readBriefingUltimo(env)]);
+  return { lidoHoje: feitoHoje && !!ultimo?.lido, feitoHoje };
+}
+
+// PARTE C: texto compacto com os dados do dia pra injetar no prompt quando o Jarbas vai
+// entregar o briefing natural dentro do próprio chat (mesmos textos que gerarBriefing já
+// usa — nunca uma segunda fonte de verdade).
+function montarResumoDadosParaFala(g) {
+  const partes = [];
+  if (g?.agendaTexto) partes.push(`Agenda de hoje: ${g.agendaTexto}.`);
+  if (g?.tarefasTexto) partes.push(`Tarefas de hoje (só Para Agora e De Hoje): ${g.tarefasTexto}.`);
+  if (g?.contasTextos?.length) partes.push(`Contas: ${g.contasTextos.join(" ")}`);
+  if (g?.pendenciasTextos?.length) partes.push(`Pendências que ele tinha dito que ia resolver: ${g.pendenciasTextos.join(" ")}`);
+  return partes.join(" ");
 }
 
 function pendenciaAvisadaKey(id) {
@@ -4165,6 +4421,37 @@ export default {
         const timeGapLine = formatTimeGapLine(prevAt, Date.now());
         const lastUserText = timestamped[timestamped.length - 1]?.content || "";
 
+        // PARTE C: consciência de hora/conversa — a hora vem SEMPRE do relógio do
+        // servidor (saoPauloNow), nunca do companionState mandado pelo app, pra nunca
+        // saudar/perguntar errado por causa do relógio do cliente.
+        const { hour: horaAtual, dayOfMonth: diaAtual, dateStr: hojeISOServidor } = saoPauloNow();
+        const saudacaoDetectada = detectarSaudacaoDeAbertura(lastUserText);
+        const resumoRecente = resumoAssuntosRecentes(timestamped);
+        let briefingPendente = false;
+        let briefingJaExistiaHoje = false;
+        let dadosBriefingVazios = true;
+        let resumoDadosDoDia = "";
+        let gatheredParaBriefing = null;
+        if (saudacaoDetectada) {
+          try {
+            const statusBriefing = await lerBriefingStatusHoje(env, hojeISOServidor);
+            briefingPendente = !statusBriefing.lidoHoje;
+            briefingJaExistiaHoje = statusBriefing.feitoHoje;
+          } catch (err) { console.error("briefing_status_check_failed:", String(err?.message || err)); }
+          if (briefingPendente && env.PAINEL_API_KEY) {
+            try {
+              gatheredParaBriefing = await gatherDayData(env, { items: companionState?.items, hojeISO: hojeISOServidor });
+              const temAlgo = parseAgendaTexto(gatheredParaBriefing.agendaTexto).length > 0
+                || filtrarTarefasPorColunas(gatheredParaBriefing.tarefasItens).length > 0
+                || (gatheredParaBriefing.contasTextos || []).length > 0
+                || (gatheredParaBriefing.pendenciasTextos || []).length > 0;
+              dadosBriefingVazios = !temAlgo;
+              if (temAlgo) resumoDadosDoDia = montarResumoDadosParaFala(gatheredParaBriefing);
+            } catch (err) { console.error("briefing_gather_failed:", String(err?.message || err)); }
+          }
+        }
+        const estadoConversaLine = montarEstadoConversaLine({ hour: horaAtual, saudacaoDetectada, briefingPendente, dadosBriefingVazios, resumoRecente, resumoDadosDoDia });
+
         // F2-1 (Diário do Jarbas): um lote só por requisição, enviado em segundo plano
         // (ctx.waitUntil) no fim — nunca atrasa a resposta, e uma falha aqui nunca
         // quebra a conversa (flushLogBatch só loga erro, não propaga).
@@ -4218,7 +4505,7 @@ export default {
         // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
         // segunda chamada ao LLM falhava.
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText), timestamped, 450, companionState, logBatch);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine), timestamped, 450, companionState, logBatch);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
           saveMemoryItem = raw.saveMemoryItem;
@@ -4259,6 +4546,29 @@ export default {
         if (lousa) parsed.lousa = lousa;
         pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
         flushLogBatch(env, ctx, logBatch);
+        // PARTE C: se a saudação disparou a entrega do briefing natural nesta mesma
+        // fala, marca como lido agora (mesmo estado que o cron/tela usam) — melhor
+        // esforço em segundo plano, nunca atrasa nem quebra a resposta já pronta.
+        if (saudacaoDetectada && briefingPendente && env.COMPANION_KV) {
+          ctx.waitUntil((async () => {
+            try {
+              if (!briefingJaExistiaHoje) {
+                const determinadoAgora = gatheredParaBriefing
+                  ? montarBriefingDeterministico({ ...gatheredParaBriefing, climaTexto: "", hour: horaAtual, dayOfMonth: diaAtual })
+                  : null;
+                await writeBriefingUltimo(env, {
+                  title: "Bom dia",
+                  fala: parsed.reply,
+                  card: determinadoAgora?.card || null,
+                  body: truncarNaUltimaFrase(parsed.reply, 140),
+                  criadoEm: new Date().toISOString(),
+                });
+                await markBriefingDoneToday(env, hojeISOServidor);
+              }
+              await marcarBriefingLido(env);
+            } catch (err) { console.error("briefing_marcar_lido_chat_failed:", String(err?.message || err)); }
+          })());
+        }
         return json(parsed);
       }
       const reply = await callGroq(env, chatSystemPrompt(petState), trimmed.map(({ role, content }) => ({ role, content })), 120);
