@@ -2946,6 +2946,7 @@ async function speak(text){
   speechState.generation++;
   const myGen = speechState.generation;
   isSpeaking = true;
+  currentSpeakingText = text; // PARTE A: pra isLikelyEcho comparar contra a fala em andamento
   pauseHandsFreeForSpeech(); // supressão de eco: para de ouvir enquanto o Jarbas fala
   startInterruptMonitor(myGen);
   const falado = stripEmojiForSpeech(text) || text;
@@ -2956,6 +2957,10 @@ async function speak(text){
         await speakChunksStreaming(chunks, myGen);
         return myGen === speechState.generation;
       }
+      // PARTE C: texto que não gerou nenhum chunk falável (ex: só espaço/vazio) — sem
+      // isso esse caminho caía na voz do navegador logo abaixo SEM nunca registrar o
+      // motivo, então o indicador de diagnóstico mostraria "navegador" sem explicação.
+      recordVoiceFallbackReason('texto vazio');
     } else {
       recordVoiceFallbackReason('voz desligada no aparelho');
     }
@@ -2967,7 +2972,8 @@ async function speak(text){
     if(myGen === speechState.generation){
       stopInterruptMonitor();
       isSpeaking = false;
-      speechEndedAt = Date.now(); // marca o fim pra folga de eco (900ms) e a janela de continuidade
+      currentSpeakingText = '';
+      speechEndedAt = Date.now(); // marca o fim pra folga de eco e a janela de continuidade
       startContinuityWindow();
       resumeHandsFreeListening();
     }
@@ -3661,11 +3667,27 @@ function checkDissolveCommand(text){
 const HANDS_FREE_KEY = 'raiz_hands_free';
 const WAKE_WORD = 'jarbas';
 const WAKE_ANSWER_TIMEOUT = 3000;        // espera pela fala após só dizer "jarbas"
-const ECHO_GRACE_MS = 900;               // folga após o fim da fala antes de aceitar qualquer coisa
+const ECHO_GRACE_MS = 900;               // folga após o fim da fala antes de aceitar qualquer coisa (desktop)
+const ECHO_GRACE_MS_TOUCH = 1800;        // PARTE A (mobile): alto-falante colado ao microfone, eco demora mais a sumir
 let handsFree = localStorage.getItem(HANDS_FREE_KEY) === '1';
 let awaitingCommand = false;
 let awaitingTimeout = null;
 let speechEndedAt = 0;
+let currentSpeakingText = '';            // PARTE A: o que o Jarbas está falando AGORA (limpo ao terminar) — pra
+                                          // comparar eco também contra a fala em andamento, não só as concluídas
+
+// PARTE A (mãos livres mobile): toque/mobile pega eco física do próprio alto-falante
+// com mais força (aparelho pequeno, sem distância entre microfone e caixa de som) —
+// maxTouchPoints cobre Android/iOS/iPadOS modernos, pointer:coarse cobre o resto.
+function isTouchDevice(){
+  try{
+    if(navigator.maxTouchPoints > 0) return true;
+    return typeof matchMedia === 'function' && matchMedia('(pointer:coarse)').matches;
+  }catch(e){ return false; }
+}
+function echoGraceMsFor(isTouch){
+  return isTouch ? ECHO_GRACE_MS_TOUCH : ECHO_GRACE_MS;
+}
 
 // ---------- mem.config.voz: apelidos e janela de continuidade (local ao app, lido sob
 // demanda — mesmo padrão de leitura de mem.config.aparencia, nunca escreve de volta aqui). ----------
@@ -3784,7 +3806,13 @@ function recentJarbasLines(nowMs, windowMs, maxCount){
   }
   return out;
 }
-function isLikelyEcho(transcript, nowMs){
+// PARTE A: compara também contra `currentText` (a fala em andamento, se houver) — na
+// prática `history` já recebe a fala do Jarbas ANTES de speak() começar (ver askRaiz),
+// então isLikelyEcho já cobria isso pelos últimos 3 turnos; `currentText` é uma segunda
+// fonte explícita, que não depende dessa ordem e cobre qualquer chamador futuro de
+// speak() que ainda não tenha empurrado pro histórico.
+function isLikelyEcho(transcript, nowMs, currentText){
+  if(currentText && textSimilarity(transcript, currentText) >= 0.65) return true;
   const lines = recentJarbasLines(nowMs, 120000, 3);
   for(const line of lines){
     if(textSimilarity(transcript, line) >= 0.65) return true;
@@ -3793,15 +3821,15 @@ function isLikelyEcho(transcript, nowMs){
 }
 
 // ECO-2: decide se uma transcrição deve ser descartada como eco. A guarda de "Jarbas
-// falando" (isSpeaking) + a folga de 900ms vale SEMPRE, em qualquer modo. A checagem de
+// falando" (isSpeaking) + a folga pós-fala vale SEMPRE, em qualquer modo. A checagem de
 // semelhança com falas recentes (isLikelyEcho) só entra em mãos livres — no toque pra
 // falar a pessoa apertou o botão de propósito, então uma pergunta curta contida numa
 // fala recente do Jarbas (ex: Jarbas diz "Anotei que você tomou café em casa", a pessoa
 // toca e pergunta "tomar café?") nunca pode ser descartada em silêncio.
-function shouldDiscardAsEcho(transcript, nowMs, handsFree, speaking, speechEndedAtMs, graceMs){
+function shouldDiscardAsEcho(transcript, nowMs, handsFree, speaking, speechEndedAtMs, graceMs, currentText){
   if(speaking || (nowMs - speechEndedAtMs) < graceMs) return true;
   if(!handsFree) return false;
-  return isLikelyEcho(transcript, nowMs);
+  return isLikelyEcho(transcript, nowMs, currentText);
 }
 
 // ---------- janela de continuidade: abre no FIM da fala do Jarbas (nunca no início),
@@ -3886,11 +3914,86 @@ function startRecognitionSafely(){
   }
 }
 
+// ---------- PARTE A (mãos livres no mobile): no Android/iOS o reconhecimento contínuo
+// não é de verdade contínuo — ele reinicia sozinho (onend) a cada poucos segundos, ou
+// erra com "no-speech"/"aborted" em sequência. Isso NUNCA contava pro limite acima
+// ("no-speech" é explicitamente ignorado, de propósito, pra não desligar em silêncio
+// longo de verdade) — só que no mobile é exatamente esse erro que se repete sem parar,
+// e cada reinício soa um bipe do sistema. Esse bloco detecta o LAÇO (reinícios rápidos
+// demais, de qualquer motivo, sem nenhuma frase aceita) e pausa com aviso claro, em vez
+// de deixar martelar pra sempre. ---------- */
+const RESTART_WINDOW_MS = 30000;          // janela de 30s pra contar reinícios
+const RESTART_LOOP_MAX = 6;               // 6 reinícios nessa janela sem frase aceita = laço
+const BACKOFF_SEQUENCE_MS = [300, 600, 1200, 2500, 5000]; // espaçamento progressivo entre reinícios
+const FATAL_RECOGNITION_ERRORS = ['not-allowed', 'service-not-allowed'];
+let restartTimestamps = [];               // reinícios recentes (onend/onerror), zerado quando aceita uma frase
+let lastAcceptedPhraseAt = 0;
+let pausedForSpeechPending = false;       // true só entre pauseHandsFreeForSpeech() e o onend que ela provoca
+
+// Erros que o navegador NUNCA vai resolver sozinho reiniciando (a pessoa precisa trocar
+// a permissão) — insistir só gera mais bipe/laço, então para na hora com mensagem clara.
+function isFatalRecognitionError(errorCode){
+  return FATAL_RECOGNITION_ERRORS.indexOf(errorCode) !== -1;
+}
+
+// Atraso progressivo entre reinícios: 1º=300ms, 2º=600ms, 3º=1,2s, 4º=2,5s, 5º+=5s.
+function backoffDelayMs(restartCount){
+  const n = Number(restartCount) || 0;
+  const idx = Math.max(0, Math.min(BACKOFF_SEQUENCE_MS.length - 1, n - 1));
+  return BACKOFF_SEQUENCE_MS[idx];
+}
+
+// Registra um reinício (descartando os mais antigos que `windowMs`) e diz se o mãos
+// livres deve ser PAUSADO por estar em laço: `maxRestarts` reinícios dentro da janela E
+// nenhuma frase aceita dentro dela (lastAcceptedAt nulo ou mais antigo que a janela).
+function registerRestartAndCheckLoop(timestamps, nowMs, lastAcceptedAt, windowMs, maxRestarts){
+  const recentes = (Array.isArray(timestamps) ? timestamps : []).filter((t) => nowMs - t < windowMs);
+  recentes.push(nowMs);
+  const semFraseAceitaNaJanela = !lastAcceptedAt || (nowMs - lastAcceptedAt) >= windowMs;
+  const shouldStop = recentes.length >= maxRestarts && semFraseAceitaNaJanela;
+  return { timestamps: recentes, shouldStop };
+}
+
+// Log de depuração dos reinícios (sempre no console; o aviso visual só com "mostrar o
+// que o microfone ouviu" ligado) — motivo de cada reinício e quantos já teve na janela.
+function logHandsFreeRestart(motivo, countInWindow){
+  console.warn(`mãos livres: reinício (${motivo}) — ${countInWindow}/${RESTART_LOOP_MAX} em ${RESTART_WINDOW_MS/1000}s`);
+  showMicDebug(motivo, `reinício ${countInWindow}/${RESTART_LOOP_MAX}`);
+}
+
+function pauseHandsFreeDueToRestartLoop(){
+  handsFree = false;
+  try{ localStorage.setItem(HANDS_FREE_KEY, '0'); }catch(e){}
+  if(typeof updateHandsFreeBtn === 'function') updateHandsFreeBtn();
+  hint.textContent = 'Mãos livres pausado: toque para retomar';
+  restartTimestamps = [];
+  recognitionFailCount = 0;
+}
+
+function stopHandsFreeForFatalError(errorCode){
+  handsFree = false;
+  try{ localStorage.setItem(HANDS_FREE_KEY, '0'); }catch(e){}
+  if(typeof updateHandsFreeBtn === 'function') updateHandsFreeBtn();
+  const labels = {
+    'not-allowed': 'Mãos livres pausado: permissão de microfone negada',
+    'service-not-allowed': 'Mãos livres pausado: serviço de voz bloqueado',
+  };
+  hint.textContent = labels[errorCode] || 'Mãos livres pausado: toque para retomar';
+  restartTimestamps = [];
+  recognitionFailCount = 0;
+}
+
 // Pausa o reconhecimento assim que o Jarbas começa a falar — a parte mais importante
 // da supressão de eco: sem isso, o microfone fica aberto captando a própria voz dele
-// pelo alto-falante durante toda a fala, não só depois.
+// pelo alto-falante durante toda a fala, não só depois. PARTE A: não depende mais de
+// `listening` (setado de forma assíncrona só dentro de onstart) — havia uma corrida
+// real aqui: se recognition.start() já tinha sido chamado mas onstart ainda não tinha
+// disparado, `listening` continuava false e esse stop() era pulado, deixando o
+// microfone escutando a própria fala do Jarbas do início ao fim. recognition.stop()
+// chamado "cedo demais" é inofensivo (sem efeito ou erro silencioso, sempre em try/catch).
 function pauseHandsFreeForSpeech(){
-  if(handsFree && recognition && listening){
+  if(handsFree && recognition){
+    pausedForSpeechPending = true;
     try{ recognition.stop(); }catch(e){}
   }
 }
@@ -3898,8 +4001,10 @@ function pauseHandsFreeForSpeech(){
 function resumeHandsFreeListening(){
   if(!handsFree || listening) return;
   if(isSpeaking) return; // speak() chama de novo no finally, quando terminar
-  const waitForGrace = Math.max(0, (speechEndedAt + ECHO_GRACE_MS) - Date.now());
-  const delay = Math.max(350, waitForGrace);
+  const graceMs = echoGraceMsFor(isTouchDevice());
+  const waitForGrace = Math.max(0, (speechEndedAt + graceMs) - Date.now());
+  const backoff = restartTimestamps.length ? backoffDelayMs(restartTimestamps.length) : 0;
+  const delay = Math.max(350, waitForGrace, backoff);
   setTimeout(()=>{
     if(!handsFree || listening || isSpeaking) return;
     startRecognitionSafely();
@@ -3911,7 +4016,12 @@ function initRecognition(){
   recognition.lang = 'pt-BR';
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
-  recognition.continuous = handsFree;
+  // PARTE A (iOS/Safari): reconhecimento contínuo é instável nesse navegador (reinicia
+  // sozinho com muito mais frequência que no Chrome desktop/Android) — em vez de insistir
+  // em "contínuo" e cair no mesmo laço, o mãos livres no iOS vira "conversa por turnos":
+  // cada ciclo ouve só até a próxima frase (ou silêncio), termina, e o MESMO mecanismo de
+  // folga+backoff abaixo religa pro próximo turno — sem precisar de um modo separado.
+  recognition.continuous = handsFree && !isIOS();
 
   recognition.onstart = ()=>{
     if(!CLASSIC_FACE) pensarFim(); // qualquer interação de voz fecha o pensamento sozinho
@@ -3931,6 +4041,8 @@ function initRecognition(){
     micBtn.classList.remove('on');
     setEmotion('neutro');
     stopContinuityHintTicker();
+    const wasPausedForSpeech = pausedForSpeechPending;
+    pausedForSpeechPending = false;
     const reasons = {
       'no-speech': 'não ouvi nada, toque e fale',
       'audio-capture': 'sem acesso ao microfone',
@@ -3939,6 +4051,15 @@ function initRecognition(){
       'aborted': 'toque de novo',
     };
     if(!handsFree) hint.textContent = reasons[e.error] || ('erro: ' + e.error + ', toque de novo');
+    // PARTE A: erro fatal de permissão pára na hora, mesmo que tenha vindo bem no meio
+    // de uma pausa deliberada pra fala — não há reinício que resolva isso.
+    if(handsFree && isFatalRecognitionError(e.error)){ stopHandsFreeForFatalError(e.error); return; }
+    if(handsFree && !wasPausedForSpeech){
+      const resultado = registerRestartAndCheckLoop(restartTimestamps, Date.now(), lastAcceptedPhraseAt, RESTART_WINDOW_MS, RESTART_LOOP_MAX);
+      restartTimestamps = resultado.timestamps;
+      logHandsFreeRestart('erro: ' + e.error, resultado.timestamps.length);
+      if(resultado.shouldStop){ pauseHandsFreeDueToRestartLoop(); return; }
+    }
     if(handsFree && e.error !== 'no-speech'){
       recognitionFailCount++;
       if(recognitionFailCount >= RECOGNITION_MAX_FAILS){ disableHandsFreeDueToFailures(); return; }
@@ -3950,6 +4071,17 @@ function initRecognition(){
     G.listen.t = handsFree ? .25 : 0;
     micBtn.classList.remove('on');
     stopContinuityHintTicker();
+    const wasPausedForSpeech = pausedForSpeechPending;
+    pausedForSpeechPending = false;
+    // PARTE A: só conta como "reinício de laço" quando o fim NÃO foi provocado por nós
+    // mesmos (pauseHandsFreeForSpeech) — senão toda pausa pra falar contaria como um
+    // reinício e uma conversa normal (6+ falas em 30s) acabaria pausando o mãos livres.
+    if(handsFree && !wasPausedForSpeech){
+      const resultado = registerRestartAndCheckLoop(restartTimestamps, Date.now(), lastAcceptedPhraseAt, RESTART_WINDOW_MS, RESTART_LOOP_MAX);
+      restartTimestamps = resultado.timestamps;
+      logHandsFreeRestart('onend', resultado.timestamps.length);
+      if(resultado.shouldStop){ pauseHandsFreeDueToRestartLoop(); return; }
+    }
     resumeHandsFreeListening();
   };
   recognition.onresult = (e)=>{
@@ -3961,7 +4093,7 @@ function initRecognition(){
 
     // Supressão de eco, SEMPRE primeiro — nunca entra no histórico nem vira pergunta.
     // No toque pra falar, só a guarda de "Jarbas falando" vale (ver shouldDiscardAsEcho).
-    if(shouldDiscardAsEcho(text, Date.now(), handsFree, isSpeaking, speechEndedAt, ECHO_GRACE_MS)){
+    if(shouldDiscardAsEcho(text, Date.now(), handsFree, isSpeaking, speechEndedAt, echoGraceMsFor(isTouchDevice()), currentSpeakingText)){
       console.warn('eco descartado');
       showMicDebug(text, 'eco');
       return;
@@ -3985,6 +4117,10 @@ function initRecognition(){
       recognition.stop();
       setCaption('você', text);
       showMicDebug(text, 'aceito');
+      // PARTE A: uma frase de verdade foi aceita — zera o contador de laço (prova que o
+      // reconhecimento está funcionando, não é mais uma sequência de erros vazios).
+      restartTimestamps = [];
+      lastAcceptedPhraseAt = Date.now();
       if(handleLearnCommand(text)) return;
       if(checkRoutineTrigger(text)) return;
       if(checkDissolveCommand(text)) return;
@@ -3995,6 +4131,8 @@ function initRecognition(){
     const wake = findWakeWordMatch(text, vozConfig().apelidos);
     if(wake.matched){
       startContinuityWindow();
+      restartTimestamps = [];
+      lastAcceptedPhraseAt = Date.now();
       if(wake.rest.length > 2){
         stopContinuityHintTicker();
         recognition.stop();
