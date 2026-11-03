@@ -212,12 +212,25 @@ function sb(opts = {}) {
   assert.deepEqual(Array.from(cfgPadrao.apelidos), ['jarbas','jarbinhas','jarbuxo','jarbera','jarbo','jarbleatles'], 'apelidos padrão quando ausente');
   assert.equal(cfgPadrao.janelaConversaSeg, 20, 'janela padrão de 20s');
   assert.equal(cfgPadrao.exigirApelidoSempre, false, 'exigirApelidoSempre padrão false');
+  // VOZ-4 PARTE C
+  assert.equal(cfgPadrao.provedor, null, 'provedor padrão null (segue a ordem padrão do Worker)');
+  assert.equal(cfgPadrao.vozId, null, 'vozId padrão null');
+  assert.equal(cfgPadrao.velocidade, 1.08, 'velocidade padrão 1.08');
 
-  const comConfig = sb({ mem: { config: { voz: { apelidos: ['bot'], janelaConversaSeg: 5, exigirApelidoSempre: true } } } });
+  const comConfig = sb({ mem: { config: { voz: { apelidos: ['bot'], janelaConversaSeg: 5, exigirApelidoSempre: true, provedor: 'elevenlabs', vozId: 'voz-x', velocidade: 1.2 } } } });
   const cfg2 = comConfig.__vozConfig();
   assert.deepEqual(Array.from(cfg2.apelidos), ['bot']);
   assert.equal(cfg2.janelaConversaSeg, 5);
   assert.equal(cfg2.exigirApelidoSempre, true);
+  assert.equal(cfg2.provedor, 'elevenlabs');
+  assert.equal(cfg2.vozId, 'voz-x');
+  assert.equal(cfg2.velocidade, 1.2);
+
+  // velocidade fora da faixa (0,9-1,25) é sempre grampeada, nunca quebra nem aplica um valor absurdo
+  const extremos = sb({ mem: { config: { voz: { velocidade: 5 } } } }).__vozConfig();
+  assert.equal(extremos.velocidade, 1.25, 'velocidade acima do máximo é grampeada em 1.25');
+  const extremos2 = sb({ mem: { config: { voz: { velocidade: 0.1 } } } }).__vozConfig();
+  assert.equal(extremos2.velocidade, 0.9, 'velocidade abaixo do mínimo é grampeada em 0.9');
   console.log('vozConfig: OK');
 }
 

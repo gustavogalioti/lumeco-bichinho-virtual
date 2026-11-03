@@ -311,11 +311,17 @@ async function synthesizeAzureTts(env, text) {
     }
   }
 
-  // Mesma voz, idioma e rate do Edge TTS atual — só muda o transporte (REST oficial,
-  // sem WebSocket) e o provedor.
+  // VOZ-4 PARTE C: rate subiu de +2% pra +10% (dentro da faixa +8% a +12% pedida — meio
+  // do intervalo, sem precisar de mais uma variável só pra isso) — mais perto do ritmo
+  // de conversa real do que a leitura mais lenta de antes. Pausa curta (150ms) entre
+  // frases, pra não soar "corrido". Sem mstts:express-as="chat": a voz configurada
+  // (EDGE_VOICE = pt-BR-AntonioNeural) não documenta suporte a estilos conversacionais
+  // na lista oficial de vozes da Azure — forçar um estilo não suportado arriscaria erro
+  // da API sem ganho nenhum (ver PR).
+  const comPausas = xmlEscape(text).split(/(?<=[.!?])\s+/).join('<break time="150ms"/> ');
   const ssml =
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
-    `<voice name='${EDGE_VOICE}'><prosody rate='+2%' pitch='+0Hz'>${xmlEscape(text)}</prosody></voice></speak>`;
+    `<voice name='${EDGE_VOICE}'><prosody rate='+10%' pitch='+0Hz'>${comPausas}</prosody></voice></speak>`;
 
   const url = `https://${env.AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
   const controller = new AbortController();
@@ -363,6 +369,175 @@ async function synthesizeAzureTts(env, text) {
     throw err;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// ---------- VOZ-4 PARTE C: cadeia de provedores de voz unificada ----------
+// ElevenLabs e OpenAI (gpt-4o-mini-tts) somam-se a Azure/Edge (acima, inalterados) numa
+// cadeia com ordem configurável (TTS_PROVIDER_ORDER, padrão "elevenlabs,openai,azure,
+// edge") — só entra na cadeia quem tiver as chaves configuradas, e a escolha que a
+// pessoa fizer no Laboratório de voz (mem.config.voz.provedor, mandada pelo app em
+// body.vozPreferida) vence a ordem padrão quando disponível. Falha em qualquer um cai
+// pro próximo da cadeia; só cai pra voz do navegador se TODOS falharem (decisão do app).
+function ttsProviderDefs(env) {
+  return {
+    elevenlabs: { name: "elevenlabs", disponivel: !!(env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID), pago: true },
+    openai: { name: "openai", disponivel: !!env.OPENAI_API_KEY, pago: true },
+    azure: { name: "azure", disponivel: !!(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION), pago: false },
+    edge: { name: "edge", disponivel: true, pago: false },
+  };
+}
+
+export function buildTtsProviderChain(env, vozPreferida) {
+  const defs = ttsProviderDefs(env);
+  const orderNames = (env.TTS_PROVIDER_ORDER || "elevenlabs,openai,azure,edge").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const seen = new Set();
+  let chain = [];
+  for (const n of [...orderNames, ...Object.keys(defs)]) {
+    if (defs[n] && defs[n].disponivel && !seen.has(n)) { chain.push(defs[n]); seen.add(n); }
+  }
+  const preferido = vozPreferida && typeof vozPreferida.provedor === "string" ? vozPreferida.provedor.toLowerCase() : null;
+  if (preferido && seen.has(preferido)) {
+    chain = [defs[preferido], ...chain.filter((p) => p.name !== preferido)];
+  }
+  return chain;
+}
+
+// Limitador de gasto: teto diário de CARACTERES por provedor pago (TTS_DAILY_CHARS_PAID,
+// padrão 20.000) — passado o teto, esse provedor é pulado (não quebra a cadeia) até o
+// próximo dia (America/Sao_Paulo). Azure/Edge nunca são limitados aqui (Azure já tinha
+// seu próprio plano antes do VOZ-4; Edge é gratuito).
+const TTS_PAID_PROVIDERS = new Set(["elevenlabs", "openai"]);
+function ttsDailyCharsLimit(env) {
+  const v = Number(env.TTS_DAILY_CHARS_PAID);
+  return Number.isFinite(v) && v > 0 ? v : 20000;
+}
+async function ttsDailyCharsUsed(env, providerName, dateStr) {
+  if (!env.COMPANION_KV) return 0;
+  const raw = await env.COMPANION_KV.get(`tts:dailychars:${providerName}:${dateStr}`);
+  return Number(raw) || 0;
+}
+async function ttsDailyCharsAdd(env, providerName, dateStr, chars) {
+  if (!env.COMPANION_KV) return;
+  const key = `tts:dailychars:${providerName}:${dateStr}`;
+  const current = await ttsDailyCharsUsed(env, providerName, dateStr);
+  await env.COMPANION_KV.put(key, String(current + chars), { expirationTtl: 2 * 24 * 60 * 60 });
+}
+export async function ttsDailyCapExceeded(env, providerName, textLength, dateStr) {
+  if (!TTS_PAID_PROVIDERS.has(providerName)) return false;
+  const used = await ttsDailyCharsUsed(env, providerName, dateStr || saoPauloNow().dateStr);
+  return used + textLength > ttsDailyCharsLimit(env);
+}
+
+// Cache em memória do isolate (mesma ideia do cache do Azure acima, generalizada) pros
+// provedores NOVOS — chave inclui provedor+voz (nunca a velocidade: ela só é aplicada
+// depois, em cima do áudio já pronto — tocar o MESMO áudio mais rápido/devagar via
+// playbackRate no app -- então incluir velocidade na chave só geraria miss à toa, sem
+// nenhum ganho real, já que o áudio cacheado é idêntico pra qualquer velocidade).
+const TTS_CACHE_NOVOS_PROVEDORES = new Map();
+const TTS_CACHE_NOVOS_PROVEDORES_MAX = 40;
+const TTS_CACHE_NOVOS_PROVEDORES_MAX_CHARS = 60;
+function ttsCacheGetGenerico(cache, key) {
+  const hit = cache.get(key);
+  if (hit) { cache.delete(key); cache.set(key, hit); }
+  return hit;
+}
+function ttsCacheSetGenerico(cache, key, value, max) {
+  if (cache.size >= max) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+async function synthesizeElevenLabsTts(env, text) {
+  const voiceId = env.ELEVENLABS_VOICE_ID;
+  const model = env.ELEVENLABS_MODEL || "eleven_flash_v2_5";
+  const cacheKey = `elevenlabs|${voiceId}|${text.trim()}`;
+  const cacheable = text.trim().length > 0 && text.trim().length <= TTS_CACHE_NOVOS_PROVEDORES_MAX_CHARS;
+  if (cacheable) {
+    const cached = ttsCacheGetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey);
+    if (cached) return cached;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    // Endpoint de streaming da ElevenLabs — aqui consumido até o fim e devolvido como
+    // base64 (mesmo contrato dos outros provedores), pra não reescrever o pipeline de
+    // áudio do app (que já funciona igual em todo aparelho desde a VOZ-2); documentado
+    // no PR como uma simplificação deliberada, não streaming byte-a-byte até o cliente.
+    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY, Accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: model, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      const err = new Error(`elevenlabs_error_${res.status}: ${detail.slice(0, 200)}`);
+      err.status = res.status;
+      throw err;
+    }
+    const buf = await res.arrayBuffer();
+    const audio_b64 = bytesToBase64(new Uint8Array(buf));
+    if (cacheable) ttsCacheSetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey, audio_b64, TTS_CACHE_NOVOS_PROVEDORES_MAX);
+    return audio_b64;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("elevenlabs_tts_timeout_8s");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function synthesizeOpenAiTts(env, text) {
+  const voice = env.OPENAI_TTS_VOICE || "alloy";
+  const cacheKey = `openai|${voice}|${text.trim()}`;
+  const cacheable = text.trim().length > 0 && text.trim().length <= TTS_CACHE_NOVOS_PROVEDORES_MAX_CHARS;
+  if (cacheable) {
+    const cached = ttsCacheGetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey);
+    if (cached) return cached;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: "gpt-4o-mini-tts",
+        voice,
+        input: text,
+        instructions: "Fala natural e calorosa, ritmo de conversa, sem soar como locutor.",
+        response_format: "mp3",
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      const err = new Error(`openai_tts_error_${res.status}: ${detail.slice(0, 200)}`);
+      err.status = res.status;
+      throw err;
+    }
+    const buf = await res.arrayBuffer();
+    const audio_b64 = bytesToBase64(new Uint8Array(buf));
+    if (cacheable) ttsCacheSetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey, audio_b64, TTS_CACHE_NOVOS_PROVEDORES_MAX);
+    return audio_b64;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("openai_tts_timeout_8s");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function synthesizeTtsWithProvider(env, providerName, text) {
+  switch (providerName) {
+    case "elevenlabs": return synthesizeElevenLabsTts(env, text);
+    case "openai": return synthesizeOpenAiTts(env, text);
+    case "azure": return synthesizeAzureTts(env, text);
+    case "edge": return synthesizeEdgeTts(text);
+    default: throw new Error("tts_provider_desconhecido");
   }
 }
 
@@ -5326,33 +5501,70 @@ export default {
       }
     }
 
-    // ---- voz unificada: Azure AI Speech (oficial) é o provedor principal; se faltar
-    // configuração ou falhar (401/403/404 chave/região inválida, 429/5xx transitório,
-    // timeout), cai pro Edge TTS (não-oficial) como reserva — e se os dois falharem,
-    // o app já cai pra voz nativa do navegador por conta própria. ----
+    // ---- VOZ-4 PARTE C: voz unificada — cadeia de provedores (ElevenLabs, OpenAI,
+    // Azure, Edge; ordem configurável, só entra quem tiver chave) com fallback em
+    // cascata: falha ou cota diária esgotada em qualquer um cai pro próximo da cadeia,
+    // sem voltar pra voz do navegador — essa só é usada pelo APP, e só se TODOS os
+    // provedores da cadeia falharem aqui. ----
     if (mode === "tts") {
       if (!body.text) return json({ error: "text_required" }, 400);
-      const canAzure = !!(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION);
-      if (canAzure) {
+      const chain = buildTtsProviderChain(env, body.vozPreferida);
+      const ttsLog = [];
+      let lastErr = null;
+      const hojeISO = saoPauloNow().dateStr;
+      for (const provider of chain) {
         try {
-          const audio_b64 = await synthesizeAzureTts(env, body.text);
-          return json({ audio_b64, provider: "azure" });
-        } catch (err) {
-          console.error("azure_tts_failed, caindo pro Edge TTS:", String(err?.message || err));
-          const ttsLog = [];
-          pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pro Edge TTS (Azure falhou).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
+          if (TTS_PAID_PROVIDERS.has(provider.name)) {
+            const capExcedido = await ttsDailyCapExceeded(env, provider.name, body.text.length, hojeISO);
+            if (capExcedido) {
+              pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: `Voz pulou ${provider.name} (teto diário de caracteres pagos atingido hoje), seguindo a cadeia.`, detalhes: { provider: provider.name } });
+              continue;
+            }
+          }
+          const audio_b64 = await synthesizeTtsWithProvider(env, provider.name, body.text);
+          if (TTS_PAID_PROVIDERS.has(provider.name)) {
+            await ttsDailyCharsAdd(env, provider.name, hojeISO, body.text.length);
+          }
           flushLogBatch(env, ctx, ttsLog);
+          return json({ audio_b64, provider: provider.name });
+        } catch (err) {
+          lastErr = err;
+          const motivoCota = err?.status === 401 || err?.status === 402 ? " — provavelmente chave inválida ou cota/crédito esgotado" : "";
+          console.error(`${provider.name}_tts_failed, seguindo a cadeia:`, String(err?.message || err));
+          pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: `Voz caiu pro próximo provedor da cadeia (${provider.name} falhou${motivoCota}).`, detalhes: { provider: provider.name, erro: String(err?.message || err).slice(0, 200) } });
         }
       }
+      pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pra reserva do navegador (todos os provedores da cadeia falharam ou estão sem chave).", detalhes: {} });
+      flushLogBatch(env, ctx, ttsLog);
+      return json({ error: "tts_failed", detail: String(lastErr?.message || lastErr || "no_provider_configured") }, 502);
+    }
+
+    // VOZ-4 PARTE C: "Laboratório de voz" — chama UM provedor específico, direto (sem
+    // passar pela cadeia/fallback/teto diário), pra pessoa ouvir e escolher com o
+    // ouvido. Autenticado (mesma SYNC_KEY dos outros modos do app).
+    if (mode === "tts_sample") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      const providerName = String(body.provider || "").toLowerCase();
+      const defs = ttsProviderDefs(env);
+      const def = defs[providerName];
+      if (!def || !def.disponivel) return json({ error: "provider_unavailable" }, 400);
+      const textoAmostra = typeof body.text === "string" && body.text.trim() ? body.text.trim() : "Oi, eu sou o Jarbas. Essa é a minha voz nesse provedor.";
       try {
-        const audio_b64 = await synthesizeEdgeTts(body.text);
-        return json({ audio_b64, provider: "edge" });
+        const audio_b64 = await synthesizeTtsWithProvider(env, providerName, textoAmostra);
+        return json({ audio_b64, provider: providerName });
       } catch (err) {
-        const ttsLog = [];
-        pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pra reserva do navegador (Azure e Edge TTS falharam).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
-        flushLogBatch(env, ctx, ttsLog);
-        return json({ error: "tts_failed", detail: String(err.message || err) }, 502);
+        return json({ error: "tts_sample_failed", provider: providerName, detail: String(err?.message || err) }, 502);
       }
+    }
+    // VOZ-4 PARTE C: lista (sem chamar nenhum provedor) quais estão configurados no
+    // Worker agora -- o Laboratório de voz no app usa isso pra só oferecer botões dos
+    // provedores que de fato têm chave, em vez de tentar todos e deixar os sem chave
+    // falharem visivelmente na cara da pessoa.
+    if (mode === "tts_providers_disponiveis") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      const defs = ttsProviderDefs(env);
+      const disponiveis = Object.values(defs).filter((d) => d.disponivel).map((d) => d.name);
+      return json({ disponiveis, ordemPadrao: (env.TTS_PROVIDER_ORDER || "elevenlabs,openai,azure,edge").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) });
     }
 
     const { messages = [], petState = {}, companionState = {} } = body;

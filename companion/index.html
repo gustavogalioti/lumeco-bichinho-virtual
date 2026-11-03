@@ -380,6 +380,7 @@
     <button id="sleepRoutineBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🌙 Rotina do Jarbas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
     <div id="voiceProviderLabel" style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;"></div>
+    <button id="voiceLabBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🔬 Laboratório de voz</button>
     <button id="latencyDebugBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">⏱ Diagnóstico de latência</button>
     <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
     <button id="interruptSensitivityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">sensibilidade: média</button>
@@ -543,6 +544,17 @@
     <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">VOZ-4: mediana das últimas conversas por voz, deste aparelho. "Início da fala" é o número que mais importa — do fim do que você falou até o Jarbas começar a responder.</p>
     <pre id="latencyDebugText" style="white-space:pre-wrap; font-size:13px; line-height:1.6; margin:0 0 14px;">(ainda sem dados — converse por voz pra começar a medir)</pre>
     <button id="latencyDebugCloseBtn" style="margin-top:4px;">Fechar</button>
+  </div>
+</div>
+
+<div class="setup hidden" id="voiceLabEl">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
+    <h2>🔬 Laboratório de voz</h2>
+    <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">Ouça a mesma frase em cada voz disponível e escolha com o ouvido. A escolha fica só neste Jarbas (todos os aparelhos que usam o mesmo Worker).</p>
+    <label style="display:block; margin-bottom:6px; color:var(--muted); font-size:13px;">Velocidade da fala: <span id="voiceLabSpeedValue">1.08</span>x</label>
+    <input id="voiceLabSpeedRange" type="range" min="0.9" max="1.25" step="0.01" value="1.08" style="width:100%; margin-bottom:16px;">
+    <div id="voiceLabProvidersList" style="display:flex; flex-direction:column; gap:8px;">(carregando...)</div>
+    <button id="voiceLabCloseBtn" style="margin-top:18px;">Fechar</button>
   </div>
 </div>
 
@@ -2784,10 +2796,13 @@ function splitIntoSpeechChunks(text){
 async function fetchTtsAudio(text, signal){
   const workerUrl = localStorage.getItem('raiz_worker_url');
   if(!workerUrl) throw new Error('no_worker');
+  // VOZ-4 PARTE C: a escolha do Laboratório de voz (mem.config.voz.provedor) vence a
+  // ordem padrão da cadeia no Worker -- null quando a pessoa nunca escolheu nada.
+  const vozPreferida = { provedor: vozConfig().provedor };
   const resp = await fetch(workerUrl, {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ mode:'tts', text }),
+    body: JSON.stringify({ mode:'tts', text, vozPreferida }),
     signal
   });
   if(!resp.ok) throw new Error('tts_http_' + resp.status);
@@ -2827,6 +2842,14 @@ function playAudioForGen(ttsResult, myGen){
   return new Promise((resolve, reject)=>{
     if(myGen !== speechState.generation){ resolve(); return; }
     ttsEl.src = 'data:audio/mpeg;base64,' + ttsResult.b64;
+    // VOZ-4 PARTE C: velocidade (0,9-1,25, padrão 1,08) aplicada aqui via playbackRate
+    // -- vale pra QUALQUER provedor, já que nenhum deles recebe a velocidade no pedido
+    // (ver PR: decisão deliberada, pra manter um único jeito de controlar a velocidade,
+    // igual em todo provedor). preservesPitch mantém o tom natural (sem "efeito esquilo").
+    try{
+      ttsEl.playbackRate = vozConfig().velocidade;
+      ttsEl.preservesPitch = true; ttsEl.mozPreservesPitch = true; ttsEl.webkitPreservesPitch = true;
+    }catch(e){}
     let pulseTimer = null;
     let settled = false;
     const cleanup = ()=>{
@@ -4078,16 +4101,26 @@ const VOZ_CONFIG_DEFAULTS = {
   apelidos: ['jarbas','jarbinhas','jarbuxo','jarbera','jarbo','jarbleatles'],
   janelaConversaSeg: 20,
   exigirApelidoSempre: false,
+  // VOZ-4 PARTE C: provedor/vozId null = "segue a ordem padrão do Worker" (nenhuma
+  // escolha feita ainda no Laboratório de voz). velocidade: 0,9-1,25, padrão 1,08.
+  provedor: null,
+  vozId: null,
+  velocidade: 1.08,
 };
 function vozConfig(){
   const v = (mem.config && mem.config.voz) || {};
   const apelidos = Array.isArray(v.apelidos) && v.apelidos.length ? v.apelidos.filter(a => typeof a === 'string' && a.trim()) : VOZ_CONFIG_DEFAULTS.apelidos;
   const janelaRaw = Number(v.janelaConversaSeg);
   const janelaConversaSeg = Number.isFinite(janelaRaw) ? Math.max(0, janelaRaw) : VOZ_CONFIG_DEFAULTS.janelaConversaSeg;
+  const velocidadeRaw = Number(v.velocidade);
+  const velocidade = Number.isFinite(velocidadeRaw) ? Math.min(1.25, Math.max(0.9, velocidadeRaw)) : VOZ_CONFIG_DEFAULTS.velocidade;
   return {
     apelidos: apelidos.length ? apelidos : VOZ_CONFIG_DEFAULTS.apelidos,
     janelaConversaSeg,
     exigirApelidoSempre: v.exigirApelidoSempre === true,
+    provedor: typeof v.provedor === 'string' && v.provedor ? v.provedor : VOZ_CONFIG_DEFAULTS.provedor,
+    vozId: typeof v.vozId === 'string' && v.vozId ? v.vozId : VOZ_CONFIG_DEFAULTS.vozId,
+    velocidade,
   };
 }
 
@@ -5394,6 +5427,91 @@ document.getElementById('latencyDebugBtn').addEventListener('click', ()=>{
 });
 document.getElementById('latencyDebugCloseBtn').addEventListener('click', ()=>{
   latencyDebugEl.classList.add('hidden');
+});
+
+/* ---------- VOZ-4 PARTE C: Laboratório de voz (ouvir cada provedor, escolher, velocidade) ---------- */
+// mem.config.voz continua "lido sob demanda" (vozConfig()) -- este é o ÚNICO lugar que
+// escreve de volta, igual ao padrão já usado pro resto da memória (mem.xxx = ...;
+// saveMemoryState(); pushMemoryToServer(workerUrl);).
+function setVozConfigField(patch){
+  mem.config = mem.config || {};
+  mem.config.voz = { ...(mem.config.voz || {}), ...patch };
+  saveMemoryState();
+  const workerUrl = localStorage.getItem('raiz_worker_url');
+  if(workerUrl) pushMemoryToServer(workerUrl);
+}
+
+const voiceLabEl = document.getElementById('voiceLabEl');
+const VOICE_LAB_PROVIDER_LABELS = { elevenlabs: 'ElevenLabs', openai: 'OpenAI', azure: 'Azure (oficial)', edge: 'Edge TTS' };
+
+function renderVoiceLabSpeed(){
+  const v = vozConfig().velocidade;
+  document.getElementById('voiceLabSpeedRange').value = v;
+  document.getElementById('voiceLabSpeedValue').textContent = v.toFixed(2);
+}
+document.getElementById('voiceLabSpeedRange').addEventListener('input', (e)=>{
+  document.getElementById('voiceLabSpeedValue').textContent = Number(e.target.value).toFixed(2);
+});
+document.getElementById('voiceLabSpeedRange').addEventListener('change', (e)=>{
+  setVozConfigField({ velocidade: Number(e.target.value) });
+});
+
+async function renderVoiceLabProvidersList(){
+  const listEl = document.getElementById('voiceLabProvidersList');
+  listEl.textContent = 'carregando...';
+  const d = await callWorkerSyncMode('tts_providers_disponiveis');
+  if(!d || !Array.isArray(d.disponiveis) || !d.disponiveis.length){
+    listEl.textContent = 'Nenhum provedor configurado no Worker ainda (verifique as chaves/secrets).';
+    return;
+  }
+  listEl.innerHTML = '';
+  const escolhaAtual = vozConfig().provedor;
+  for(const provider of d.disponiveis){
+    const row = document.createElement('div');
+    row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '8px';
+    const label = document.createElement('span');
+    label.style.flex = '1'; label.style.fontSize = '14px';
+    label.textContent = (VOICE_LAB_PROVIDER_LABELS[provider] || provider) + (escolhaAtual === provider ? ' ✓' : '');
+    const playBtn = document.createElement('button'); playBtn.type = 'button'; playBtn.className = 'btn-secondary'; playBtn.textContent = '▶ Ouvir';
+    const useBtn = document.createElement('button'); useBtn.type = 'button'; useBtn.className = 'btn-secondary'; useBtn.textContent = escolhaAtual === provider ? 'Em uso' : 'Usar';
+    if(escolhaAtual === provider) useBtn.disabled = true;
+    playBtn.addEventListener('click', async ()=>{
+      playBtn.disabled = true; playBtn.textContent = 'ouvindo...';
+      const r = await callWorkerSyncMode('tts_sample', { provider });
+      playBtn.disabled = false; playBtn.textContent = '▶ Ouvir';
+      if(!r || !r.audio_b64){ playBtn.textContent = 'falhou'; setTimeout(()=>{ playBtn.textContent = '▶ Ouvir'; }, 1500); return; }
+      // Reprodução isolada (new Audio, não o ttsEl único da conversa) -- disparada por
+      // um clique direto da pessoa, então não é bloqueada por autoplay, e nunca
+      // interfere com speechState/fala em andamento (fora de escopo tocar nisso aqui).
+      try{ new Audio('data:audio/mpeg;base64,' + r.audio_b64).play(); }catch(e){}
+    });
+    useBtn.addEventListener('click', ()=>{
+      setVozConfigField({ provedor: provider });
+      renderVoiceLabProvidersList();
+    });
+    row.appendChild(label); row.appendChild(playBtn); row.appendChild(useBtn);
+    listEl.appendChild(row);
+  }
+  const rowDefault = document.createElement('div');
+  rowDefault.style.display = 'flex'; rowDefault.style.alignItems = 'center'; rowDefault.style.gap = '8px';
+  const labelDefault = document.createElement('span');
+  labelDefault.style.flex = '1'; labelDefault.style.fontSize = '12px'; labelDefault.style.opacity = '0.7';
+  labelDefault.textContent = 'ou deixe o Worker decidir (ordem padrão)' + (!escolhaAtual ? ' ✓' : '');
+  const resetBtn = document.createElement('button'); resetBtn.type = 'button'; resetBtn.className = 'btn-secondary'; resetBtn.textContent = 'Usar ordem padrão';
+  if(!escolhaAtual) resetBtn.disabled = true;
+  resetBtn.addEventListener('click', ()=>{ setVozConfigField({ provedor: null }); renderVoiceLabProvidersList(); });
+  rowDefault.appendChild(labelDefault); rowDefault.appendChild(resetBtn);
+  listEl.appendChild(rowDefault);
+}
+
+document.getElementById('voiceLabBtn').addEventListener('click', ()=>{
+  settingsMenu.classList.add('hidden');
+  voiceLabEl.classList.remove('hidden');
+  renderVoiceLabSpeed();
+  renderVoiceLabProvidersList();
+});
+document.getElementById('voiceLabCloseBtn').addEventListener('click', ()=>{
+  voiceLabEl.classList.add('hidden');
 });
 function buildTestChip(label, onClick){
   const b = document.createElement('button');

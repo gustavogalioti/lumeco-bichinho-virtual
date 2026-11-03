@@ -115,6 +115,7 @@ function makeSandbox({ fetchImpl } = {}) {
     registerCreation: (c) => calls.registerCreation.push(c),
     addMemoryItem: (item, origem) => calls.addMemoryItem.push({ item, origem }),
     callWorkerSyncMode: (mode, extra) => { calls.callWorkerSyncMode = calls.callWorkerSyncMode || []; calls.callWorkerSyncMode.push({ mode, extra }); return Promise.resolve({ ok: true }); },
+    vozConfig: () => ({ provedor: null, vozId: null, velocidade: 1.08 }),
   };
   vm.createContext(sandbox);
   vm.runInContext(trecho1 + "\n" + trecho2 + `
