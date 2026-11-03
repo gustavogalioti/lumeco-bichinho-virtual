@@ -1088,6 +1088,13 @@ export function companionPrompt(companionState = {}, timeGapLine = '', selectedI
   // decidido no lado do app, não precisa de nada aqui.
   const lousaLine = `Você também pode abrir uma LOUSA — um quadro visual ao lado do seu rosto, com giz desenhando aos poucos, enquanto você fala. Use a ferramenta lousa SÓ quando o assunto realmente pede um esboço: uma conta, uma equação simples, um esquema ou lista curta, um gráfico simples, ou quando a pessoa pedir explicitamente pra você desenhar algo. NÃO use pra ilustrar uma explicação qualquer que não ganha nada visualmente — nesses casos responda só com a fala, sem chamar a ferramenta. A fala continua curta e normal; a lousa ilustra, nunca substitui a resposta.`;
 
+  // PAINEL-3: a ponte do painel manda origem:"painel" — texto, não voz, sem a
+  // naturalidade de "ela está falando e pode interromper/corrigir na hora". Pede
+  // confirmação antes de apagar/arquivar (nunca bloqueia criar/atualizar).
+  const canalLine = companionState.origem === "painel"
+    ? 'Essa conversa está acontecendo pelo painel de controle (mensagem de texto, não voz) — antes de apagar ou arquivar uma tarefa, conta, compromisso, ideia, lembrete ou lista, confirme com a pessoa dentro da própria conversa em vez de executar direto; criar e atualizar seguem normalmente, sem precisar confirmar.'
+    : '';
+
   const podeMaterializar = !!companionState.podeMaterializarEspontaneo;
   const materializeLine = `Você também pode MATERIALIZAR — criar uma representação visual (uma escultura em partículas 3D, uma cena com emojis, ou um desenho simples) que aparece ao lado do seu rosto enquanto você fala. Use a ferramenta materializar quando a pessoa pedir explicitamente, em qualquer flexão do verbo ("materializa", "materialize", "materializar", "desenha", "desenhe", "me mostra", "mostre", "imagina", "imagine", "crie", "cria"), ou quando ela pedir um resumo visual da conversa ("materializa o que resume o que a gente tá falando" — nesse caso escolha UMA metáfora boa pro que foi dito). Se o pedido for exatamente uma bola, um bolo, um coração, um sol, uma casa ou uma flor, use o parâmetro forma (escultura em partículas 3D) em vez de cena — pra qualquer outro pedido, continue compondo com cena de emojis (ou svg, só se emojis não bastarem). Materializar é uma AÇÃO: chame a ferramenta de verdade — nunca responda um pedido de materializar só falando ou escrevendo um emoji, sem chamar a ferramenta.${podeMaterializar ? ' Também pode materializar por conta própria, sem pedido, se a conversa trouxer algo vívido de verdade (uma viagem, uma comemoração, uma conquista, saudade, comida, um jogo) — use com parcimônia, só quando genuinamente combinar, nunca em toda mensagem, e nunca durante perguntas de agenda/tarefa/diário ou ações do painel; quando materializar espontaneamente, comente em uma frase natural tipo "isso me lembrou de uma coisa", sem anunciar que usou uma ferramenta.' : ' Agora não é um bom momento pra materializar por conta própria (sem pedido) — só use a ferramenta se a pessoa pedir explicitamente ou pedir um resumo visual.'}`;
 
@@ -1104,6 +1111,7 @@ ${nowLine}
 ${locationLine}
 ${timeAwarenessLine}
 ${estadoConversaLine}
+${canalLine}
 ${perfilLine}
 ${novidadesPainelLine}
 ${ideiaDoDiaLine}
@@ -3435,7 +3443,7 @@ function buildAllTools(canSearch, canPainel) {
 // ("amanhã", um dia da semana, "semana que vem") também deve oferecer a ferramenta.
 export const AGENDA_PEDIDO_REGEX = /\b(agenda|compromiss\w*|reunia\w*|evento\w*|marcad\w*|livre|disponivel|ocupad\w*|tenho (algo|alguma coisa)|o que tenho|amanha|depois de amanha|semana que vem|proxim\w* semana|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/;
 
-function selectToolsForMessage(userText, canSearch, canPainel, companionState = {}) {
+export function selectToolsForMessage(userText, canSearch, canPainel, companionState = {}) {
   const n = normalizeText(userText);
   const selected = new Set([GUARDAR_MEMORIA_TOOL, ENSINAR_REGRA_TOOL, DEFINIR_SONO_TOOL, ATUALIZAR_PENDENCIA_TOOL]);
   let matchedAny = false;
@@ -3455,7 +3463,11 @@ function selectToolsForMessage(userText, canSearch, canPainel, companionState = 
   if (canPainel && /\blembret/.test(n)) add(CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL);
   if (canPainel && /\blista/.test(n)) add(CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL);
   if (canPainel && (n.includes("email") || n.includes("e mail") || n.includes("caixa de entrada"))) add(CONSULTAR_EMAIL_TOOL);
-  if (canPainel && /\brecado/.test(n)) add(CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL);
+  // PAINEL-3: além de quando a pessoa pergunta por "recado" explicitamente, oferece
+  // a ferramenta numa saudação/início de conversa também — é quando ela normalmente
+  // ficaria sabendo de um recado deixado pelo painel (ex: "@jarbas" numa nota), sem
+  // precisar perguntar por ele. Offering a ferramenta não obriga o modelo a chamá-la.
+  if (canPainel && (/\brecado/.test(n) || companionState?.saudacaoDetectada)) add(CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL);
   if (/\b(clima|tempo|chuva|previsao)\b/.test(n)) add(WEATHER_TOOL);
   if (canSearch && /\b(pesquis|busca|noticia)/.test(n)) add(SEARCH_TOOL);
   if (n.includes("http") || n.includes("www") || /\blink/.test(n)) add(RESUMIR_LINK_TOOL);
@@ -5343,16 +5355,21 @@ async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
 // tira prefixo de timestamp que vazou, loga a fala final no Diário e dispara (melhor
 // esforço) os mesmos efeitos colaterais de sempre (marcar briefing como lido,
 // novidades como mostradas). Devolve o `parsed` já pronto pra virar resposta.
-function finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics) {
+function finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics, canal = "voz") {
   const { logBatch, saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing, horaAtual, minutoAtual, diaAtual, hojeISOServidor, novidadesFila } = turnCtx;
   if (!COMPANION_EMOTIONS.includes(parsed.emotion)) parsed.emotion = "neutro";
   if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
-  pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
+  // PAINEL-3: expõe quais ferramentas de escrita rodaram nesta resposta — o painel usa
+  // isso pra oferecer "Desfazer" na ação certa, sem precisar adivinhar pelo texto da fala.
+  if (callMetrics?.toolsUsed?.length) parsed.tools_used = callMetrics.toolsUsed;
+  const detalhesLog = canal === "painel" ? { ...(callMetrics || {}), canal } : (callMetrics || {});
+  pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: detalhesLog });
   flushLogBatch(env, ctx, logBatch);
-  // PARTE C: se a saudação disparou a entrega do briefing natural nesta mesma
-  // fala, marca como lido agora (mesmo estado que o cron/tela usam) — melhor
-  // esforço em segundo plano, nunca atrasa nem quebra a resposta já pronta.
-  if (saudacaoDetectada && briefingPendente && env.COMPANION_KV) {
+  // PARTE C: se a saudação disparou a entrega do briefing natural nesta mesma fala,
+  // marca como lido agora (mesmo estado que o cron/tela usam) — melhor esforço em
+  // segundo plano, nunca atrasa nem quebra a resposta já pronta. Só pro canal de voz:
+  // uma conversa pelo painel (texto) não significa que a pessoa OUVIU o briefing.
+  if (canal !== "painel" && saudacaoDetectada && briefingPendente && env.COMPANION_KV) {
     ctx.waitUntil((async () => {
       try {
         if (!briefingJaExistiaHoje) {
@@ -5415,6 +5432,7 @@ export function handleCompanionStream(env, ctx, trimmed, companionState) {
     try {
       turnCtx = await prepareCompanionTurn(env, ctx, trimmed, companionState);
       const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
+      companionState = { ...companionState, saudacaoDetectada: turnCtx.saudacaoDetectada };
 
       if (shortcutHit) {
         try {
@@ -5517,7 +5535,7 @@ export function handleCompanionStream(env, ctx, trimmed, companionState) {
       if (materialize) parsed.materialize = materialize;
       if (cards && cards.length) parsed.cards = cards;
       if (lousa) parsed.lousa = lousa;
-      parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics);
+      parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics, companionState?.origem === "painel" ? "painel" : "voz");
       const tDone = Date.now();
       await send("timing", {
         tReceived,
@@ -5876,7 +5894,8 @@ export default {
       return json({ disponiveis, ordemPadrao: (env.TTS_PROVIDER_ORDER || "elevenlabs,openai,azure,edge").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) });
     }
 
-    const { messages = [], petState = {}, companionState = {} } = body;
+    const { messages = [], petState = {} } = body;
+    let { companionState = {} } = body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return json({ error: "messages_required" }, 400);
@@ -5907,12 +5926,21 @@ export default {
       }
       // VOZ-4 PARTE B.2: streaming SSE — ativado só quando o app manda `stream:true`
       // no corpo. O formato JSON de sempre (abaixo) continua intacto como fallback.
+      //
+      // PAINEL-3: chamadas com companionState.origem === "painel" (a ponte do painel,
+      // api/jarbas.js?action=chat) exigem a mesma SYNC_KEY dos outros modos protegidos —
+      // é um chamador NOVO (o app de voz nunca manda "origem", e continua sem precisar
+      // de chave, exatamente como sempre funcionou).
+      if (mode === "companion" && companionState?.origem === "painel" && (!env.SYNC_KEY || body.key !== env.SYNC_KEY)) {
+        return json({ error: "unauthorized" }, 401);
+      }
       if (mode === "companion" && body.stream === true) {
         return handleCompanionStream(env, ctx, trimmed, companionState);
       }
       if (mode === "companion") {
         const turnCtx = await prepareCompanionTurn(env, ctx, trimmed, companionState);
         const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
+        companionState = { ...companionState, saudacaoDetectada: turnCtx.saudacaoDetectada };
         if (shortcutHit) {
           try {
             const shortcutReply = await resolveUserShortcut(env, shortcutHit);
@@ -5982,7 +6010,7 @@ export default {
         if (materialize) parsed.materialize = materialize;
         if (cards && cards.length) parsed.cards = cards;
         if (lousa) parsed.lousa = lousa;
-        parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics);
+        parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics, companionState?.origem === "painel" ? "painel" : "voz");
         return json(parsed);
       }
       const reply = await callGroq(env, chatSystemPrompt(petState), trimmed.map(({ role, content }) => ({ role, content })), 120);
