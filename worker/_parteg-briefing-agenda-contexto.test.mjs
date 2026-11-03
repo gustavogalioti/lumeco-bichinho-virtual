@@ -91,7 +91,7 @@ const EMOJI_REGEX = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
       resultado.fala.startsWith(`${amostra.saudacaoEsperada}, Gustavo!`),
       `[${amostra.nome}] deveria começar com "${amostra.saudacaoEsperada}, Gustavo!" (fala: "${resultado.fala}")`
     );
-    assert.ok(resultado.fala.length <= 450, `[${amostra.nome}] fala <= 450 caracteres (tem ${resultado.fala.length})`);
+    assert.ok(resultado.fala.length <= 1400, `[${amostra.nome}] fala <= 1400 caracteres (tem ${resultado.fala.length})`);
     assert.ok(!EMOJI_REGEX.test(resultado.fala), `[${amostra.nome}] fala nunca tem emoji ("${resultado.fala}")`);
     assert.ok(!/^\d+[.)]\s/m.test(resultado.fala), `[${amostra.nome}] fala nunca numera itens como lista ("${resultado.fala}")`);
     assert.ok(!/resumo do dia/i.test(resultado.fala), `[${amostra.nome}] fala nunca diz "resumo do dia" ("${resultado.fala}")`);

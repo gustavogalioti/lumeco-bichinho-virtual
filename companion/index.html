@@ -2446,8 +2446,11 @@ function openBriefingCard(card, title){
   if(card.clima) partes.push(`<p class="briefing-fala">${escapeHtml(card.clima)}</p>`);
   partes.push(renderBriefingCardSection('Agenda', card.agenda, (a) => `<li>${a && a.hora ? `${escapeHtml(a.hora)} — ` : ''}${escapeHtml((a && a.titulo) || '')}</li>`));
   if(card.tarefas && card.tarefas.total){
+    // FIX-3 PARTE B: rótulo mostra "Para Agora" e "De Hoje" separados, com a contagem
+    // de cada (antes só mostrava o total somado das duas colunas).
     const destaques = Array.isArray(card.tarefas.destaques) ? card.tarefas.destaques : [];
-    partes.push(`<h4>Tarefas</h4><p>${card.tarefas.total} no total.</p>${destaques.length ? `<ul>${destaques.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : ''}`);
+    const porColuna = card.tarefas.porColuna || {};
+    partes.push(`<h4>Tarefas</h4><p>🔥 Para Agora: ${porColuna.now || 0} · 🌟 De Hoje: ${porColuna.today || 0}</p>${destaques.length ? `<ul>${destaques.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : ''}`);
   }
   partes.push(renderBriefingCardSection('Contas', card.contas, (c) => `<li>${escapeHtml(c)}</li>`));
   partes.push(renderBriefingCardSection('Pendências', card.pendencias, (p) => `<li>${escapeHtml(p)}</li>`));

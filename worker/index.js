@@ -2498,7 +2498,7 @@ function logEventsToConsolidationText(eventos) {
 const CONSOLIDATION_PROMPT = (hojeISO) => `Você é o processo de consolidação de memória do Jarbas, um companheiro de voz. Hoje é ${hojeISO}. Você recebe: (1) a lista atual de itens de memória, cada um com um id entre colchetes; (2) as últimas mensagens da conversa; (3) um resumo do que aconteceu nos últimos 7 dias (conversas, ações, leituras, mudanças no painel — o Diário do Jarbas). Sua tarefa é ORGANIZAR a memória — NUNCA apagar nada, só reorganizar e enriquecer.
 
 Faça isso, cada item de cada categoria abaixo:
-a) mesclar: itens duplicados ou muito parecidos — escolha um id pra manter (manterId) e liste os outros ids como descartados (descartarIds; eles serão arquivados, nunca apagados).
+a) mesclar: itens duplicados ou muito parecidos — escolha um id pra manter (manterId) e liste os outros ids como descartados (descartarIds; eles serão arquivados, nunca apagados). Preste atenção ESPECIAL em pendências (kind="pendencia"): é muito comum o mesmo compromisso ("ligar pro Pedro", "retornar pro Sr. Oscar") ser salvo mais de uma vez em conversas diferentes — sempre que duas pendências forem claramente a mesma coisa (mesmo texto, ou um contendo o outro), mescle-as em vez de deixar as duas ativas; nunca crie uma pendência nova (item "e") se uma equivalente já existir na lista atual.
 b) promover: itens que se repetem bastante ou são claramente permanentes (trabalho, relacionamento, característica, preferência) — promova de "episodico" pra "duradouro" (id + novoTipo:"duradouro").
 c) arquivar: ids de itens pontuais/episódicos que claramente já passaram (um evento específico que já aconteceu e não tem mais relevância prática pra conversas futuras) — NUNCA arquive um item "duradouro" ou uma "correcao" importante.
 d) contradicoes: quando um fato novo (da conversa recente ou do Diário) contradiz um item antigo da lista — crie o fato novo e correto (texto, entidades, importancia:3) e arquive o antigo (arquivarId).
@@ -2801,8 +2801,13 @@ async function gatherDayData(env, { items, hojeISO } = {}) {
 const TELAS_CACHE_KEY = "telas:cache";
 const TELAS_CACHE_TTL_MS = 5 * 60 * 1000;
 
+// FIX-3 PARTE A: defesa em profundidade — a mesma tarefa/conta (título igual, dentro da
+// mesma coluna/mesmo vencimento) não conta duas vezes nas telas, mesmo que `?action=
+// mudancas` tenha devolvido uma cópia solta. Sem `titulo` (como em dados de teste
+// antigos), nunca deduplica — só compara quando há texto real.
 export function construirTelasTarefas(tarefasItens) {
-  const itens = Array.isArray(tarefasItens) ? tarefasItens : [];
+  const brutos = Array.isArray(tarefasItens) ? tarefasItens : [];
+  const itens = dedupePorChave(brutos, (t) => (t && t.titulo ? `${t.status || ""}|${normalizeText(t.titulo)}` : ""));
   const porColuna = {};
   for (const t of itens) {
     const col = (t && t.status) || "outro";
@@ -2812,7 +2817,8 @@ export function construirTelasTarefas(tarefasItens) {
 }
 
 export function construirTelasContas(contasItens, dayOfMonth) {
-  const itens = Array.isArray(contasItens) ? contasItens : [];
+  const brutos = Array.isArray(contasItens) ? contasItens : [];
+  const itens = dedupePorChave(brutos, (c) => (c && c.titulo ? `${normalizeText(c.titulo)}|${c.data || ""}` : ""));
   let vencendo = 0;
   for (const c of itens) {
     if (!c || c.status !== "pendente" || !c.data) continue;
@@ -2942,18 +2948,102 @@ async function runRoutine(env, ingredients, links, companionState) {
   return parsed;
 }
 
-// PARTE A: o briefing é o Jarbas chegando pra contar o dia pro Gustavo, não um
-// relatório. A hora atual vem no `content` (veja gerarBriefing) pra saudação ser sempre a
-// certa; aberturas recentes também vêm no `content` pra o modelo variar sem nunca
-// sacrificar a saudação em si.
-const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso, chegando pra contar pro Gustavo como tá o dia dele — não lendo um relatório pra ele. Você vai receber a hora atual, dados brutos já verificados (clima, agenda, tarefas, contas, pendências que ele tinha dito que ia resolver, coisas que aconteceram enquanto ele dormia) e, às vezes, aberturas que você já usou recentemente.
-Abra SEMPRE com a saudação certa pra hora informada ("Bom dia, Gustavo" de manhã; "Boa tarde, Gustavo" à tarde; "Boa noite, Gustavo" de madrugada ou à noite), seguida de UMA frase de entrada curta e leve — nunca "Olá", nunca "aqui está o seu resumo", e nunca repita literalmente uma das aberturas recentes informadas, varie o jeito de dizer a cada vez. Depois da abertura, conte o essencial em 4 a 6 frases curtas e naturais, como você mesmo contaria pra ele num fôlego só: o primeiro compromisso, o que pede atenção hoje, e 1 ou 2 destaques — NUNCA leia listas inteiras nem mencione fontes técnicas ("segundo o painel"); o resto fica disponível num cartão na tela, você não precisa (e não deve) falar tudo.
-PROIBIDO: começar sem a saudação; usar listas faladas, numeração ("primeiro, segundo..."), o cabeçalho "resumo do dia:", o título/palavra "briefing", ou qualquer emoji.
-A fala tem NO MÁXIMO 450 caracteres no total, contando a saudação. Se algum dado vier vazio ou "não consegui consultar", simplesmente não mencione essa parte. Se não houver nada urgente, seja breve e leve, sem inventar urgência que não existe.
+// FIX-3 PARTE B: o Jarbas não "compõe" mais o briefing livremente a partir de dados
+// brutos — ele só REESCREVE, de forma mais natural, um texto determinístico que JÁ cobre
+// 100% do que precisa ser dito (ver montarBriefingDeterministico). Isso resolve o bug
+// relatado de fala incompleta/infiel: antes o modelo decidia sozinho o que contar (e
+// cortava agenda/tarefas/contas pela metade); agora ele só pode reescrever, nunca
+// resumir ou escolher o que falar — e a resposta dele é validada (falaEhFielAoDeterministico)
+// antes de ser usada, com fallback pro texto determinístico se faltar qualquer fato.
+const BRIEFING_PROMPT = `Você é o Jarbas, um companheiro de voz caloroso e afetuoso. Você recebe um texto DETERMINÍSTICO já pronto, com TUDO que precisa ser dito pro Gustavo sobre o dia dele (saudação, agenda, tarefas, contas, pendências, o que rolou enquanto ele dormia, e um fechamento). Sua ÚNICA tarefa é REESCREVER esse texto de um jeito mais natural e fluido, como se você mesmo estivesse contando pra ele num fôlego só — nunca lendo um relatório, mas também nunca resumindo ou cortando nada.
+
+REGRAS (siga à risca):
+- Pode reordenar frases, trocar conectivos, e variar o jeito de abrir (a frase logo depois da saudação) — inclusive em relação às aberturas recentes informadas, se vierem.
+- NUNCA omita nenhum fato do texto original: todo compromisso, toda tarefa, toda conta, toda pendência e tudo que aconteceu enquanto ele dormia precisam continuar aparecendo, com os MESMOS nomes, horários e valores.
+- NUNCA invente nenhum fato, nome, horário ou número que não esteja no texto original.
+- NUNCA mude o sentido de um fato (ex: trocar "vence hoje" por "já venceu", ou um horário por outro).
+- Mantenha a saudação original no começo ("Bom dia"/"Boa tarde"/"Boa noite" + "Gustavo").
+- PROIBIDO: listas faladas com numeração tipo "1.", "2."; o cabeçalho "resumo do dia:"; a palavra "briefing"; qualquer emoji. Contar na ordem "primeiro isso, depois aquilo", como alguém contaria uma história, está OK.
+- Se o texto original já diz que está tudo tranquilo, mantenha leve, sem inventar urgência.
 Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
-{"title":"Bom dia","fala":"texto curto da fala, até 450 caracteres, começando pela saudação"}
+{"fala":"o texto reescrito, com TODOS os fatos do original, começando pela mesma saudação"}
 Nunca deixe o JSON incompleto.`;
+
+// FIX-3 PARTE B (revisão pós-review): valida se a reescrita do LLM manteve TODOS os
+// itens do CARD — não mais uma comparação "por palavras-chave com tolerância", e sim
+// item por item (cada compromisso, tarefa, conta e pendência), ZERO tolerância: falhar
+// em UM item já reprova a reescrita inteira. ("Enquanto você dormia" e a ideia do dia
+// ficam de fora de propósito — a fala resume aquilo em UMA frase agregada por tipo, por
+// design, nunca lista os itens individualmente, então não há "item" fixo pra cobrar ali.)
+function palavrasSignificativasDoTitulo(texto) {
+  const STOP = new Set(["de", "da", "do", "das", "dos", "e", "a", "o", "as", "os", "em", "no", "na", "com", "pro", "pra", "para", "um", "uma"]);
+  // Números (mesmo curtos, tipo "3") NUNCA são descartados por tamanho — "Tarefa Beta 3"
+  // vs "Tarefa Beta 4" só se diferenciam pelo número, então ele tem que ser conferido.
+  return normalizeText(texto).split(" ").filter((w) => (w.length >= 3 || /^\d+$/.test(w)) && !STOP.has(w));
+}
+
+// Um título "aparece" na fala se TODAS as suas palavras significativas (>=3 letras, fora
+// artigos/preposições) estiverem presentes — permite reescrita natural ao redor do nome,
+// mas nunca aceita o nome em si sumir.
+function tituloApareceNaFala(titulo, falaNormalizada) {
+  const palavras = palavrasSignificativasDoTitulo(titulo);
+  if (!palavras.length) return true;
+  return palavras.every((w) => falaNormalizada.includes(w));
+}
+
+function numeroPorExtensoPT(n) {
+  const UNIDADES = ["zero", "um", "dois", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+  if (n < 20) return UNIDADES[n];
+  const DEZENAS = ["", "", "vinte", "trinta", "quarenta", "cinquenta"];
+  const dezena = Math.floor(n / 10), resto = n % 10;
+  return resto === 0 ? DEZENAS[dezena] : `${DEZENAS[dezena]} e ${UNIDADES[resto]}`;
+}
+
+// Um horário "HH:MM" aparece na fala em qualquer formato razoável que um reescritor
+// natural usaria: "10:00", "10h00"/"10h", ou por extenso ("dez horas", "dez e trinta",
+// "dez e meia", "meio-dia", "meia-noite").
+function horaApareceNaFala(hora, falaNormalizada) {
+  const m = /^(\d{2}):(\d{2})$/.exec(hora || "");
+  if (!m) return true; // horário em formato inesperado — não é isso que estamos validando
+  const h = Number(m[1]), min = Number(m[2]);
+  const candidatos = [`${m[1]}:${m[2]}`, `${h}h${m[2]}`];
+  if (min === 0) candidatos.push(`${h}h`, `${h} horas`, `${numeroPorExtensoPT(h)} horas`);
+  else if (min === 30) candidatos.push(`${numeroPorExtensoPT(h)} e meia`);
+  else candidatos.push(`${numeroPorExtensoPT(h)} e ${numeroPorExtensoPT(min)}`);
+  if (h === 12 && min === 0) candidatos.push("meio-dia");
+  if (h === 0 && min === 0) candidatos.push("meia-noite");
+  return candidatos.some((c) => falaNormalizada.includes(normalizeText(c)));
+}
+
+// Extrai os itens que precisam aparecer na fala, a partir do MESMO card que o
+// determinístico monta (nunca "e mais N", que é só o marcador de corte).
+function itensObrigatoriosDoCard(card) {
+  const semMarcador = (s) => typeof s === "string" && !/^e mais /i.test(s);
+  const itens = [];
+  for (const a of (card.agenda || [])) {
+    if (a && a.titulo && !/^e mais /i.test(a.titulo)) itens.push({ texto: a.titulo, hora: a.hora || "" });
+  }
+  for (const t of (card.tarefas?.destaques || [])) if (semMarcador(t)) itens.push({ texto: t });
+  for (const c of (card.contas || [])) {
+    if (!semMarcador(c)) continue;
+    const m = c.match(/"([^"]+)"/); // o nome entre aspas é o que de fato identifica a conta
+    itens.push({ texto: m ? m[1] : c });
+  }
+  for (const p of (card.pendencias || [])) {
+    if (semMarcador(p)) itens.push({ texto: String(p).replace(/^"|"$/g, "") });
+  }
+  return itens;
+}
+
+export function falaEhFielAoDeterministico(falaCandidata, card) {
+  const falaNormalizada = normalizeText(falaCandidata);
+  for (const item of itensObrigatoriosDoCard(card || {})) {
+    if (!tituloApareceNaFala(item.texto, falaNormalizada)) return false;
+    if (item.hora && !horaApareceNaFala(item.hora, falaNormalizada)) return false;
+  }
+  return true;
+}
 
 // ---------- F2-3b/PARTE B: monta o briefing matinal — SEM IA reúne os dados (clima,
 // agenda, tarefas, contas, pendências, fila de avisos adiados durante o sono) e monta o
@@ -3009,32 +3099,44 @@ async function gerarBriefing(env, config, companionState) {
   const filaBruta = await readPushQueue(env);
   const filaFiltrada = filtrarFilaParaBriefing(filaBruta, { hoje, agoraMin, idsContasVivas, idsTarefasVivas });
 
-  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens: filaFiltrada, hour, dayOfMonth });
+  const determinado = montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens: filaFiltrada, hour, minute, dayOfMonth });
 
   // PARTE C/H: ideia do dia (se houver uma gerada hoje pela consolidação) como UMA
   // frase final natural — nunca gera chamada de LLM extra aqui, só reaproveita o que
   // já foi gerado e cabe no limite (se não couber, truncarNaUltimaFrase corta fora
   // a frase inteira, nunca deixa pela metade).
   const ideiaFraseFinal = anexarIdeiaDoDiaNoBriefing(companionState?.ideias, hoje);
+  // FIX-3 PARTE B (revisão pós-review): este É o texto completo e fiel (cobre 100% do
+  // card) — o LLM só reescreve ele, nunca compõe a partir dos dados brutos. É também o
+  // fallback direto se o LLM falhar ou devolver uma versão infiel. NUNCA é cortado: o
+  // teto de 1.400 caracteres vale só pra reescrita do LLM (abaixo), não pro
+  // determinístico — um dia muito cheio pode passar de 1.400 e sai inteiro assim mesmo.
+  const determinadoComIdeia = `${determinado.fala}${ideiaFraseFinal}`;
 
   let llmCalls = 0;
+  let fidelidadeFallback = false;
   try {
     const aberturasRecentes = await lerAberturasRecentes(env);
-    const filaTextos = filaFiltrada.map((item) => item.texto);
-    const horaTexto = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-    const content = `Hora atual: ${horaTexto}\nClima: ${climaTexto || "(sem dados)"}\nAgenda de hoje: ${agendaTexto}\nTarefas de hoje (só Para Agora e De Hoje): ${tarefasTexto}\nContas do dia/atrasadas: ${contasTextos.join(" ") || "(nenhuma)"}\nPendências que ele tinha dito que ia resolver: ${pendenciasTextos.join(" ") || "(nenhuma)"}\nEnquanto ele dormia: ${filaTextos.join(" ") || "(nada)"}${aberturasRecentes.length ? `\nAberturas recentes (não repita, varie): ${aberturasRecentes.join(" | ")}` : ""}`;
-    const raw = await callGroq(env, BRIEFING_PROMPT, [{ role: "user", content }], 400);
+    const content = `Texto determinístico (reescreva de forma mais natural, SEM omitir nenhum fato):\n${determinadoComIdeia}${aberturasRecentes.length ? `\n\nAberturas recentes que você já usou (varie a frase de abertura, não repita nenhuma dessas literalmente): ${aberturasRecentes.join(" | ")}` : ""}`;
+    const raw = await callGroq(env, BRIEFING_PROMPT, [{ role: "user", content }], 900);
     llmCalls = 1;
     const clean = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
     if (!parsed.fala) throw new Error("no_fala_field");
-    const fala = truncarNaUltimaFrase(`${parsed.fala}${ideiaFraseFinal}`, 450);
-    await registrarAbertura(env, extrairAberturaBriefing(fala));
-    return { title: parsed.title || "Bom dia", fala, card: determinado.card, body: truncarNaUltimaFrase(fala, 140), llmCalls };
+    const falaCandidata = truncarNaUltimaFrase(parsed.fala, 1400);
+    if (!falaEhFielAoDeterministico(falaCandidata, determinado.card)) {
+      fidelidadeFallback = true;
+      throw new Error("fala_infiel_ao_determinado");
+    }
+    await registrarAbertura(env, extrairAberturaBriefing(falaCandidata));
+    return { title: determinado.title, fala: falaCandidata, card: determinado.card, body: truncarNaUltimaFrase(falaCandidata, 140), llmCalls, fidelidadeFallback: false };
   } catch (err) {
-    console.error("briefing_llm_failed, usando texto determinístico:", String(err?.message || err));
-    const falaComIdeia = truncarNaUltimaFrase(`${determinado.fala}${ideiaFraseFinal}`, 450);
-    return { ...determinado, fala: falaComIdeia, body: truncarNaUltimaFrase(falaComIdeia, 140), llmCalls };
+    if (fidelidadeFallback) {
+      console.error("briefing_llm_infiel_ao_texto_determinado, usando o determinístico (fallback por infidelidade).");
+    } else {
+      console.error("briefing_llm_failed, usando texto determinístico:", String(err?.message || err));
+    }
+    return { ...determinado, fala: determinadoComIdeia, body: truncarNaUltimaFrase(determinadoComIdeia, 140), llmCalls, fidelidadeFallback };
   }
 }
 
@@ -4042,12 +4144,51 @@ export function deveDispararBriefing({ agora, config, dormindo, jaFeitoHoje }) {
   return agoraMin >= briefingMin && agoraMin < briefingMin + 180;
 }
 
+// FIX-3 PARTE A: dedupe genérico por chave — usado em vários pontos do briefing/card
+// como defesa em profundidade (mesmo já deduplicado na origem, nunca confia cegamente
+// numa fonte externa). `chaveFn` devolve "" (string vazia) quando não há texto real pra
+// comparar — nesse caso o item NUNCA é tratado como duplicata de nada (só compara quando
+// há de fato uma chave significativa), pra nunca descartar itens por engano só porque
+// faltava um campo (ex: tarefa sem `titulo`).
+function dedupePorChave(lista, chaveFn) {
+  const arr = Array.isArray(lista) ? lista : [];
+  const vistos = new Set();
+  const resultado = [];
+  for (const item of arr) {
+    const chave = chaveFn(item);
+    if (chave && vistos.has(chave)) continue;
+    if (chave) vistos.add(chave);
+    resultado.push(item);
+  }
+  return resultado;
+}
+
 // Pendências (mem.items, kind="pendencia") com followUpAt hoje ou já vencido, e ainda
 // ativas (nunca arquivadas/feitas/canceladas) — pura, o chamador decide quais já foram
 // avisadas (isso é I/O, fica em KV pendencia:avisada:<id>).
+//
+// FIX-3 PARTE A: pendência duplicada na origem (o mesmo fato salvo duas vezes na
+// memória, ou uma pendência + um resumo quase idêntico dela) não vira dois avisos —
+// textos idênticos, um contido no outro, ou iguais depois de normalizar (minúsculas,
+// sem acento/pontuação) contam como a MESMA pendência; quando bate, mantém a de prazo
+// (followUpAt) mais antigo, que é a mais urgente/a original.
+function pendenciasEquivalentes(textoA, textoB) {
+  const a = normalizeText(textoA);
+  const b = normalizeText(textoB);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
 export function selecionarPendenciasVencidas(items, hojeISO) {
   const list = Array.isArray(items) ? items : [];
-  return list.filter((it) => it && it.kind === "pendencia" && it.status === "ativo" && typeof it.followUpAt === "string" && it.followUpAt <= hojeISO);
+  const vencidas = list.filter((it) => it && it.kind === "pendencia" && it.status === "ativo" && typeof it.followUpAt === "string" && it.followUpAt <= hojeISO);
+  const resultado = [];
+  for (const p of vencidas) {
+    const idx = resultado.findIndex((r) => pendenciasEquivalentes(r.text, p.text));
+    if (idx === -1) { resultado.push(p); continue; }
+    if (p.followUpAt < resultado[idx].followUpAt) resultado[idx] = p; // prazo mais antigo prevalece
+  }
+  return resultado;
 }
 
 // Itens de push:fila acumulados durante o sono, filtrados pro briefing: agenda com
@@ -4088,9 +4229,14 @@ export function truncarNaUltimaFrase(text, limit) {
 // formato "HH:MM Título; HH:MM Título" que o cron já faz o parse em
 // checkAgendaProximosGatilhos — duplicado aqui de propósito, sem tocar naquela função
 // de avisos, que é escopo de outra frente).
+// FIX-3 PARTE A: defesa em profundidade — o painel (api/jarbas.js) já deduplica eventos
+// local/Google/Outlook antes de montar esse texto, mas o Worker nunca confia cegamente
+// numa fonte externa: mesmo horário + título normalizado (minúsculas, sem acento/
+// pontuação) nunca aparece duas vezes na agenda falada/no cartão.
 export function parseAgendaTexto(agendaTexto) {
   if (typeof agendaTexto !== "string" || !agendaTexto) return [];
-  return [...agendaTexto.matchAll(/(\d{2}:\d{2})\s+([^;]+)/g)].map(([, hora, tituloRaw]) => ({ hora, titulo: tituloRaw.trim() }));
+  const bruto = [...agendaTexto.matchAll(/(\d{2}:\d{2})\s+([^;]+)/g)].map(([, hora, tituloRaw]) => ({ hora, titulo: tituloRaw.trim() }));
+  return dedupePorChave(bruto, (e) => `${e.hora}|${normalizeText(e.titulo)}`);
 }
 
 // PARTE B: cartão de tarefas (total/porColuna/destaques) a partir dos itens
@@ -4109,24 +4255,31 @@ export function filtrarTarefasPorColunas(tarefasItens, colunas) {
   return itens.filter((t) => wanted.includes(t && t.status));
 }
 
-function construirCardTarefas(tarefasItens, colunas) {
-  const itens = filtrarTarefasPorColunas(tarefasItens, colunas);
-  const porColuna = {};
-  for (const t of itens) {
-    const col = (t && t.status) || "outro";
-    porColuna[col] = (porColuna[col] || 0) + 1;
-  }
-  const ordenados = [...itens].sort((a, b) => (a?.status === "now" ? 0 : 1) - (b?.status === "now" ? 0 : 1));
-  const destaques = ordenados.slice(0, 5).map((t) => String((t && t.titulo) || "").trim()).filter(Boolean);
-  return { total: itens.length, porColuna, destaques };
-}
-
 // PARTE B: limita uma lista a `max` itens, acrescentando um marcador "e mais N" quando
 // há mais — nunca despeja a lista inteira no cartão (nem, por extensão, na fala).
 function comMaisN(lista, max, criarMarcador) {
   const arr = Array.isArray(lista) ? lista : [];
   if (arr.length <= max) return arr;
   return [...arr.slice(0, max), criarMarcador(arr.length - max)];
+}
+
+// FIX-3 PARTE A: defesa em profundidade — duas tarefas com o MESMO título normalizado
+// (minúsculas, sem acento/pontuação) na mesma consulta nunca viram duas linhas/dois
+// avisos, mesmo que a fonte (?action=mudancas) tenha devolvido uma cópia solta.
+function construirCardTarefas(tarefasItens, colunas) {
+  const itensFiltrados = filtrarTarefasPorColunas(tarefasItens, colunas);
+  const itens = dedupePorChave(itensFiltrados, (t) => (t && t.titulo ? normalizeText(t.titulo) : ""));
+  const porColuna = {};
+  for (const t of itens) {
+    const col = (t && t.status) || "outro";
+    porColuna[col] = (porColuna[col] || 0) + 1;
+  }
+  const ordenados = [...itens].sort((a, b) => (a?.status === "now" ? 0 : 1) - (b?.status === "now" ? 0 : 1));
+  const titulos = ordenados.map((t) => String((t && t.titulo) || "").trim()).filter(Boolean);
+  // FIX-3 PARTE A: "7 no total" é a contagem já deduplicada (itens.length acima); os
+  // destaques listam até 8 (era 5, cortando sem avisar) com "e mais N" quando sobra.
+  const destaques = comMaisN(titulos, 8, (n) => `e mais ${n}`);
+  return { total: itens.length, porColuna, destaques };
 }
 
 // PARTE B: a fila de avisos adiados durante o sono SEMPRE virava uma frase por item
@@ -4149,68 +4302,199 @@ function resumirFilaDoSono(filaItens) {
   return `Enquanto você dormia, ${clausulas.join(" e ")}.`;
 }
 
-// PARTE A: aberturas leves pra variar o início da fala sem sacrificar a saudação —
-// escolhidas por dia do mês (determinístico, sem IA, sem precisar de KV aqui).
-const BRIEFING_ABERTURAS_LEVES = [
-  "deixa eu te contar como tá o dia.",
-  "vem ver o que te espera hoje.",
-  "separei o que importa pra você.",
-  "um resumo rápido do que vem por aí.",
-  "olha só o que tem pela frente.",
-];
+// FIX-3 PARTE C: título do push/cartão por período do dia — antes era sempre "Bom dia"
+// (hardcoded), não importava a hora; "Resumo do dia"/"O que falta hoje"/"Fechamento do
+// dia" são os 3 estados que o cartão mostra (briefingCardTitle em companion/index.html).
+export function tituloBriefingPorPeriodo(hour) {
+  const p = periodoDoDia(hour);
+  if (p === "manha") return "Resumo do dia";
+  if (p === "tarde") return "O que falta hoje";
+  return "Fechamento do dia"; // noite e madrugada
+}
 
-// Monta o briefing SEM IA — usado como fallback se o LLM falhar, e também pra montar
-// sempre o `card` (nunca gerado por IA). Nunca despeja lista crua: `fala` conta e
-// destaca (nunca mais que ~3 destaques), nunca uma frase por item. PARTE A: sempre abre
-// com a saudação certa pra hora (`hour`), seguida de uma frase de entrada leve que varia.
-export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens, hour, dayOfMonth }) {
-  const agendaLista = parseAgendaTexto(agendaTexto);
+// FIX-3 PARTE C: aberturas leves por PERÍODO do dia (antes eram só por dia do mês,
+// ignorando a hora — causa real do bug relatado: "vem ver o que te espera hoje" às
+// 15h). Dentro de cada período, ainda varia por dia do mês (nunca sempre a mesma frase).
+const BRIEFING_ABERTURAS_POR_PERIODO = {
+  manha: [
+    "deixa eu te contar como tá o dia.",
+    "vem ver o que te espera hoje.",
+    "separei o que importa pra você.",
+    "um resumo rápido do que vem por aí.",
+    "olha só o que tem pela frente.",
+  ],
+  tarde: [
+    "deixa eu te contar como tá o resto do dia.",
+    "vem ver o que ainda falta hoje.",
+    "separei o que ainda pede atenção.",
+    "um resumo rápido do que sobrou pro dia.",
+    "olha só o que ainda tem pela frente.",
+  ],
+  noite: [
+    "deixa eu fechar o dia com você.",
+    "vem ver como ficou o dia.",
+    "separei o fechamento de hoje, e uma olhada em amanhã.",
+    "um resumo rápido de como foi o dia.",
+    "olha só como ficou tudo, e o que vem amanhã.",
+  ],
+};
+BRIEFING_ABERTURAS_POR_PERIODO.madrugada = BRIEFING_ABERTURAS_POR_PERIODO.noite;
+
+const BRIEFING_FECHAMENTOS_POR_PERIODO = {
+  manha: ["Bora pro dia!", "Vamos com tudo hoje!", "Qualquer coisa, é só me chamar."],
+  tarde: ["Segue firme que o dia ainda rende.", "Falta pouco, vamos nessa.", "Qualquer coisa, é só me chamar."],
+  noite: ["Descansa bem.", "Amanhã a gente recomeça.", "Boa noite pra você."],
+};
+BRIEFING_FECHAMENTOS_POR_PERIODO.madrugada = BRIEFING_FECHAMENTOS_POR_PERIODO.noite;
+
+const BRIEFING_DIA_VAZIO_POR_PERIODO = {
+  manha: "Hoje tá tranquilo, nada de urgente pra te contar agora.",
+  tarde: "O resto do dia tá tranquilo, nada de urgente pendente.",
+  noite: "O dia foi tranquilo, nada de urgente ficou pra trás.",
+};
+BRIEFING_DIA_VAZIO_POR_PERIODO.madrugada = BRIEFING_DIA_VAZIO_POR_PERIODO.noite;
+
+// FIX-3 PARTE C: à tarde/noite, compromissos que já passaram não entram como "o que te
+// espera" — de manhã mostra o dia inteiro (ele está só começando).
+function filtrarAgendaFutura(agendaLista, hour, minute) {
+  if (!Number.isFinite(hour) || periodoDoDia(hour) === "manha") return agendaLista;
+  const agoraMin = hour * 60 + (Number.isFinite(minute) ? minute : 0);
+  return agendaLista.filter((e) => {
+    const m = /^(\d{2}):(\d{2})$/.exec((e && e.hora) || "");
+    if (!m) return true; // sem horário reconhecível — nunca esconde por falta de dado
+    return Number(m[1]) * 60 + Number(m[2]) >= agoraMin;
+  });
+}
+
+// Junta uma lista de textos numa frase natural: "A", "A e B", "A, B e C" — quando o
+// último item já é o marcador "e mais N" do comMaisN, usa vírgula em vez de duplicar o
+// "e" (ex: "A, B, e mais 3" em vez de "A, B e e mais 3").
+function enumerarNaturalmente(itens) {
+  const lista = (Array.isArray(itens) ? itens : []).filter(Boolean);
+  if (!lista.length) return "";
+  if (lista.length === 1) return lista[0];
+  const ultimo = lista[lista.length - 1];
+  const conector = /^e mais /i.test(ultimo) ? ", " : " e ";
+  return `${lista.slice(0, -1).join(", ")}${conector}${ultimo}`;
+}
+
+// PARTE B: agenda completa falada — TODOS os compromissos (até 8, "e mais N" depois
+// disso), com horário, na ordem "primeiro ... depois ... por fim ...", nunca só o
+// primeiro + contagem (era assim antes, e era exatamente onde a fala "parava").
+function fraseAgendaCompleta(agendaLista, periodo, quantosJaPassaram) {
+  if (!agendaLista.length) {
+    if (quantosJaPassaram > 0) {
+      return periodo === "manha"
+        ? "Hoje a agenda tá livre, nada marcado."
+        : "Os compromissos que tinha pra hoje já passaram.";
+    }
+    return "Hoje a agenda tá livre, nada marcado.";
+  }
+  const limitada = comMaisN(agendaLista, 8, (n) => ({ hora: "", titulo: `e mais ${n} compromisso${n > 1 ? "s" : ""}` }));
+  if (limitada.length === 1) {
+    const e = limitada[0];
+    return `Você tem 1 compromisso hoje: ${e.titulo}${e.hora ? `, às ${e.hora}` : ""}.`;
+  }
+  const partes = limitada.map((e, i) => {
+    const marcador = i === 0 ? "primeiro" : i === limitada.length - 1 ? "por fim" : "depois";
+    return `${marcador}${e.hora ? ` às ${e.hora}` : ""}, ${e.titulo}`;
+  });
+  return `Você tem ${agendaLista.length} compromissos hoje; ${partes.join("; ")}.`;
+}
+
+// PARTE B: tarefas completas faladas — todas as de Para Agora/De Hoje (até 8, "e mais
+// N"), nunca só os 3 principais (era assim antes).
+function fraseTarefasCompleta(cardTarefas) {
+  const nomes = enumerarNaturalmente(cardTarefas.destaques);
+  return cardTarefas.total === 1
+    ? `Tem 1 tarefa pedindo atenção: ${nomes}.`
+    : `São ${cardTarefas.total} tarefas pedindo atenção: ${nomes}.`;
+}
+
+// PARTE B: contas completas faladas — cada `contasTextos` já vem como frase pronta
+// ('Conta "Luz" vence hoje.'), então só emenda (até 8, "e mais N").
+function fraseContasCompleta(contasCapadas) {
+  if (contasCapadas.length === 1) return contasCapadas[0];
+  return `Nas contas: ${contasCapadas.join(" ")}`;
+}
+
+// PARTE B: pendências completas faladas — `pendenciasTextos` chega entre aspas
+// (`"ligar pro Pedro"`), tira as aspas só na fala (o cartão mantém como veio).
+function fracPendenciasCompleta(pendenciasCapadas) {
+  const limpas = pendenciasCapadas.map((p) => String(p).replace(/^"|"$/g, ""));
+  const nomes = enumerarNaturalmente(limpas);
+  return pendenciasCapadas.length === 1
+    ? `Você tinha dito que ia resolver ${nomes}.`
+    : `Você tinha dito que ia resolver: ${nomes}.`;
+}
+
+// Monta o briefing SEM IA — usado como fallback se o LLM falhar (ou se a versão dele não
+// for fiel, ver falaEhFielAoDeterministico), e também pra montar sempre o `card` (nunca
+// gerado por IA). FIX-3 PARTE B: a fala agora cobre TUDO que está no card (clima, agenda
+// inteira, tarefas de Para Agora/De Hoje inteiras, contas, pendências, "enquanto você
+// dormia"), nunca só uma amostra — card e fala vêm da MESMA lista já filtrada/deduplicada
+// em cada seção, então o que está no cartão é exatamente o que foi falado.
+// PARTE A: sempre abre com a saudação certa pra hora (`hour`); PARTE C: a abertura leve,
+// o título e o vocabulário da agenda variam pelo PERÍODO do dia (manhã/tarde/noite), não
+// só pelo dia do mês.
+export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasItens, contasTextos, pendenciasTextos, filaItens, hour, minute, dayOfMonth }) {
+  const horaValida = Number.isFinite(hour) ? hour : 9;
+  const minutoValido = Number.isFinite(minute) ? minute : 0;
+  const diaValido = Number.isFinite(dayOfMonth) ? dayOfMonth : 1;
+  const periodo = periodoDoDia(horaValida);
+
+  const agendaBruta = parseAgendaTexto(agendaTexto);
+  const agendaLista = filtrarAgendaFutura(agendaBruta, horaValida, minutoValido);
+  const quantosJaPassaram = agendaBruta.length - agendaLista.length;
+
   const cardTarefas = construirCardTarefas(tarefasItens);
-  const contas = Array.isArray(contasTextos) ? contasTextos : [];
-  const pendencias = Array.isArray(pendenciasTextos) ? pendenciasTextos : [];
+  const contas = dedupePorChave(Array.isArray(contasTextos) ? contasTextos : [], (c) => normalizeText(c));
+  const pendencias = dedupePorChave(Array.isArray(pendenciasTextos) ? pendenciasTextos : [], (p) => normalizeText(p));
   const fila = Array.isArray(filaItens) ? filaItens : [];
+
+  // Listas já capadas em 8 + "e mais N" — usadas IGUAIS no card e na fala (mesma fonte).
+  const agendaCapada = comMaisN(agendaLista, 8, (n) => ({ hora: "", titulo: `e mais ${n}` }));
+  const contasCapadas = comMaisN(contas, 8, (n) => `e mais ${n}`);
+  const pendenciasCapadas = comMaisN(pendencias, 8, (n) => `e mais ${n}`);
+  const aoDormirCapado = comMaisN(fila.map((i) => i && i.texto).filter(Boolean), 8, (n) => `e mais ${n}`);
 
   const frases = [];
   if (climaTexto) frases.push(climaTexto.trim());
-  if (agendaLista.length) {
-    const primeiro = agendaLista[0];
-    frases.push(agendaLista.length === 1
-      ? `Você tem 1 compromisso hoje: ${primeiro.titulo}, às ${primeiro.hora}.`
-      : `Você tem ${agendaLista.length} compromissos hoje; o primeiro é ${primeiro.titulo}, às ${primeiro.hora}.`);
-  }
-  if (cardTarefas.total) {
-    const destaquesTxt = cardTarefas.destaques.slice(0, 3).join(", ");
-    frases.push(cardTarefas.total === 1
-      ? `Tem 1 tarefa pedindo atenção${destaquesTxt ? `: ${destaquesTxt}` : ""}.`
-      : `São ${cardTarefas.total} tarefas pedindo atenção${destaquesTxt ? `, as principais: ${destaquesTxt}` : ""}.`);
-  }
-  if (contas.length) frases.push(contas.length === 1 ? contas[0] : `Você tem ${contas.length} contas pra olhar.`);
-  if (pendencias.length) {
-    frases.push(pendencias.length === 1
-      ? `Você tinha dito que ia resolver ${pendencias[0].replace(/^"|"$/g, "")}.`
-      : `Você tinha dito que ia resolver ${pendencias.length} coisas que ainda estão pendentes.`);
-  }
+  frases.push(fraseAgendaCompleta(agendaLista, periodo, quantosJaPassaram));
+  if (cardTarefas.total) frases.push(fraseTarefasCompleta(cardTarefas));
+  if (contas.length) frases.push(fraseContasCompleta(contasCapadas));
+  if (pendencias.length) frases.push(fracPendenciasCompleta(pendenciasCapadas));
   const filaFrase = resumirFilaDoSono(fila);
   if (filaFrase) frases.push(filaFrase);
 
-  const horaValida = Number.isFinite(hour) ? hour : 9;
-  const diaValido = Number.isFinite(dayOfMonth) ? dayOfMonth : 1;
   const saudacao = `${saudacaoPorHora(horaValida)}, Gustavo!`;
-  const abertura = BRIEFING_ABERTURAS_LEVES[diaValido % BRIEFING_ABERTURAS_LEVES.length];
-  const corpo = frases.length ? frases.join(" ") : "Hoje tá tranquilo, nada de urgente pra te contar agora.";
-  const fala = `${saudacao} ${abertura} ${corpo}`;
-  const falaFinal = truncarNaUltimaFrase(fala, 450);
+  const aberturas = BRIEFING_ABERTURAS_POR_PERIODO[periodo] || BRIEFING_ABERTURAS_POR_PERIODO.manha;
+  const abertura = aberturas[diaValido % aberturas.length];
+  const fechamentos = BRIEFING_FECHAMENTOS_POR_PERIODO[periodo] || BRIEFING_FECHAMENTOS_POR_PERIODO.manha;
+  const fechamento = fechamentos[diaValido % fechamentos.length];
+  const diaVazioTexto = BRIEFING_DIA_VAZIO_POR_PERIODO[periodo] || BRIEFING_DIA_VAZIO_POR_PERIODO.manha;
+
+  // "dia vazio de verdade" = nenhuma seção tem nada pra contar além da própria agenda
+  // (que sempre gera uma frase, mesmo que seja "tá livre") — se SÓ a agenda falou e ela
+  // disse "livre", usa o texto de dia tranquilo no lugar da frase de agenda repetitiva.
+  const temAlgoAlemDaAgenda = Boolean(climaTexto) || cardTarefas.total > 0 || contas.length > 0 || pendencias.length > 0 || Boolean(filaFrase);
+  const corpo = (!temAlgoAlemDaAgenda && !agendaLista.length) ? diaVazioTexto : frases.filter(Boolean).join(" ");
+
+  // FIX-3 PARTE B (revisão pós-review): o texto determinístico NUNCA é cortado — o teto
+  // de 1.400 caracteres vale só pra reescrita do LLM (ver gerarBriefing), nunca pra esta
+  // função, que é a fonte de verdade completa (e o fallback direto se o LLM falhar).
+  const falaFinal = `${saudacao} ${abertura} ${corpo} ${fechamento}`.replace(/\s+/g, " ").trim();
 
   const card = {
     clima: climaTexto || "",
-    agenda: comMaisN(agendaLista, 8, (n) => ({ hora: "", titulo: `e mais ${n}` })),
+    agenda: agendaCapada,
     tarefas: cardTarefas,
-    contas: comMaisN(contas, 8, (n) => `e mais ${n}`),
-    pendencias: comMaisN(pendencias, 8, (n) => `e mais ${n}`),
-    aoDormir: comMaisN(fila.map((i) => i && i.texto).filter(Boolean), 8, (n) => `e mais ${n}`),
+    contas: contasCapadas,
+    pendencias: pendenciasCapadas,
+    aoDormir: aoDormirCapado,
   };
 
-  return { title: "Bom dia", fala: falaFinal, card, body: truncarNaUltimaFrase(falaFinal, 140) };
+  return { title: tituloBriefingPorPeriodo(horaValida), fala: falaFinal, card, body: truncarNaUltimaFrase(falaFinal, 140) };
 }
 
 // Upsert por endpoint, capado em PUSH_SUBSCRIPTIONS_MAX — se já existe (mesmo
@@ -4243,22 +4527,32 @@ function computeDeterministicTriggers(mudancas) {
   if (!mudancas) return triggers;
   const { dayOfMonth } = saoPauloNow();
 
+  // FIX-3 PARTE A: duas contas com ids diferentes mas mesmo nome+vencimento (ex:
+  // lançada duas vezes sem querer no painel) não viram dois avisos, só um.
+  const contasVistas = new Set();
   for (const c of (mudancas.contas?.itens || [])) {
     if (c.status !== "pendente" || !c.data) continue;
     const dueDay = parseInt(c.data, 10);
     if (!Number.isFinite(dueDay)) continue;
     if (dueDay <= dayOfMonth) {
+      const chave = `${normalizeText(c.titulo)}|${dueDay}`;
+      if (contasVistas.has(chave)) continue;
+      contasVistas.add(chave);
       triggers.push({ tipo: "conta", id: String(c.id), texto: `Conta "${c.titulo}" ${dueDay < dayOfMonth ? "está atrasada" : "vence hoje"}.` });
     }
   }
 
   const umDiaAtrasMs = Date.now() - 24 * 60 * 60 * 1000;
+  const tarefasVistas = new Set();
   for (const t of (mudancas.tarefas?.itens || [])) {
     // "parada" é aproximado pela data de CRIAÇÃO da tarefa, já que o painel não guarda
     // quando ela entrou na coluna "now" — melhor sinal disponível sem mexer no painel.
     if (t.status !== "now" || !t.data) continue;
     const criadaMs = new Date(t.data).getTime();
     if (Number.isFinite(criadaMs) && criadaMs < umDiaAtrasMs) {
+      const chave = normalizeText(t.titulo);
+      if (chave && tarefasVistas.has(chave)) continue;
+      if (chave) tarefasVistas.add(chave);
       triggers.push({ tipo: "tarefa", id: String(t.id), texto: `Tarefa "${t.titulo}" está parada em Para Agora.` });
     }
   }
@@ -4839,6 +5133,15 @@ async function runScheduledPush(env, ctx) {
               resumo: "Briefing matinal gerado e entregue.",
               detalhes: { chamadasLLM: briefing.llmCalls || 0 },
             });
+            // FIX-3 PARTE B: a reescrita do LLM perdeu algum fato do texto
+            // determinístico — usamos o determinístico (sempre completo), mas registra
+            // no Diário pra nunca virar um mistério por que o briefing "ficou robótico".
+            if (briefing.fidelidadeFallback) {
+              pushLogEvent(logBatch, {
+                tipo: "erro", origem: "cron",
+                resumo: "briefing: fallback por infidelidade (reescrita do LLM omitiu algum fato, usado o texto determinístico).",
+              });
+            }
           } else {
             const antecedencia = Number(config.antecedenciaCompromissoMin) || SONO_DEFAULTS.antecedenciaCompromissoMin;
             const agendaGatilhos = await checkAgendaProximosGatilhos(env, antecedencia);
@@ -4971,7 +5274,7 @@ async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
   const timeGapLine = formatTimeGapLine(prevAt, Date.now());
   const lastUserText = timestamped[timestamped.length - 1]?.content || "";
 
-  const { hour: horaAtual, dayOfMonth: diaAtual, dateStr: hojeISOServidor } = saoPauloNow();
+  const { hour: horaAtual, minute: minutoAtual, dayOfMonth: diaAtual, dateStr: hojeISOServidor } = saoPauloNow();
   const saudacaoDetectada = detectarSaudacaoDeAbertura(lastUserText);
   const resumoRecente = resumoAssuntosRecentes(timestamped);
   let briefingPendente = false;
@@ -5030,7 +5333,7 @@ async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
   const shortcutHit = matchUserShortcut(companionState.shortcuts, lastUserText);
 
   return {
-    timestamped, timeGapLine, lastUserText, horaAtual, diaAtual, hojeISOServidor,
+    timestamped, timeGapLine, lastUserText, horaAtual, minutoAtual, diaAtual, hojeISOServidor,
     saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing,
     estadoConversaLine, novidadesFila, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit,
   };
@@ -5041,7 +5344,7 @@ async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
 // esforço) os mesmos efeitos colaterais de sempre (marcar briefing como lido,
 // novidades como mostradas). Devolve o `parsed` já pronto pra virar resposta.
 function finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics) {
-  const { logBatch, saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing, horaAtual, diaAtual, hojeISOServidor, novidadesFila } = turnCtx;
+  const { logBatch, saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing, horaAtual, minutoAtual, diaAtual, hojeISOServidor, novidadesFila } = turnCtx;
   if (!COMPANION_EMOTIONS.includes(parsed.emotion)) parsed.emotion = "neutro";
   if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
   pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
@@ -5054,10 +5357,10 @@ function finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics) {
       try {
         if (!briefingJaExistiaHoje) {
           const determinadoAgora = gatheredParaBriefing
-            ? montarBriefingDeterministico({ ...gatheredParaBriefing, climaTexto: "", hour: horaAtual, dayOfMonth: diaAtual })
+            ? montarBriefingDeterministico({ ...gatheredParaBriefing, climaTexto: "", hour: horaAtual, minute: minutoAtual, dayOfMonth: diaAtual })
             : null;
           await writeBriefingUltimo(env, {
-            title: "Bom dia",
+            title: tituloBriefingPorPeriodo(horaAtual),
             fala: parsed.reply,
             card: determinadoAgora?.card || null,
             body: truncarNaUltimaFrase(parsed.reply, 140),
@@ -5426,6 +5729,12 @@ export default {
           resumo: "Resumo do dia gerado a pedido (botão \"Ouvir agora\").",
           detalhes: { chamadasLLM: briefing.llmCalls || 0 },
         });
+        if (briefing.fidelidadeFallback) {
+          pushLogEvent(logBatch, {
+            tipo: "erro", origem: "jarbas",
+            resumo: "briefing: fallback por infidelidade (reescrita do LLM omitiu algum fato, usado o texto determinístico).",
+          });
+        }
         await flushLogBatch(env, ctx, logBatch);
         return json({ title: briefing.title, fala: briefing.fala, card: briefing.card, body: briefing.body });
       } catch (err) {
