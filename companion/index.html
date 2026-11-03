@@ -2744,9 +2744,10 @@ function cancelSpeech(){
   analyserNode = null; // qualquer análise de áudio real em andamento também é descartada
 }
 
-// Divide a fala em frases (por . ! ? e quebras de linha). Fragmentos curtos (<40
-// caracteres) são acumulados e grudados na frase seguinte, pra não pedir TTS de
-// pedacinhos minúsculos tipo "Oi!" sozinhos.
+// Divide a fala em frases (por . ! ? e quebras de linha). Fragmentos curtos (<20
+// caracteres — era 40; VOZ-4 PARTE B: junta menos, pra primeira frase sair mais rápido
+// e mais perto do tamanho que o Jarbas realmente fala) são acumulados e grudados na
+// frase seguinte, pra não pedir TTS de pedacinhos minúsculos tipo "Oi!" sozinhos.
 function splitIntoSpeechChunks(text){
   if(typeof text !== 'string') return [];
   const clean = text.replace(/\s*\n+\s*/g, ' ').trim();
@@ -2756,7 +2757,7 @@ function splitIntoSpeechChunks(text){
   let pending = '';
   for(const piece of raw){
     const combined = pending ? `${pending} ${piece}` : piece;
-    if(combined.length < 40){
+    if(combined.length < 20){
       pending = combined;
       continue;
     }
@@ -2882,9 +2883,50 @@ async function speakBrowserForGen(text, myGen){
   await speakBrowser(text);
 }
 
-// Toca as frases em sequência, mas pede o TTS da próxima (no máximo 1 à frente)
-// enquanto a atual ainda está tocando — assim não há lacuna perceptível entre elas,
-// sem pedir TTS de tudo de uma vez (gastaria à toa se a fala for interrompida).
+// Toca o resultado (ou promessa do resultado) do TTS de UMA frase, com toda a cadeia
+// de reserva: se o TTS falhar cai pra voz do navegador, e se o autoplay for bloqueado
+// (NotAllowedError) espera o próximo toque/tecla e tenta tocar o MESMO áudio mais uma
+// vez antes de desistir. Compartilhado entre speakChunksStreaming (array já fechado,
+// usado na resposta não-streaming/voz do navegador) e a fila de streaming do modo
+// companion/stream (frases chegando incrementalmente — ver createStreamingSpeechQueue).
+async function playChunkResultWithFallback(chunkText, resultPromise, myGen){
+  const result = await resultPromise;
+  if(myGen !== speechState.generation) return;
+  if(!result || result.error){
+    recordVoiceFallbackReason(classifyTtsError(result && result.error));
+    await speakBrowserForGen(chunkText, myGen);
+    return;
+  }
+  try{
+    await playAudioForGen(result, myGen);
+  }catch(err){
+    if(myGen !== speechState.generation) return;
+    if(err && err.name === 'NotAllowedError'){
+      const hintAntes = hint.textContent;
+      hint.textContent = 'Toque na tela para ativar a voz';
+      await waitForNextGesture();
+      if(myGen !== speechState.generation) return;
+      if(hint.textContent === 'Toque na tela para ativar a voz') hint.textContent = hintAntes;
+      onFirstUserGesture(); // garante o destravo mesmo se chegou aqui sem passar pelos listeners genéricos
+      try{
+        await playAudioForGen(result, myGen);
+        return;
+      }catch(err2){
+        if(myGen !== speechState.generation) return;
+        recordVoiceFallbackReason(classifyTtsError(err2));
+        await speakBrowserForGen(chunkText, myGen);
+        return;
+      }
+    }
+    recordVoiceFallbackReason(classifyTtsError(err));
+    await speakBrowserForGen(chunkText, myGen);
+  }
+}
+
+// Toca as frases em sequência, mas pede o TTS das próximas (no máximo 2 à frente —
+// era 1; VOZ-4 PARTE B: TTS em paralelo pra cobrir frases curtas sem lacuna) enquanto
+// a atual ainda está tocando — assim não há lacuna perceptível entre elas, sem pedir
+// TTS de tudo de uma vez (gastaria à toa se a fala for interrompida).
 async function speakChunksStreaming(chunks, myGen){
   const ttsCache = new Array(chunks.length).fill(null);
 
@@ -2895,44 +2937,156 @@ async function speakChunksStreaming(chunks, myGen){
 
   ensureFetching(0);
   ensureFetching(1);
+  ensureFetching(2);
 
   for(let i=0; i<chunks.length; i++){
     if(myGen !== speechState.generation) return;
-    ensureFetching(i + 1);
-    const result = await ttsCache[i];
-    if(myGen !== speechState.generation) return;
-    if(!result || result.error){
-      recordVoiceFallbackReason(classifyTtsError(result && result.error));
-      await speakBrowserForGen(chunks[i], myGen);
-      continue;
+    ensureFetching(i + 2);
+    await playChunkResultWithFallback(chunks[i], ttsCache[i], myGen);
+  }
+}
+
+// VOZ-4 PARTE B.2: mesma ideia de speakChunksStreaming, mas as frases vão chegando
+// incrementalmente (pushText a cada pedaço novo da fala, conforme o SSE do Worker
+// entrega) em vez de um array já fechado — a primeira frase pode tocar antes mesmo do
+// Jarbas terminar de "pensar" o resto. Frases completas (terminam em . ! ?) menores que
+// 20 caracteres são seguradas e coladas na próxima, igual a splitIntoSpeechChunks.
+function createStreamingSpeechQueue(myGen){
+  const chunks = [];
+  const results = [];
+  let nextToPlay = 0;
+  let closed = false;
+  let waiter = null;
+  let pendingTail = ''; // frase ainda não fechada (sem . ! ? no fim) -- espera o próximo pedaço
+  let heldShort = ''; // frase(s) completas mas curtas demais -- esperam colar na próxima
+
+  function wake(){ if(waiter){ const w = waiter; waiter = null; w(); } }
+
+  function ensureFetching(i){
+    if(i < 0 || i >= chunks.length || results[i]) return;
+    results[i] = fetchTtsAudioWithRetry(chunks[i]);
+  }
+
+  function enqueue(text){
+    const falado = stripEmojiForSpeech(text) || text;
+    if(!falado) return;
+    chunks.push(falado);
+    ensureFetching(chunks.length - 1);
+    wake();
+  }
+
+  function pushText(deltaText){
+    if(!deltaText) return;
+    pendingTail += deltaText;
+    const pieces = pendingTail.split(/(?<=[.!?])\s+/);
+    pendingTail = pieces.pop() || '';
+    for(const piece of pieces){
+      const trimmed = piece.trim();
+      if(!trimmed) continue;
+      const combined = heldShort ? `${heldShort} ${trimmed}` : trimmed;
+      if(combined.length < 20){
+        heldShort = combined;
+        continue;
+      }
+      enqueue(combined);
+      heldShort = '';
     }
-    try{
-      await playAudioForGen(result, myGen);
-    }catch(err){
+  }
+
+  async function playLoop(){
+    while(true){
       if(myGen !== speechState.generation) return;
-      // PARTE voz-mobile: bloqueio de autoplay NÃO cai direto pro navegador — espera o
-      // próximo toque/tecla (já destrava de vez, se ainda não tinha) e tenta tocar o
-      // MESMO áudio já buscado mais uma vez. Só cai pro navegador se esse retry também falhar.
-      if(err && err.name === 'NotAllowedError'){
-        const hintAntes = hint.textContent;
-        hint.textContent = 'Toque na tela para ativar a voz';
-        await waitForNextGesture();
-        if(myGen !== speechState.generation) return;
-        if(hint.textContent === 'Toque na tela para ativar a voz') hint.textContent = hintAntes;
-        onFirstUserGesture(); // garante o destravo mesmo se chegou aqui sem passar pelos listeners genéricos
-        try{
-          await playAudioForGen(result, myGen);
-          continue;
-        }catch(err2){
-          if(myGen !== speechState.generation) return;
-          recordVoiceFallbackReason(classifyTtsError(err2));
-          await speakBrowserForGen(chunks[i], myGen);
-          continue;
+      if(nextToPlay >= chunks.length){
+        if(closed) return;
+        await new Promise((res) => { waiter = res; });
+        continue;
+      }
+      const i = nextToPlay++;
+      ensureFetching(i + 1);
+      ensureFetching(i + 2);
+      await playChunkResultWithFallback(chunks[i], results[i], myGen);
+    }
+  }
+
+  const playLoopPromise = playLoop();
+
+  return {
+    pushText,
+    async finish(){
+      let tail = pendingTail.trim();
+      pendingTail = '';
+      if(heldShort){
+        tail = tail ? `${heldShort} ${tail}` : heldShort;
+        heldShort = '';
+      }
+      if(tail) enqueue(tail);
+      closed = true;
+      wake();
+      await playLoopPromise;
+    },
+  };
+}
+
+// Mesmo "contrato" de speak() (novo myGen, pausa mãos-livres, liga o monitor de
+// interrupção, desfaz tudo no fim) mas pra fala que chega incrementalmente via
+// streaming: pushText(delta) alimenta a fila conforme o texto chega, finish() fecha o
+// fluxo, espera o áudio pendente acabar e devolve true/false (terminou normal vs.
+// interrompida), igual ao retorno de speak().
+function beginStreamingSpeech(){
+  speechState.generation++;
+  const myGen = speechState.generation;
+  isSpeaking = true;
+  currentSpeakingText = '';
+  pauseHandsFreeForSpeech();
+  startInterruptMonitor(myGen);
+  const queue = createStreamingSpeechQueue(myGen);
+  return {
+    myGen,
+    pushText(delta){
+      if(myGen !== speechState.generation) return;
+      currentSpeakingText += delta;
+      queue.pushText(delta);
+    },
+    async finish(){
+      try{
+        await queue.finish();
+        return myGen === speechState.generation;
+      } finally {
+        if(myGen === speechState.generation){
+          stopInterruptMonitor();
+          isSpeaking = false;
+          currentSpeakingText = '';
+          speechEndedAt = Date.now();
+          startContinuityWindow();
+          resumeHandsFreeListening();
         }
       }
-      recordVoiceFallbackReason(classifyTtsError(err));
-      await speakBrowserForGen(chunks[i], myGen);
+    },
+  };
+}
+
+// Lê um Response de SSE (Content-Type: text/event-stream) e produz os eventos
+// {event, data} já parseados, um a um, conforme chegam.
+async function* readSseEvents(resp){
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while(true){
+    const { done, value } = await reader.read();
+    if(value) buf += decoder.decode(value, { stream: true });
+    let idx;
+    while((idx = buf.indexOf('\n\n')) !== -1){
+      const raw = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      let event = 'message', dataStr = '';
+      for(const line of raw.split('\n')){
+        if(line.startsWith('event:')) event = line.slice(6).trim();
+        else if(line.startsWith('data:')) dataStr += line.slice(5).trim();
+      }
+      if(!dataStr) continue;
+      try{ yield { event, data: JSON.parse(dataStr) }; }catch(e){ /* fragmento malformado raríssimo -- ignora */ }
     }
+    if(done) break;
   }
 }
 
@@ -3485,6 +3639,141 @@ function triggerJarbasMaterialize(m){
   }
 }
 
+function buildCompanionState(){
+  return { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO(), aparencia: buildAparenciaForWorker(), podeMaterializarEspontaneo: podeMaterializarEspontaneo(), perfil: mem.perfil || null, ideias: mem.ideias || [] };
+}
+
+// Tudo que uma resposta do modo "companion" precisa fazer com o `parsed` final, FORA
+// de falar o texto (isso cada caminho — streaming ou não — já faz do seu jeito):
+// guardar no histórico/memória, acionar materialização/lousa/cartões, reconsultar as
+// telas. Compartilhado entre o caminho em streaming e o caminho não-streaming.
+function applyCompanionResult(parsed, workerUrl){
+  history.push({role:'assistant', content: parsed.reply, at: new Date().toISOString()});
+  mem.history = history;
+  if(parsed.save_memory){
+    // Compatibilidade: mem.timeline continua sendo alimentada do jeito que sempre foi
+    // (alimenta o modo "summary" também) — nada aqui muda.
+    if(!Array.isArray(mem.timeline)) mem.timeline = [];
+    mem.timeline.push({ id: Date.now(), text: parsed.save_memory, at: new Date().toISOString() });
+    mem.timeline = mem.timeline.slice(-80);
+  }
+  if(parsed.save_memory_item){
+    addMemoryItem(parsed.save_memory_item, 'conversa');
+  }
+  if(parsed.save_learned){
+    if(!Array.isArray(mem.learned)) mem.learned = [];
+    mem.learned.push({ id: Date.now(), text: parsed.save_learned, at: new Date().toISOString() });
+  }
+  if(parsed.pendencia_update){
+    applyPendenciaUpdate(parsed.pendencia_update);
+  }
+  if(parsed.materialize){
+    registerCreation(parsed.materialize);
+  }
+  if(parsed.lousa){
+    registerCreation({ titulo: parsed.lousa.titulo, kind:'lousa', data: parsed.lousa.itens, origem:'pedido', motivo:'' });
+  }
+  saveMemoryState();
+  pushMemoryToServer(workerUrl);
+
+  setEmotion(parsed.emotion || 'neutro');
+  setCaption('jarbas', parsed.reply);
+  // FACE-2: dispara a materialização visual só depois de iniciar a fala — nunca
+  // espera a animação, e uma falha aqui nunca afeta a fala (ver triggerJarbasMaterialize).
+  if(parsed.materialize) triggerJarbasMaterialize(parsed.materialize);
+  // PARTE F: lousa real — mesma lógica de "nunca espera, nunca afeta a fala" acima;
+  // materialização em curso e config desligada têm prioridade (ver triggerLousa).
+  if(!CLASSIC_FACE && parsed.lousa) triggerLousa(parsed.lousa);
+  // PARTE: cartões de dados determinísticos (clima/agenda de hoje) que o Worker já
+  // montou a partir da ferramenta usada nesta mesma resposta — nunca bloqueia a fala.
+  if(!CLASSIC_FACE && parsed.cards) renderCards(parsed.cards);
+  // PARTE: qualquer resposta pode ter mexido em agenda/tarefas — reconsulta as telas
+  // (o Worker cacheia 5min, então isso nunca pesa de verdade quando nada mudou).
+  if(!CLASSIC_FACE) fetchTelas();
+}
+
+async function askRaizNonStreaming(workerUrl, companionState){
+  const resp = await fetch(workerUrl, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ mode:'companion', messages: history.slice(-8), companionState })
+  });
+  if(!resp.ok) throw new Error('worker_error_' + resp.status);
+  const parsed = await resp.json();
+  if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
+  parsed.reply = stripTimestampPrefix(parsed.reply);
+  return parsed;
+}
+
+// VOZ-4 PARTE B.2: equivalente em streaming de askRaizNonStreaming — já começa a falar
+// a primeira frase assim que ela fica pronta, em vez de esperar o JSON inteiro. Lança
+// se a conexão falhar ANTES de qualquer conteúdo falável ter sido recebido (aí quem
+// chama cai pro fallback não-streaming sem repetir nada que já foi dito); depois disso,
+// qualquer problema é absorvido aqui mesmo (não dá pra "desfalar" o que já saiu).
+async function askRaizStreaming(workerUrl, companionState, onFinalParsed){
+  const resp = await fetch(workerUrl, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ mode:'companion', stream:true, messages: history.slice(-8), companionState })
+  });
+  if(!resp.ok || !resp.body) throw new Error('worker_stream_error_' + resp.status);
+  const contentType = resp.headers.get('content-type') || '';
+  if(!contentType.includes('text/event-stream')) throw new Error('worker_stream_unexpected_content_type');
+
+  const streaming = beginStreamingSpeech();
+  hint.textContent = 'falando...';
+  let streamedReplyText = ''; // só o que veio por "delta" (não a frase-ponte)
+  let bridgeSpoken = false;
+  let finalParsed = null;
+  try{
+    for await (const { event, data } of readSseEvents(resp)){
+      if(streaming.myGen !== speechState.generation) break; // fala superada (interrompida/nova pergunta)
+      if(event === 'emotion' && data && data.emotion){
+        setEmotion(data.emotion);
+      } else if(event === 'bridge' && data && data.text && !bridgeSpoken && !streamedReplyText){
+        bridgeSpoken = true;
+        streaming.pushText(data.text + ' ');
+      } else if(event === 'delta' && typeof data.text === 'string'){
+        streamedReplyText += data.text;
+        streaming.pushText(data.text);
+        setCaption('jarbas', currentSpeakingText);
+      } else if(event === 'done'){
+        finalParsed = data;
+      } else if(event === 'error'){
+        throw new Error((data && data.detail) || 'companion_stream_error');
+      }
+    }
+  }catch(streamErr){
+    if(!streamedReplyText && !bridgeSpoken && !finalParsed){
+      // nada foi falado ainda -- seguro abortar e deixar quem chama cair no fallback
+      // não-streaming (o fetch original nunca mais vai ser usado).
+      streaming.finish().catch(()=>{});
+      throw streamErr;
+    }
+    console.error('Jarbas: stream do companion caiu no meio (já tinha falado algo, seguindo com o que tem):', streamErr);
+  }
+  if(!finalParsed){
+    // o stream terminou sem o evento "done" (ex: conexão caiu) -- já falou parte, então
+    // não tenta de novo; só fecha com uma fala coerente com o que já foi dito.
+    finalParsed = { emotion: 'neutro', reply: streamedReplyText || 'Desculpa, perdi o fio da conversa.' };
+  } else {
+    finalParsed.reply = stripTimestampPrefix(finalParsed.reply);
+  }
+  // Materialização/cartões/lousa/telas/memória são aplicados AGORA (ainda com áudio
+  // tocando) -- igual ao caminho não-streaming, que nunca esperava a fala terminar pra
+  // disparar isso. `onFinalParsed` é quem faz esse trabalho (ver applyCompanionResult).
+  if(onFinalParsed) onFinalParsed(finalParsed);
+  // O texto final só precisa ser (re)empurrado pra fila se NADA dele já tiver sido
+  // falado via "delta" -- cobre o atalho (nenhum delta), a resposta com ferramenta (o
+  // conteúdo falável só existe depois que a ferramenta roda, nunca em "delta") e a
+  // reserva determinística (JSON do LLM não pôde ser interpretado).
+  if(!streamedReplyText && finalParsed.reply){
+    streaming.pushText(finalParsed.reply);
+  }
+  const finishedNormally = await streaming.finish();
+  return { parsed: finalParsed, finishedNormally };
+}
+
 async function askRaiz(userText, isRetry){
   if(!CLASSIC_FACE) pensarFim(); // qualquer interação de voz fecha o pensamento sozinho na hora
   setEmotion('pensando');
@@ -3500,65 +3789,23 @@ async function askRaiz(userText, isRetry){
 
   try{
     if(!workerUrl) throw new Error('worker_not_configured');
+    const companionState = buildCompanionState();
 
-    const resp = await fetch(workerUrl, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        mode:'companion',
-        messages: history.slice(-8),
-        companionState: { memory: mem.memory || '', knowledge: mem.knowledge || null, location: mem.location || null, timeline: mem.timeline || [], items: mem.items || [], learned: mem.learned || [], shortcuts: mem.shortcuts || [], now: formatNowPtBR(), hojeISO: todayISO(), aparencia: buildAparenciaForWorker(), podeMaterializarEspontaneo: podeMaterializarEspontaneo(), perfil: mem.perfil || null, ideias: mem.ideias || [] }
-      })
-    });
-    if(!resp.ok) throw new Error('worker_error_' + resp.status);
-    const parsed = await resp.json();
-    if(!parsed || !parsed.reply) throw new Error('worker_empty_reply');
-    parsed.reply = stripTimestampPrefix(parsed.reply);
+    let parsed, finishedNormally;
+    try{
+      const streamed = await askRaizStreaming(workerUrl, companionState, (p) => applyCompanionResult(p, workerUrl));
+      parsed = streamed.parsed;
+      finishedNormally = streamed.finishedNormally;
+    }catch(streamErr){
+      // Fallback de compatibilidade (nada foi falado ainda nesse ponto): o formato JSON
+      // de sempre, sem streaming -- mesmo caminho que o app sempre usou.
+      console.error('Jarbas: streaming indisponível, caindo pro modo sem streaming:', streamErr);
+      parsed = await askRaizNonStreaming(workerUrl, companionState);
+      applyCompanionResult(parsed, workerUrl);
+      hint.textContent = 'falando...';
+      finishedNormally = await speak(parsed.reply);
+    }
 
-    history.push({role:'assistant', content: parsed.reply, at: new Date().toISOString()});
-    mem.history = history;
-    if(parsed.save_memory){
-      // Compatibilidade: mem.timeline continua sendo alimentada do jeito que sempre foi
-      // (alimenta o modo "summary" também) — nada aqui muda.
-      if(!Array.isArray(mem.timeline)) mem.timeline = [];
-      mem.timeline.push({ id: Date.now(), text: parsed.save_memory, at: new Date().toISOString() });
-      mem.timeline = mem.timeline.slice(-80);
-    }
-    if(parsed.save_memory_item){
-      addMemoryItem(parsed.save_memory_item, 'conversa');
-    }
-    if(parsed.save_learned){
-      if(!Array.isArray(mem.learned)) mem.learned = [];
-      mem.learned.push({ id: Date.now(), text: parsed.save_learned, at: new Date().toISOString() });
-    }
-    if(parsed.pendencia_update){
-      applyPendenciaUpdate(parsed.pendencia_update);
-    }
-    if(parsed.materialize){
-      registerCreation(parsed.materialize);
-    }
-    if(parsed.lousa){
-      registerCreation({ titulo: parsed.lousa.titulo, kind:'lousa', data: parsed.lousa.itens, origem:'pedido', motivo:'' });
-    }
-    saveMemoryState();
-    pushMemoryToServer(workerUrl);
-
-    setEmotion(parsed.emotion || 'neutro');
-    setCaption('jarbas', parsed.reply);
-    hint.textContent = 'falando...';
-    // FACE-2: dispara a materialização visual só depois de iniciar a fala — nunca
-    // espera a animação, e uma falha aqui nunca afeta a fala (ver triggerJarbasMaterialize).
-    if(parsed.materialize) triggerJarbasMaterialize(parsed.materialize);
-    // PARTE F: lousa real — mesma lógica de "nunca espera, nunca afeta a fala" acima;
-    // materialização em curso e config desligada têm prioridade (ver triggerLousa).
-    if(!CLASSIC_FACE && parsed.lousa) triggerLousa(parsed.lousa);
-    // PARTE: cartões de dados determinísticos (clima/agenda de hoje) que o Worker já
-    // montou a partir da ferramenta usada nesta mesma resposta — nunca bloqueia a fala.
-    if(!CLASSIC_FACE && parsed.cards) renderCards(parsed.cards);
-    // PARTE: qualquer resposta pode ter mexido em agenda/tarefas — reconsulta as telas
-    // (o Worker cacheia 5min, então isso nunca pesa de verdade quando nada mudou).
-    if(!CLASSIC_FACE) fetchTelas();
-    const finishedNormally = await speak(parsed.reply);
     if(finishedNormally){
       hint.textContent = handsFree ? 'diga "jarbas" pra chamar' : 'toque para falar';
       setEmotion('neutro');
