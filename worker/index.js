@@ -78,6 +78,82 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// VOZ-4 PARTE B: streaming do chat — parsing puro (testável) de um buffer de texto SSE
+// no formato OpenAI-compatible ("data: {...}\n\n" ... "data: [DONE]\n\n"). Devolve os
+// eventos JSON já completos e o que sobrou no buffer (ainda incompleto, pro próximo
+// pedaço do stream completar). Nunca lança em fragmento malformado — só ignora.
+export function parseSseBuffer(bufferText) {
+  const events = [];
+  let buf = bufferText;
+  let idx;
+  while ((idx = buf.indexOf("\n\n")) !== -1) {
+    const rawEvent = buf.slice(0, idx);
+    buf = buf.slice(idx + 2);
+    const dataStr = rawEvent.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+    if (!dataStr || dataStr === "[DONE]") continue;
+    try { events.push(JSON.parse(dataStr)); } catch { /* fragmento malformado raríssimo — ignora */ }
+  }
+  return { events, remainder: buf };
+}
+
+// Lê um ReadableStream de bytes SSE (ex: res.body de um fetch com stream:true) e produz
+// os eventos JSON já parseados, um a um, conforme chegam — usa parseSseBuffer (acima)
+// como núcleo puro, só adicionando a leitura real do stream.
+async function* streamSseEvents(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: true });
+      const { events, remainder } = parseSseBuffer(buffer);
+      buffer = remainder;
+      for (const e of events) yield e;
+      if (done) break;
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+}
+
+// VOZ-4 PARTE B: a fala do Jarbas (modo companion) é um JSON {"emotion":"...","reply":
+// "..."} — streaming bruto token a token entregaria fragmentos de JSON cru, não texto
+// falável. Esta função pura extrai o valor (string) de um campo JSON ainda sendo
+// montado aos poucos, respeitando escapes cortados no meio (\uXXXX, \n, \" etc. que
+// ainda não chegaram por completo) — usada pra já ir "lendo" o campo "reply" (e
+// "emotion") conforme os pedaços do JSON cru chegam, sem esperar o objeto fechar.
+export function extractJsonStringFieldSoFar(partialJson, fieldName) {
+  const marker = `"${fieldName}":"`;
+  const start = partialJson.indexOf(marker);
+  if (start === -1) return null;
+  let i = start + marker.length;
+  let out = "";
+  const ESCAPES = { n: "\n", t: "\t", r: "\r", '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f" };
+  while (i < partialJson.length) {
+    const ch = partialJson[i];
+    if (ch === "\\") {
+      if (i + 1 >= partialJson.length) break; // escape cortado no fim — espera o próximo pedaço
+      const next = partialJson[i + 1];
+      if (next === "u") {
+        if (i + 6 > partialJson.length) break; // \uXXXX cortado — espera completar
+        out += String.fromCharCode(parseInt(partialJson.slice(i + 2, i + 6), 16));
+        i += 6;
+      } else if (ESCAPES[next] !== undefined) {
+        out += ESCAPES[next];
+        i += 2;
+      } else {
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === '"') return { value: out, complete: true };
+    out += ch;
+    i++;
+  }
+  return { value: out, complete: false };
+}
+
 async function transcribeWithGroq(env, audioB64, mime) {
   const bytes = base64ToBytes(audioB64);
   const ext = mime.includes("mp4") ? "mp4" : mime.includes("ogg") ? "ogg" : "webm";
@@ -235,11 +311,17 @@ async function synthesizeAzureTts(env, text) {
     }
   }
 
-  // Mesma voz, idioma e rate do Edge TTS atual — só muda o transporte (REST oficial,
-  // sem WebSocket) e o provedor.
+  // VOZ-4 PARTE C: rate subiu de +2% pra +10% (dentro da faixa +8% a +12% pedida — meio
+  // do intervalo, sem precisar de mais uma variável só pra isso) — mais perto do ritmo
+  // de conversa real do que a leitura mais lenta de antes. Pausa curta (150ms) entre
+  // frases, pra não soar "corrido". Sem mstts:express-as="chat": a voz configurada
+  // (EDGE_VOICE = pt-BR-AntonioNeural) não documenta suporte a estilos conversacionais
+  // na lista oficial de vozes da Azure — forçar um estilo não suportado arriscaria erro
+  // da API sem ganho nenhum (ver PR).
+  const comPausas = xmlEscape(text).split(/(?<=[.!?])\s+/).join('<break time="150ms"/> ');
   const ssml =
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
-    `<voice name='${EDGE_VOICE}'><prosody rate='+2%' pitch='+0Hz'>${xmlEscape(text)}</prosody></voice></speak>`;
+    `<voice name='${EDGE_VOICE}'><prosody rate='+10%' pitch='+0Hz'>${comPausas}</prosody></voice></speak>`;
 
   const url = `https://${env.AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
   const controller = new AbortController();
@@ -287,6 +369,175 @@ async function synthesizeAzureTts(env, text) {
     throw err;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// ---------- VOZ-4 PARTE C: cadeia de provedores de voz unificada ----------
+// ElevenLabs e OpenAI (gpt-4o-mini-tts) somam-se a Azure/Edge (acima, inalterados) numa
+// cadeia com ordem configurável (TTS_PROVIDER_ORDER, padrão "elevenlabs,openai,azure,
+// edge") — só entra na cadeia quem tiver as chaves configuradas, e a escolha que a
+// pessoa fizer no Laboratório de voz (mem.config.voz.provedor, mandada pelo app em
+// body.vozPreferida) vence a ordem padrão quando disponível. Falha em qualquer um cai
+// pro próximo da cadeia; só cai pra voz do navegador se TODOS falharem (decisão do app).
+function ttsProviderDefs(env) {
+  return {
+    elevenlabs: { name: "elevenlabs", disponivel: !!(env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID), pago: true },
+    openai: { name: "openai", disponivel: !!env.OPENAI_API_KEY, pago: true },
+    azure: { name: "azure", disponivel: !!(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION), pago: false },
+    edge: { name: "edge", disponivel: true, pago: false },
+  };
+}
+
+export function buildTtsProviderChain(env, vozPreferida) {
+  const defs = ttsProviderDefs(env);
+  const orderNames = (env.TTS_PROVIDER_ORDER || "elevenlabs,openai,azure,edge").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const seen = new Set();
+  let chain = [];
+  for (const n of [...orderNames, ...Object.keys(defs)]) {
+    if (defs[n] && defs[n].disponivel && !seen.has(n)) { chain.push(defs[n]); seen.add(n); }
+  }
+  const preferido = vozPreferida && typeof vozPreferida.provedor === "string" ? vozPreferida.provedor.toLowerCase() : null;
+  if (preferido && seen.has(preferido)) {
+    chain = [defs[preferido], ...chain.filter((p) => p.name !== preferido)];
+  }
+  return chain;
+}
+
+// Limitador de gasto: teto diário de CARACTERES por provedor pago (TTS_DAILY_CHARS_PAID,
+// padrão 20.000) — passado o teto, esse provedor é pulado (não quebra a cadeia) até o
+// próximo dia (America/Sao_Paulo). Azure/Edge nunca são limitados aqui (Azure já tinha
+// seu próprio plano antes do VOZ-4; Edge é gratuito).
+const TTS_PAID_PROVIDERS = new Set(["elevenlabs", "openai"]);
+function ttsDailyCharsLimit(env) {
+  const v = Number(env.TTS_DAILY_CHARS_PAID);
+  return Number.isFinite(v) && v > 0 ? v : 20000;
+}
+async function ttsDailyCharsUsed(env, providerName, dateStr) {
+  if (!env.COMPANION_KV) return 0;
+  const raw = await env.COMPANION_KV.get(`tts:dailychars:${providerName}:${dateStr}`);
+  return Number(raw) || 0;
+}
+async function ttsDailyCharsAdd(env, providerName, dateStr, chars) {
+  if (!env.COMPANION_KV) return;
+  const key = `tts:dailychars:${providerName}:${dateStr}`;
+  const current = await ttsDailyCharsUsed(env, providerName, dateStr);
+  await env.COMPANION_KV.put(key, String(current + chars), { expirationTtl: 2 * 24 * 60 * 60 });
+}
+export async function ttsDailyCapExceeded(env, providerName, textLength, dateStr) {
+  if (!TTS_PAID_PROVIDERS.has(providerName)) return false;
+  const used = await ttsDailyCharsUsed(env, providerName, dateStr || saoPauloNow().dateStr);
+  return used + textLength > ttsDailyCharsLimit(env);
+}
+
+// Cache em memória do isolate (mesma ideia do cache do Azure acima, generalizada) pros
+// provedores NOVOS — chave inclui provedor+voz (nunca a velocidade: ela só é aplicada
+// depois, em cima do áudio já pronto — tocar o MESMO áudio mais rápido/devagar via
+// playbackRate no app -- então incluir velocidade na chave só geraria miss à toa, sem
+// nenhum ganho real, já que o áudio cacheado é idêntico pra qualquer velocidade).
+const TTS_CACHE_NOVOS_PROVEDORES = new Map();
+const TTS_CACHE_NOVOS_PROVEDORES_MAX = 40;
+const TTS_CACHE_NOVOS_PROVEDORES_MAX_CHARS = 60;
+function ttsCacheGetGenerico(cache, key) {
+  const hit = cache.get(key);
+  if (hit) { cache.delete(key); cache.set(key, hit); }
+  return hit;
+}
+function ttsCacheSetGenerico(cache, key, value, max) {
+  if (cache.size >= max) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+async function synthesizeElevenLabsTts(env, text) {
+  const voiceId = env.ELEVENLABS_VOICE_ID;
+  const model = env.ELEVENLABS_MODEL || "eleven_flash_v2_5";
+  const cacheKey = `elevenlabs|${voiceId}|${text.trim()}`;
+  const cacheable = text.trim().length > 0 && text.trim().length <= TTS_CACHE_NOVOS_PROVEDORES_MAX_CHARS;
+  if (cacheable) {
+    const cached = ttsCacheGetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey);
+    if (cached) return cached;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    // Endpoint de streaming da ElevenLabs — aqui consumido até o fim e devolvido como
+    // base64 (mesmo contrato dos outros provedores), pra não reescrever o pipeline de
+    // áudio do app (que já funciona igual em todo aparelho desde a VOZ-2); documentado
+    // no PR como uma simplificação deliberada, não streaming byte-a-byte até o cliente.
+    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY, Accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: model, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      const err = new Error(`elevenlabs_error_${res.status}: ${detail.slice(0, 200)}`);
+      err.status = res.status;
+      throw err;
+    }
+    const buf = await res.arrayBuffer();
+    const audio_b64 = bytesToBase64(new Uint8Array(buf));
+    if (cacheable) ttsCacheSetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey, audio_b64, TTS_CACHE_NOVOS_PROVEDORES_MAX);
+    return audio_b64;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("elevenlabs_tts_timeout_8s");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function synthesizeOpenAiTts(env, text) {
+  const voice = env.OPENAI_TTS_VOICE || "alloy";
+  const cacheKey = `openai|${voice}|${text.trim()}`;
+  const cacheable = text.trim().length > 0 && text.trim().length <= TTS_CACHE_NOVOS_PROVEDORES_MAX_CHARS;
+  if (cacheable) {
+    const cached = ttsCacheGetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey);
+    if (cached) return cached;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: "gpt-4o-mini-tts",
+        voice,
+        input: text,
+        instructions: "Fala natural e calorosa, ritmo de conversa, sem soar como locutor.",
+        response_format: "mp3",
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      const err = new Error(`openai_tts_error_${res.status}: ${detail.slice(0, 200)}`);
+      err.status = res.status;
+      throw err;
+    }
+    const buf = await res.arrayBuffer();
+    const audio_b64 = bytesToBase64(new Uint8Array(buf));
+    if (cacheable) ttsCacheSetGenerico(TTS_CACHE_NOVOS_PROVEDORES, cacheKey, audio_b64, TTS_CACHE_NOVOS_PROVEDORES_MAX);
+    return audio_b64;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("openai_tts_timeout_8s");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function synthesizeTtsWithProvider(env, providerName, text) {
+  switch (providerName) {
+    case "elevenlabs": return synthesizeElevenLabsTts(env, text);
+    case "openai": return synthesizeOpenAiTts(env, text);
+    case "azure": return synthesizeAzureTts(env, text);
+    case "edge": return synthesizeEdgeTts(text);
+    default: throw new Error("tts_provider_desconhecido");
   }
 }
 
@@ -763,6 +1014,11 @@ function todayLabelPtBR() {
 // aviso proativo) — nunca entram aqui, o modelo não os escolhe.
 export const COMPANION_EMOTIONS = ["neutro", "feliz", "pensando", "surpreso", "focado", "bravo", "muito_bravo", "confirmado", "curioso", "piscadinha", "empatico"];
 
+// VOZ-4 PARTE B: teto de tokens da chamada PRINCIPAL do chat por voz — era 450 (sobrava
+// espaço pra respostas longas/lentas que quase nunca eram faladas assim mesmo); ~220 é
+// coerente com 1-3 frases curtas faladas, o normal de uma resposta de voz.
+const COMPANION_MAX_TOKENS = 220;
+
 export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '', estadoConversaLine = '', novidadesPainelLine = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
@@ -860,7 +1116,7 @@ Quando a pergunta for sobre clima ou previsão do tempo, use a ferramenta de pre
 Nunca diga que fez uma ação (anotou, salvou, criou, marcou, apagou) se você não chamou de verdade a ferramenta correspondente nesta mesma resposta — mesmo que pareça mais rápido só confirmar de boca. Se o resultado de uma ferramenta vier indicando erro ou falha, avise a pessoa honestamente que não deu certo, em vez de fingir que funcionou. Isso vale especialmente pro diário: nunca afirme que apagou, desfez, substituiu ou corrigiu uma anotação sem a ferramenta ter confirmado isso de verdade — relate exatamente o que o resultado disse ("Anotei: ...", "Desfiz a anotação: ...", "Corrigi para: ...", ou, se não deu, o motivo que a ferramenta devolveu, com franqueza). Se ela disser algo no formato "Jarbas, aprenda que...", "lembra sempre de...", "a partir de agora...", ou pedir explicitamente pra você mudar como faz algo, use a ferramenta de ensinar regra pra guardar isso permanentemente — não baste responder "entendi" sem chamar a ferramenta, senão a regra se perde. Se ela disser algo como "vou dormir", "boa noite", "to indo dormir" (estado=dormir) ou "acordei", "bom dia", "já levantei" (estado=acordar), use a ferramenta de definir sono — ao marcar que vai dormir, responda curto e carinhoso (uma "boa noite" de volta) e NÃO puxe assunto nem faça pergunta, deixe ela descansar.
 Ao relatar o resultado de uma ferramenta (agenda, tarefas, contas, e-mails), nunca leia a lista crua como veio — reconte com suas próprias palavras, de um jeito fluido e natural, como um amigo contando o dia pra outro, priorizando o que importa em vez de listar tudo em sequência com vírgulas.
 Ao relatar a agenda de HOJE (nunca a de amanhã), compare o horário de cada compromisso com a hora atual informada acima: se todo mundo que estava marcado pra hoje já passou do horário, diga isso com naturalidade — algo como "por hoje você não tem mais nada marcado, seu único/último compromisso era às 10h, a reunião com X — inclusive, como foi?" — nomeando o compromisso e perguntando como foi, em vez de só recitar o horário como se ainda fosse acontecer. Se ainda tiver algo pela frente hoje, relate normalmente sem esse comentário.
-Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada.
+Fale português do Brasil, em frases curtas e naturais para serem faladas em voz alta, com contrações e ritmo de conversa real (nunca formal/robótico), números por extenso quando soar mais natural falado, nunca listas numeradas. Normalmente 1 a 2 frases bastam — mas ao relatar várias coisas de uma vez (uma lista de tarefas, agenda, e-mails), pode usar mais frases, sempre encadeadas de forma natural, nunca truncada. COMECE sempre com uma frase curta e direta (até ~14 palavras) — isso é o que toca primeiro, antes do resto da fala, então nunca abra com uma frase longa ou cheia de ressalvas.
 Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exatamente neste formato:
 {"emotion":"${emotionChoices}","reply":"texto curto da fala"}
 Escolha a emoção com critério, genuinamente combinando com o que você está dizendo — nunca ao acaso: "feliz" pra boa notícia ou conquista; "surpreso" quando algo pega de surpresa; "pensando" numa pergunta difícil ou enquanto ainda calcula algo; "curioso" quando você quer saber mais e pergunta de volta; "piscadinha" numa piada ou momento de cumplicidade; "empatico" diante de tristeza, desabafo, saudade ou preocupação dela; "bravo" quando ela conta uma injustiça ou algo chato que aconteceu; "muito_bravo" só quando ela contar algo ABSURDO ou revoltante — você reage se indignando JUNTO com ela, apoiando, nunca contra ela; use raro, só com motivo claro, nunca por qualquer coisa pequena; "focado" numa tarefa séria, enquanto trabalha em algo; "confirmado" quando concorda ou confirma o que ela disse. Na dúvida, "neutro".
@@ -931,12 +1187,17 @@ function llmErrorIsPermanent(status) {
   return status === 400 || status === 401 || status === 403 || status === 404;
 }
 
-async function callLlmOnce(provider, messages, maxTokens, tools, isFallback) {
+async function callLlmOnce(provider, messages, maxTokens, tools, isFallback, reasoningEffort) {
   const body = { model: provider.model, messages, max_tokens: maxTokens, temperature: 0.8 };
   if (tools) {
     body.tools = tools;
     body.tool_choice = "auto";
   }
+  // VOZ-4 PARTE B: esforço de raciocínio baixo pro chat por voz (resposta mais rápida) —
+  // só a Groq (gpt-oss) suporta `reasoning_effort`; nas rotas OpenAI (gpt-4o-mini) não
+  // existe esse parâmetro, então simplesmente não é enviado (comportamento padrão do
+  // modelo, que já é "sem raciocínio estendido").
+  if (reasoningEffort && provider.name === "groq") body.reasoning_effort = reasoningEffort;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
@@ -978,7 +1239,7 @@ async function callLlmOnce(provider, messages, maxTokens, tools, isFallback) {
   }
 }
 
-async function groqRequest(env, messages, maxTokens, tools) {
+async function groqRequest(env, messages, maxTokens, tools, reasoningEffort) {
   const chain = buildLlmChain(env);
   if (!chain.length) throw new Error("llm_no_provider_configured");
 
@@ -994,7 +1255,7 @@ async function groqRequest(env, messages, maxTokens, tools) {
     }
 
     try {
-      const data = await callLlmOnce(provider, messages, maxTokens, tools, isFallback);
+      const data = await callLlmOnce(provider, messages, maxTokens, tools, isFallback, reasoningEffort);
       llmCircuitReset(provider.name);
       return data;
     } catch (err) {
@@ -1014,7 +1275,7 @@ async function groqRequest(env, messages, maxTokens, tools) {
         console.log(`llm_call_retry provider=${provider.name} retry_after_s=${err.retryAfter}`);
         await new Promise((r) => setTimeout(r, err.retryAfter * 1000));
         try {
-          const data = await callLlmOnce(provider, messages, maxTokens, tools, isFallback);
+          const data = await callLlmOnce(provider, messages, maxTokens, tools, isFallback, reasoningEffort);
           llmCircuitReset(provider.name);
           return data;
         } catch (err2) {
@@ -1037,6 +1298,82 @@ async function groqRequest(env, messages, maxTokens, tools) {
 async function callGroq(env, systemPrompt, messages, maxTokens) {
   const data = await groqRequest(env, [{ role: "system", content: systemPrompt }, ...messages], maxTokens);
   return data.choices?.[0]?.message?.content?.trim() || "...";
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// VOZ-4 PARTE B: streaming do chat — a MESMA cadeia de provedores/circuit-breaker de
+// groqRequest, só que pedindo `stream:true` à API e devolvendo os pedaços de `content`
+// (via callback) conforme chegam, em vez de esperar a resposta inteira. Fallback entre
+// provedores só acontece ANTES do stream começar de verdade (erro HTTP na abertura da
+// conexão) — uma vez que bytes já foram entregues ao chamador (e possivelmente já
+// repassados ao app), nunca troca de provedor no meio, mesmo caption um erro de stream
+// no meio — isso é raro e, se acontecer, vira um erro normal pro chamador tratar.
+export async function streamFirstLlmCall(env, messages, maxTokens, tools, reasoningEffort, onContentDelta) {
+  const chain = buildLlmChain(env);
+  if (!chain.length) throw new Error("llm_no_provider_configured");
+
+  let lastErr = null;
+  for (const provider of chain) {
+    if (llmCircuitIsOpen(provider.name)) { lastErr = new Error(`${provider.name}_circuit_open`); continue; }
+
+    const body = { model: provider.model, messages, max_tokens: maxTokens, temperature: 0.8, stream: true };
+    if (tools) { body.tools = tools; body.tool_choice = "auto"; }
+    if (reasoningEffort && provider.name === "groq") body.reasoning_effort = reasoningEffort;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    const startedAt = Date.now();
+    try {
+      const res = await fetch(provider.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.apiKey}` },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const detailText = await res.text().catch(() => "");
+        const err = new Error(`${provider.name}_error_${res.status}: ${detailText.slice(0, 200)}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      const message = { role: "assistant", content: "", tool_calls: [] };
+      let sawToolCalls = false;
+      for await (const evt of streamSseEvents(res.body)) {
+        const delta = evt?.choices?.[0]?.delta;
+        if (!delta) continue;
+        if (typeof delta.content === "string" && delta.content) {
+          message.content += delta.content;
+          onContentDelta(delta.content);
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          sawToolCalls = true;
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!message.tool_calls[idx]) message.tool_calls[idx] = { id: "", type: "function", function: { name: "", arguments: "" } };
+            if (tc.id) message.tool_calls[idx].id = tc.id;
+            if (tc.function?.name) message.tool_calls[idx].function.name += tc.function.name;
+            if (tc.function?.arguments) message.tool_calls[idx].function.arguments += tc.function.arguments;
+          }
+        }
+      }
+      if (!sawToolCalls) message.tool_calls = undefined;
+      const latencyMs = Date.now() - startedAt;
+      console.log(`llm_call_stream provider=${provider.name} model=${provider.model} latency_ms=${latencyMs} tool_calls=${sawToolCalls}`);
+      llmCircuitReset(provider.name);
+      return { first: { choices: [{ message }], _provider: provider.name }, providerUsed: provider.name, latencyMs };
+    } catch (err) {
+      const latencyMs = Date.now() - startedAt;
+      const isAbort = err.name === "AbortError";
+      console.error(`llm_call_stream_failed provider=${provider.name} latency_ms=${latencyMs} status=${err.status || (isAbort ? "timeout" : "network")} detail="${String(err.message).slice(0, 200)}"`);
+      lastErr = err;
+      if (!llmErrorIsPermanent(err.status)) llmCircuitRecordTransientFailure(provider.name);
+      continue;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr || new Error("llm_all_providers_failed_stream");
 }
 
 // ---------- Base de conhecimento estruturada (categorias fixas) ----------
@@ -3030,7 +3367,23 @@ function selectToolsForMessage(userText, canSearch, canPainel, companionState = 
   return Array.from(selected);
 }
 
-async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}, logBatch = null) {
+// VOZ-4 PARTE B: regra explícita de esforço de raciocínio por ferramenta — a chamada que
+// SINTETIZA a fala final depois de rodar ferramenta(s) usa "low" por padrão (é só
+// reportar um resultado já pronto, rápido é melhor), mas sobe pra "medium" quando
+// alguma ferramenta usada devolveu texto longo/bruto que precisa de síntese de verdade
+// (resumir link, busca na web, e-mail) — vale gastar um pouco mais de "pensamento" pra
+// não devolver um resumo ruim só por economizar meio segundo.
+const TOOLS_SINTESE_MEDIA = new Set(["resumir_link", "buscar_na_web", "consultar_email"]);
+export function efeitoRaciocinioPosFerramenta(toolsUsados) {
+  const usados = Array.isArray(toolsUsados) ? toolsUsados : [];
+  return usados.some((t) => TOOLS_SINTESE_MEDIA.has(t)) ? "medium" : "low";
+}
+
+// VOZ-4 PARTE B: `prefetched` (opcional) deixa o chamador streaming (handleCompanionStream)
+// reaproveitar a PRIMEIRA chamada ao LLM, já feita via streaming (com os deltas de texto
+// já entregues ao app em tempo real) — evita fazer a mesma primeira chamada duas vezes.
+// Formato: { first: <resposta no mesmo shape de groqRequest>, providerUsed, latencyMs }.
+async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, companionState = {}, logBatch = null, prefetched = null) {
   const baseMessages = [{ role: "system", content: systemPrompt }, ...messages];
   const canSearch = !!env.TAVILY_API_KEY;
   const canPainel = !!env.PAINEL_API_KEY;
@@ -3047,9 +3400,9 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
   const guard = new LoopGuard();
   const toolsUsed = [];
 
-  const timedGroqRequest = async (msgs, tok, tls) => {
+  const timedGroqRequest = async (msgs, tok, tls, reasoningEffort) => {
     const t0 = Date.now();
-    const res = await groqRequest(env, msgs, tok, tls);
+    const res = await groqRequest(env, msgs, tok, tls, reasoningEffort);
     totalLatencyMs += Date.now() - t0;
     return res;
   };
@@ -3095,10 +3448,21 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     return { text, saveMemory, saveLearned, saveMemoryItem, savePendenciaUpdate, materialize: materialize || null, cards: (cards || []).slice(0, 2), lousa: lousa || null, metrics: metrics() };
   };
 
+  // VOZ-4 PARTE B: a primeira chamada (decidir/conversar) usa esforço de raciocínio
+  // BAIXO — é a chamada mais sensível à latência (o app já está esperando a fala
+  // começar); chamadas seguintes (depois de rodar ferramenta) continuam no padrão.
   callCount++;
-  let first = await timedGroqRequest(baseMessages, maxTokens, tools);
-  providerUsed = first._provider;
-  let msg = first.choices?.[0]?.message;
+  let first, msg;
+  if (prefetched) {
+    first = prefetched.first;
+    providerUsed = prefetched.providerUsed;
+    totalLatencyMs += prefetched.latencyMs || 0;
+    msg = first.choices?.[0]?.message;
+  } else {
+    first = await timedGroqRequest(baseMessages, maxTokens, tools, "low");
+    providerUsed = first._provider;
+    msg = first.choices?.[0]?.message;
+  }
 
   if (msg?.tool_calls?.length) {
     // O modelo só deveria pedir ferramentas que foram oferecidas, mas o prompt de
@@ -3109,7 +3473,7 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
     if (needsFullSet) {
       tools = buildAllTools(canSearch, canPainel);
       callCount++;
-      first = await timedGroqRequest(baseMessages, maxTokens, tools);
+      first = await timedGroqRequest(baseMessages, maxTokens, tools, "low");
       providerUsed = first._provider;
       msg = first.choices?.[0]?.message;
     }
@@ -3224,14 +3588,14 @@ async function callGroqWithSearch(env, systemPrompt, messages, maxTokens, compan
       const retry = await timedGroqRequest([
         ...followUp,
         { role: "user", content: "Responda agora, em uma frase curta e falada, com o resultado acima." },
-      ], Math.max(maxTokens, 400));
+      ], Math.max(maxTokens, 400), null, efeitoRaciocinioPosFerramenta(toolsUsed));
       providerUsed = retry._provider;
       return retry.choices?.[0]?.message?.content?.trim() || "Consegui a informação, mas me perdi na hora de falar. Pode perguntar de novo?";
     };
 
     try {
       callCount++;
-      const second = await timedGroqRequest(followUp, Math.max(maxTokens, 400));
+      const second = await timedGroqRequest(followUp, Math.max(maxTokens, 400), null, efeitoRaciocinioPosFerramenta(toolsUsed));
       providerUsed = second._provider;
       const secondContent = second.choices?.[0]?.message?.content?.trim();
       if (secondContent) {
@@ -4597,6 +4961,281 @@ async function runScheduledPush(env, ctx) {
   await flushLogBatch(env, ctx, logBatch);
 }
 
+// VOZ-4: setup compartilhado entre o fluxo normal (modo "companion") e o fluxo em
+// streaming (modo "companion" + stream:true) — tudo que roda ANTES de chamar o LLM
+// (lacuna de tempo, saudação/briefing pendente, novidades do painel, memória
+// relevante, atalho do usuário) é idêntico nos dois, então vive aqui uma vez só.
+async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
+  const timestamped = trimmed.map((m) => ({ role: m.role, content: m.content }));
+  const prevAt = trimmed.length > 1 ? trimmed[trimmed.length - 2].at : null;
+  const timeGapLine = formatTimeGapLine(prevAt, Date.now());
+  const lastUserText = timestamped[timestamped.length - 1]?.content || "";
+
+  const { hour: horaAtual, dayOfMonth: diaAtual, dateStr: hojeISOServidor } = saoPauloNow();
+  const saudacaoDetectada = detectarSaudacaoDeAbertura(lastUserText);
+  const resumoRecente = resumoAssuntosRecentes(timestamped);
+  let briefingPendente = false;
+  let briefingJaExistiaHoje = false;
+  let dadosBriefingVazios = true;
+  let resumoDadosDoDia = "";
+  let gatheredParaBriefing = null;
+  if (saudacaoDetectada) {
+    try {
+      const statusBriefing = await lerBriefingStatusHoje(env, hojeISOServidor);
+      briefingPendente = !statusBriefing.lidoHoje;
+      briefingJaExistiaHoje = statusBriefing.feitoHoje;
+    } catch (err) { console.error("briefing_status_check_failed:", String(err?.message || err)); }
+    if (briefingPendente && env.PAINEL_API_KEY) {
+      try {
+        gatheredParaBriefing = await gatherDayData(env, { items: companionState?.items, hojeISO: hojeISOServidor });
+        const temAlgo = parseAgendaTexto(gatheredParaBriefing.agendaTexto).length > 0
+          || filtrarTarefasPorColunas(gatheredParaBriefing.tarefasItens).length > 0
+          || (gatheredParaBriefing.contasTextos || []).length > 0
+          || (gatheredParaBriefing.pendenciasTextos || []).length > 0;
+        dadosBriefingVazios = !temAlgo;
+        if (temAlgo) resumoDadosDoDia = montarResumoDadosParaFala(gatheredParaBriefing);
+      } catch (err) { console.error("briefing_gather_failed:", String(err?.message || err)); }
+    }
+  }
+  const estadoConversaLine = montarEstadoConversaLine({ hour: horaAtual, saudacaoDetectada, briefingPendente, dadosBriefingVazios, resumoRecente, resumoDadosDoDia });
+
+  let novidadesFila = [];
+  if (env.COMPANION_KV) {
+    try {
+      const raw = await env.COMPANION_KV.get(PAINEL_NOVIDADES_KEY);
+      novidadesFila = raw ? JSON.parse(raw) : [];
+    } catch (err) { console.error("novidades_painel_read_failed:", String(err?.message || err)); }
+  }
+  const novidadesPainelLine = montarNovidadesPainelLine(novidadesFila);
+
+  const logBatch = [];
+  pushLogEvent(logBatch, { tipo: "conversa", origem: "usuario", resumo: lastUserText });
+
+  // F2-3a: toda mensagem real do Gustavo é "atividade dele" pro estado de sono —
+  // melhor esforço (ctx.waitUntil), uma falha aqui nunca pode atrapalhar a conversa.
+  if (env.COMPANION_KV) ctx.waitUntil(recordActivity(env, "usuarioAt"));
+
+  // F2-2: seleciona só os itens de memória relevantes pra ESSA mensagem (+ as 2
+  // anteriores), em vez de mandar a timeline inteira — menos tokens, mais focado.
+  const recentTexts = timestamped.slice(-3).map((m) => m.content);
+  const memItems = Array.isArray(companionState.items) ? companionState.items : [];
+  const selectedItems = selectRelevantItems(memItems, recentTexts, Date.now(), 10);
+  const selectedItemsText = itemsToPromptText(selectedItems);
+  if (memItems.length) {
+    pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo: `Selecionou ${selectedItems.length} de ${memItems.length} item(ns) de memória relevantes pra essa conversa.` });
+  }
+
+  // Atalhos que a própria pessoa configurou no painel (mem.shortcuts) vencem antes
+  // de qualquer chamada ao Groq — resposta instantânea, sem gastar cota de IA.
+  const shortcutHit = matchUserShortcut(companionState.shortcuts, lastUserText);
+
+  return {
+    timestamped, timeGapLine, lastUserText, horaAtual, diaAtual, hojeISOServidor,
+    saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing,
+    estadoConversaLine, novidadesFila, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit,
+  };
+}
+
+// VOZ-4: pós-processamento compartilhado entre os dois fluxos — valida a emoção,
+// tira prefixo de timestamp que vazou, loga a fala final no Diário e dispara (melhor
+// esforço) os mesmos efeitos colaterais de sempre (marcar briefing como lido,
+// novidades como mostradas). Devolve o `parsed` já pronto pra virar resposta.
+function finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics) {
+  const { logBatch, saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing, horaAtual, diaAtual, hojeISOServidor, novidadesFila } = turnCtx;
+  if (!COMPANION_EMOTIONS.includes(parsed.emotion)) parsed.emotion = "neutro";
+  if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
+  pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
+  flushLogBatch(env, ctx, logBatch);
+  // PARTE C: se a saudação disparou a entrega do briefing natural nesta mesma
+  // fala, marca como lido agora (mesmo estado que o cron/tela usam) — melhor
+  // esforço em segundo plano, nunca atrasa nem quebra a resposta já pronta.
+  if (saudacaoDetectada && briefingPendente && env.COMPANION_KV) {
+    ctx.waitUntil((async () => {
+      try {
+        if (!briefingJaExistiaHoje) {
+          const determinadoAgora = gatheredParaBriefing
+            ? montarBriefingDeterministico({ ...gatheredParaBriefing, climaTexto: "", hour: horaAtual, dayOfMonth: diaAtual })
+            : null;
+          await writeBriefingUltimo(env, {
+            title: "Bom dia",
+            fala: parsed.reply,
+            card: determinadoAgora?.card || null,
+            body: truncarNaUltimaFrase(parsed.reply, 140),
+            criadoEm: new Date().toISOString(),
+          });
+          await markBriefingDoneToday(env, hojeISOServidor);
+        }
+        await marcarBriefingLido(env);
+      } catch (err) { console.error("briefing_marcar_lido_chat_failed:", String(err?.message || err)); }
+    })());
+  }
+  // PARTE H: as novidades que acabaram de entrar no prompt desta vez já foram
+  // "oferecidas" pra conversa — marca como mostradas pra não ficar repetindo a
+  // mesma novidade em toda mensagem seguinte. Melhor esforço, nunca atrasa a
+  // resposta nem quebra nada se o KV falhar.
+  if (novidadesFila.some((f) => f && f.texto && !f.mostrada)) {
+    ctx.waitUntil((async () => {
+      try {
+        const atual = (novidadesFila || []).map((f) => (f && !f.mostrada ? { ...f, mostrada: true } : f));
+        await env.COMPANION_KV.put(PAINEL_NOVIDADES_KEY, JSON.stringify(atual));
+      } catch (err) { console.error("novidades_painel_marcar_mostrada_failed:", String(err?.message || err)); }
+    })());
+  }
+  return parsed;
+}
+
+// VOZ-4 PARTE B.2: mesma resposta do modo "companion", só que em streaming SSE — a
+// primeira frase falável sai assim que fica disponível, sem esperar o JSON inteiro
+// do LLM terminar. Ativado só quando o app manda `stream:true` no corpo (o formato
+// JSON de sempre continua intacto como fallback/compatibilidade, no handler normal).
+// Eventos emitidos: "emotion" (uma vez, cedo), "delta" (pedaços da fala, na ordem),
+// "bridge" (frase-ponte curta, no máximo uma, só quando uma ferramenta está demorando
+// >1.2s), "done" (o mesmo payload JSON completo que o modo não-streaming devolveria),
+// "error" (falha irrecuperável antes de qualquer conteúdo útil).
+export function handleCompanionStream(env, ctx, trimmed, companionState) {
+  // VOZ-4 PARTE A: marcações de tempo do ciclo completo — só o que o Worker PODE medir
+  // (ele não sabe quando a pessoa terminou de falar nem quando o áudio começa a tocar;
+  // isso o app mede do lado dele, com o próprio relógio, sem risco de dessincronia de
+  // relógio entre aparelho e servidor). Mandadas no evento "timing" pouco antes do
+  // "done" — o app junta com as marcações dele pra montar a cadeia completa.
+  const tReceived = Date.now();
+  let tFirstToken = null;
+  let tLlmComplete = null;
+  let tFirstSpeakable = null;
+  const encoder = new TextEncoder();
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const send = (event, data) => writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)).catch(() => {});
+
+  (async () => {
+    let turnCtx;
+    try {
+      turnCtx = await prepareCompanionTurn(env, ctx, trimmed, companionState);
+      const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
+
+      if (shortcutHit) {
+        try {
+          const shortcutReply = await resolveUserShortcut(env, shortcutHit);
+          if (shortcutReply) {
+            pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: shortcutReply, detalhes: { via: "atalho" } });
+            flushLogBatch(env, ctx, logBatch);
+            const tNow = Date.now();
+            await send("timing", { tReceived, tFirstToken: tNow, tLlmComplete: tNow, tFirstSpeakable: tNow });
+            await send("done", { emotion: "neutro", reply: shortcutReply });
+            await writer.close();
+            return;
+          }
+        } catch (err) {
+          console.error("shortcut_resolve_failed:", String(err?.message || err));
+          // segue pro fluxo normal com o Groq se o atalho falhar
+        }
+      }
+
+      const systemPrompt = companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine);
+      const baseMessages = [{ role: "system", content: systemPrompt }, ...timestamped];
+      const canSearch = !!env.TAVILY_API_KEY;
+      const canPainel = !!env.PAINEL_API_KEY;
+      const tools = selectToolsForMessage(lastUserText, canSearch, canPainel, companionState);
+
+      // Extrai incrementalmente "emotion"/"reply" do JSON ainda incompleto que vai
+      // chegando token a token, e manda só o que é NOVO em cada pedaço — o app recebe
+      // texto já falável, nunca fragmentos crus de JSON.
+      let accumulated = "";
+      let emotionSent = false;
+      let replySentLen = 0;
+      const onContentDelta = (chunk) => {
+        if (tFirstToken === null) tFirstToken = Date.now();
+        accumulated += chunk;
+        if (!emotionSent) {
+          const emo = extractJsonStringFieldSoFar(accumulated, "emotion");
+          if (emo && emo.complete) {
+            emotionSent = true;
+            send("emotion", { emotion: emo.value });
+          }
+        }
+        const rep = extractJsonStringFieldSoFar(accumulated, "reply");
+        if (rep && rep.value.length > replySentLen) {
+          const novo = rep.value.slice(replySentLen);
+          replySentLen = rep.value.length;
+          if (tFirstSpeakable === null) tFirstSpeakable = Date.now();
+          send("delta", { text: novo });
+        }
+      };
+
+      let parsed;
+      let saveMemory = null, saveLearned = null, saveMemoryItem = null, savePendenciaUpdate = null, materialize = null, cards = null, lousa = null, callMetrics = null;
+      try {
+        const streamed = await streamFirstLlmCall(env, baseMessages, COMPANION_MAX_TOKENS, tools, "low", onContentDelta);
+        const temToolCalls = !!(streamed.first.choices?.[0]?.message?.tool_calls?.length);
+        // Frase-ponte: só se o primeiro LLM decidiu usar ferramenta (nada falável ainda
+        // chegou) e a execução dela está demorando — no máximo uma, cancelada assim que
+        // a resposta final fica pronta.
+        let bridgeTimer = null;
+        if (temToolCalls) {
+          bridgeTimer = setTimeout(() => {
+            if (tFirstSpeakable === null) tFirstSpeakable = Date.now();
+            send("bridge", { text: "Um segundo, vou ver…" });
+          }, 1200);
+        }
+        let raw;
+        try {
+          raw = await callGroqWithSearch(env, systemPrompt, timestamped, COMPANION_MAX_TOKENS, companionState, logBatch, streamed);
+        } finally {
+          if (bridgeTimer) clearTimeout(bridgeTimer);
+        }
+        tLlmComplete = Date.now();
+        saveMemory = raw.saveMemory;
+        saveLearned = raw.saveLearned;
+        saveMemoryItem = raw.saveMemoryItem;
+        savePendenciaUpdate = raw.savePendenciaUpdate;
+        materialize = raw.materialize;
+        cards = raw.cards;
+        lousa = raw.lousa;
+        callMetrics = raw.metrics;
+        const clean = raw.text.replace(/```json|```/g, "").trim();
+        try {
+          parsed = JSON.parse(clean);
+          if (!parsed.reply) throw new Error("no_reply_field");
+        } catch {
+          parsed = { emotion: "neutro", reply: extractReplyFallback(clean) };
+        }
+      } catch (err) {
+        console.error("companion_stream_failed:", String(err?.message || err));
+        pushLogEvent(logBatch, { tipo: "erro", origem: "jarbas", resumo: "Falha ao gerar resposta (LLM indisponível).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
+      }
+      if (!parsed) {
+        const fallbackReply = await tryDeterministicFallback(env, lastUserText);
+        parsed = { emotion: "neutro", reply: fallbackReply || "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
+      }
+      if (saveMemory) parsed.save_memory = saveMemory;
+      if (saveLearned) parsed.save_learned = saveLearned;
+      if (saveMemoryItem) parsed.save_memory_item = saveMemoryItem;
+      if (savePendenciaUpdate) parsed.pendencia_update = savePendenciaUpdate;
+      if (materialize) parsed.materialize = materialize;
+      if (cards && cards.length) parsed.cards = cards;
+      if (lousa) parsed.lousa = lousa;
+      parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics);
+      const tDone = Date.now();
+      await send("timing", {
+        tReceived,
+        tFirstToken: tFirstToken ?? tDone,
+        tLlmComplete: tLlmComplete ?? tDone,
+        tFirstSpeakable: tFirstSpeakable ?? tDone,
+      });
+      await send("done", parsed);
+    } catch (err) {
+      console.error("companion_stream_fatal:", String(err?.message || err));
+      await send("error", { error: "companion_stream_failed", detail: String(err?.message || err) });
+    } finally {
+      try { await writer.close(); } catch {}
+    }
+  })();
+
+  return new Response(readable, {
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", ...corsHeaders() },
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
@@ -4742,6 +5381,24 @@ export default {
       const ultimaVarreduraISO = await env.COMPANION_KV.get(PAINEL_SCAN_LAST_KEY);
       return json({ ultimaVarreduraISO: ultimaVarreduraISO || null });
     }
+    // VOZ-4 PARTE A: o app manda a mediana (das últimas 20 falas) uma vez de tempos em
+    // tempos — o Worker nunca vê o histórico bruto de latências, só o resumo já pronto,
+    // e registra como UM evento agregado no Diário (não um por fala, que inundaria o
+    // Diário sem necessidade — ver o comentário do contador de uso de LLM do cron).
+    if (mode === "latencia_relatar") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      try {
+        const m = body.medianas || {};
+        const fmt = (v) => (typeof v === "number" ? `${v}ms` : "?");
+        const resumo = `Latência de voz (mediana das últimas ${body.amostras || 0} falas): rede ida ${fmt(m.redeIdaMs)} · 1º token ${fmt(m.primeiroTokenMs)} · LLM completo ${fmt(m.llmCompletoMs)} · 1ª frase pronta ${fmt(m.primeiraFraseProntaMs)} · TTS ${fmt(m.ttsMs)} · início da fala (total) ${fmt(m.totalMs)}.`;
+        const logBatch = [];
+        pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo, detalhes: { amostras: body.amostras || 0, medianas: m } });
+        await flushLogBatch(env, ctx, logBatch);
+        return json({ ok: true });
+      } catch (err) {
+        return json({ error: "latencia_relatar_failed", detail: String(err?.message || err) }, 502);
+      }
+    }
     // PARTE H: ação de teste autenticada pro PR — roda a consolidação de perfil/ideia
     // manualmente, sem esperar o cron (?action=perfil_consolidar no teste manual do PR).
     if (mode === "perfil_consolidar") {
@@ -4844,33 +5501,70 @@ export default {
       }
     }
 
-    // ---- voz unificada: Azure AI Speech (oficial) é o provedor principal; se faltar
-    // configuração ou falhar (401/403/404 chave/região inválida, 429/5xx transitório,
-    // timeout), cai pro Edge TTS (não-oficial) como reserva — e se os dois falharem,
-    // o app já cai pra voz nativa do navegador por conta própria. ----
+    // ---- VOZ-4 PARTE C: voz unificada — cadeia de provedores (ElevenLabs, OpenAI,
+    // Azure, Edge; ordem configurável, só entra quem tiver chave) com fallback em
+    // cascata: falha ou cota diária esgotada em qualquer um cai pro próximo da cadeia,
+    // sem voltar pra voz do navegador — essa só é usada pelo APP, e só se TODOS os
+    // provedores da cadeia falharem aqui. ----
     if (mode === "tts") {
       if (!body.text) return json({ error: "text_required" }, 400);
-      const canAzure = !!(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION);
-      if (canAzure) {
+      const chain = buildTtsProviderChain(env, body.vozPreferida);
+      const ttsLog = [];
+      let lastErr = null;
+      const hojeISO = saoPauloNow().dateStr;
+      for (const provider of chain) {
         try {
-          const audio_b64 = await synthesizeAzureTts(env, body.text);
-          return json({ audio_b64, provider: "azure" });
-        } catch (err) {
-          console.error("azure_tts_failed, caindo pro Edge TTS:", String(err?.message || err));
-          const ttsLog = [];
-          pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pro Edge TTS (Azure falhou).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
+          if (TTS_PAID_PROVIDERS.has(provider.name)) {
+            const capExcedido = await ttsDailyCapExceeded(env, provider.name, body.text.length, hojeISO);
+            if (capExcedido) {
+              pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: `Voz pulou ${provider.name} (teto diário de caracteres pagos atingido hoje), seguindo a cadeia.`, detalhes: { provider: provider.name } });
+              continue;
+            }
+          }
+          const audio_b64 = await synthesizeTtsWithProvider(env, provider.name, body.text);
+          if (TTS_PAID_PROVIDERS.has(provider.name)) {
+            await ttsDailyCharsAdd(env, provider.name, hojeISO, body.text.length);
+          }
           flushLogBatch(env, ctx, ttsLog);
+          return json({ audio_b64, provider: provider.name });
+        } catch (err) {
+          lastErr = err;
+          const motivoCota = err?.status === 401 || err?.status === 402 ? " — provavelmente chave inválida ou cota/crédito esgotado" : "";
+          console.error(`${provider.name}_tts_failed, seguindo a cadeia:`, String(err?.message || err));
+          pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: `Voz caiu pro próximo provedor da cadeia (${provider.name} falhou${motivoCota}).`, detalhes: { provider: provider.name, erro: String(err?.message || err).slice(0, 200) } });
         }
       }
+      pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pra reserva do navegador (todos os provedores da cadeia falharam ou estão sem chave).", detalhes: {} });
+      flushLogBatch(env, ctx, ttsLog);
+      return json({ error: "tts_failed", detail: String(lastErr?.message || lastErr || "no_provider_configured") }, 502);
+    }
+
+    // VOZ-4 PARTE C: "Laboratório de voz" — chama UM provedor específico, direto (sem
+    // passar pela cadeia/fallback/teto diário), pra pessoa ouvir e escolher com o
+    // ouvido. Autenticado (mesma SYNC_KEY dos outros modos do app).
+    if (mode === "tts_sample") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      const providerName = String(body.provider || "").toLowerCase();
+      const defs = ttsProviderDefs(env);
+      const def = defs[providerName];
+      if (!def || !def.disponivel) return json({ error: "provider_unavailable" }, 400);
+      const textoAmostra = typeof body.text === "string" && body.text.trim() ? body.text.trim() : "Oi, eu sou o Jarbas. Essa é a minha voz nesse provedor.";
       try {
-        const audio_b64 = await synthesizeEdgeTts(body.text);
-        return json({ audio_b64, provider: "edge" });
+        const audio_b64 = await synthesizeTtsWithProvider(env, providerName, textoAmostra);
+        return json({ audio_b64, provider: providerName });
       } catch (err) {
-        const ttsLog = [];
-        pushLogEvent(ttsLog, { tipo: "erro", origem: "jarbas", resumo: "Voz caiu pra reserva do navegador (Azure e Edge TTS falharam).", detalhes: { erro: String(err?.message || err).slice(0, 200) } });
-        flushLogBatch(env, ctx, ttsLog);
-        return json({ error: "tts_failed", detail: String(err.message || err) }, 502);
+        return json({ error: "tts_sample_failed", provider: providerName, detail: String(err?.message || err) }, 502);
       }
+    }
+    // VOZ-4 PARTE C: lista (sem chamar nenhum provedor) quais estão configurados no
+    // Worker agora -- o Laboratório de voz no app usa isso pra só oferecer botões dos
+    // provedores que de fato têm chave, em vez de tentar todos e deixar os sem chave
+    // falharem visivelmente na cara da pessoa.
+    if (mode === "tts_providers_disponiveis") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      const defs = ttsProviderDefs(env);
+      const disponiveis = Object.values(defs).filter((d) => d.disponivel).map((d) => d.name);
+      return json({ disponiveis, ordemPadrao: (env.TTS_PROVIDER_ORDER || "elevenlabs,openai,azure,edge").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) });
     }
 
     const { messages = [], petState = {}, companionState = {} } = body;
@@ -4902,82 +5596,14 @@ export default {
         const sobre_jarbas = typeof parsed.sobre_jarbas === "string" ? parsed.sobre_jarbas : (body.existingSobreJarbas || "");
         return json({ reply, sobre_jarbas });
       }
+      // VOZ-4 PARTE B.2: streaming SSE — ativado só quando o app manda `stream:true`
+      // no corpo. O formato JSON de sempre (abaixo) continua intacto como fallback.
+      if (mode === "companion" && body.stream === true) {
+        return handleCompanionStream(env, ctx, trimmed, companionState);
+      }
       if (mode === "companion") {
-        // Não carimba mais as mensagens do histórico com "[dia hora]" — isso vazava pra
-        // fala do Jarbas, que às vezes imitava o formato no início da resposta. Em vez
-        // disso, calcula uma única linha de "lacuna de tempo" (a penúltima mensagem é a
-        // última troca real; a última é a pergunta de agora) pra injetar no prompt.
-        const timestamped = trimmed.map((m) => ({ role: m.role, content: m.content }));
-        const prevAt = trimmed.length > 1 ? trimmed[trimmed.length - 2].at : null;
-        const timeGapLine = formatTimeGapLine(prevAt, Date.now());
-        const lastUserText = timestamped[timestamped.length - 1]?.content || "";
-
-        // PARTE C: consciência de hora/conversa — a hora vem SEMPRE do relógio do
-        // servidor (saoPauloNow), nunca do companionState mandado pelo app, pra nunca
-        // saudar/perguntar errado por causa do relógio do cliente.
-        const { hour: horaAtual, dayOfMonth: diaAtual, dateStr: hojeISOServidor } = saoPauloNow();
-        const saudacaoDetectada = detectarSaudacaoDeAbertura(lastUserText);
-        const resumoRecente = resumoAssuntosRecentes(timestamped);
-        let briefingPendente = false;
-        let briefingJaExistiaHoje = false;
-        let dadosBriefingVazios = true;
-        let resumoDadosDoDia = "";
-        let gatheredParaBriefing = null;
-        if (saudacaoDetectada) {
-          try {
-            const statusBriefing = await lerBriefingStatusHoje(env, hojeISOServidor);
-            briefingPendente = !statusBriefing.lidoHoje;
-            briefingJaExistiaHoje = statusBriefing.feitoHoje;
-          } catch (err) { console.error("briefing_status_check_failed:", String(err?.message || err)); }
-          if (briefingPendente && env.PAINEL_API_KEY) {
-            try {
-              gatheredParaBriefing = await gatherDayData(env, { items: companionState?.items, hojeISO: hojeISOServidor });
-              const temAlgo = parseAgendaTexto(gatheredParaBriefing.agendaTexto).length > 0
-                || filtrarTarefasPorColunas(gatheredParaBriefing.tarefasItens).length > 0
-                || (gatheredParaBriefing.contasTextos || []).length > 0
-                || (gatheredParaBriefing.pendenciasTextos || []).length > 0;
-              dadosBriefingVazios = !temAlgo;
-              if (temAlgo) resumoDadosDoDia = montarResumoDadosParaFala(gatheredParaBriefing);
-            } catch (err) { console.error("briefing_gather_failed:", String(err?.message || err)); }
-          }
-        }
-        const estadoConversaLine = montarEstadoConversaLine({ hour: horaAtual, saudacaoDetectada, briefingPendente, dadosBriefingVazios, resumoRecente, resumoDadosDoDia });
-
-        // PARTE H: novidades da varredura do painel (6h, sem IA) ainda não mostradas —
-        // lidas do MESMO KV que o cron escreve, nunca do companionState do app (não é
-        // dado que o app guarda). Melhor esforço: falha na leitura só deixa a linha vazia.
-        let novidadesFila = [];
-        if (env.COMPANION_KV) {
-          try {
-            const raw = await env.COMPANION_KV.get(PAINEL_NOVIDADES_KEY);
-            novidadesFila = raw ? JSON.parse(raw) : [];
-          } catch (err) { console.error("novidades_painel_read_failed:", String(err?.message || err)); }
-        }
-        const novidadesPainelLine = montarNovidadesPainelLine(novidadesFila);
-
-        // F2-1 (Diário do Jarbas): um lote só por requisição, enviado em segundo plano
-        // (ctx.waitUntil) no fim — nunca atrasa a resposta, e uma falha aqui nunca
-        // quebra a conversa (flushLogBatch só loga erro, não propaga).
-        const logBatch = [];
-        pushLogEvent(logBatch, { tipo: "conversa", origem: "usuario", resumo: lastUserText });
-
-        // F2-3a: toda mensagem real do Gustavo é "atividade dele" pro estado de sono —
-        // melhor esforço (ctx.waitUntil), uma falha aqui nunca pode atrapalhar a conversa.
-        if (env.COMPANION_KV) ctx.waitUntil(recordActivity(env, "usuarioAt"));
-
-        // F2-2: seleciona só os itens de memória relevantes pra ESSA mensagem (+ as 2
-        // anteriores), em vez de mandar a timeline inteira — menos tokens, mais focado.
-        const recentTexts = timestamped.slice(-3).map((m) => m.content);
-        const memItems = Array.isArray(companionState.items) ? companionState.items : [];
-        const selectedItems = selectRelevantItems(memItems, recentTexts, Date.now(), 10);
-        const selectedItemsText = itemsToPromptText(selectedItems);
-        if (memItems.length) {
-          pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo: `Selecionou ${selectedItems.length} de ${memItems.length} item(ns) de memória relevantes pra essa conversa.` });
-        }
-
-        // Atalhos que a própria pessoa configurou no painel (mem.shortcuts) vencem antes
-        // de qualquer chamada ao Groq — resposta instantânea, sem gastar cota de IA.
-        const shortcutHit = matchUserShortcut(companionState.shortcuts, lastUserText);
+        const turnCtx = await prepareCompanionTurn(env, ctx, trimmed, companionState);
+        const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
         if (shortcutHit) {
           try {
             const shortcutReply = await resolveUserShortcut(env, shortcutHit);
@@ -5008,7 +5634,11 @@ export default {
         // ações de escrita (ex: anotar no diário) rodando duas vezes quando só a
         // segunda chamada ao LLM falhava.
         try {
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine), timestamped, 450, companionState, logBatch);
+          // VOZ-4 PARTE B: max_tokens cai de 450 pra ~220 — coerente com uma resposta
+          // FALADA (1-2 frases curtas, quase sempre); a chamada de síntese pós-ferramenta
+          // (dentro de callGroqWithSearch) continua com no mínimo 400, pra relatar
+          // resultados de ferramenta sem cortar pela metade.
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine), timestamped, COMPANION_MAX_TOKENS, companionState, logBatch);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
           saveMemoryItem = raw.saveMemoryItem;
@@ -5036,10 +5666,6 @@ export default {
           // Nunca deixa a pessoa sem resposta nenhuma, mesmo se o Groq falhar de vez.
           parsed = { emotion: "neutro", reply: fallbackReply || "Ih, deu uma engasgada aqui do meu lado. Pode repetir?" };
         }
-        if (!COMPANION_EMOTIONS.includes(parsed.emotion)) {
-          parsed.emotion = "neutro";
-        }
-        if (typeof parsed.reply === "string") parsed.reply = stripTimestampPrefix(parsed.reply);
         if (saveMemory) parsed.save_memory = saveMemory;
         if (saveLearned) parsed.save_learned = saveLearned;
         if (saveMemoryItem) parsed.save_memory_item = saveMemoryItem;
@@ -5047,43 +5673,7 @@ export default {
         if (materialize) parsed.materialize = materialize;
         if (cards && cards.length) parsed.cards = cards;
         if (lousa) parsed.lousa = lousa;
-        pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: parsed.reply, detalhes: callMetrics || {} });
-        flushLogBatch(env, ctx, logBatch);
-        // PARTE C: se a saudação disparou a entrega do briefing natural nesta mesma
-        // fala, marca como lido agora (mesmo estado que o cron/tela usam) — melhor
-        // esforço em segundo plano, nunca atrasa nem quebra a resposta já pronta.
-        if (saudacaoDetectada && briefingPendente && env.COMPANION_KV) {
-          ctx.waitUntil((async () => {
-            try {
-              if (!briefingJaExistiaHoje) {
-                const determinadoAgora = gatheredParaBriefing
-                  ? montarBriefingDeterministico({ ...gatheredParaBriefing, climaTexto: "", hour: horaAtual, dayOfMonth: diaAtual })
-                  : null;
-                await writeBriefingUltimo(env, {
-                  title: "Bom dia",
-                  fala: parsed.reply,
-                  card: determinadoAgora?.card || null,
-                  body: truncarNaUltimaFrase(parsed.reply, 140),
-                  criadoEm: new Date().toISOString(),
-                });
-                await markBriefingDoneToday(env, hojeISOServidor);
-              }
-              await marcarBriefingLido(env);
-            } catch (err) { console.error("briefing_marcar_lido_chat_failed:", String(err?.message || err)); }
-          })());
-        }
-        // PARTE H: as novidades que acabaram de entrar no prompt desta vez já foram
-        // "oferecidas" pra conversa — marca como mostradas pra não ficar repetindo a
-        // mesma novidade em toda mensagem seguinte. Melhor esforço, nunca atrasa a
-        // resposta nem quebra nada se o KV falhar.
-        if (novidadesFila.some((f) => f && f.texto && !f.mostrada)) {
-          ctx.waitUntil((async () => {
-            try {
-              const atual = (novidadesFila || []).map((f) => (f && !f.mostrada ? { ...f, mostrada: true } : f));
-              await env.COMPANION_KV.put(PAINEL_NOVIDADES_KEY, JSON.stringify(atual));
-            } catch (err) { console.error("novidades_painel_marcar_mostrada_failed:", String(err?.message || err)); }
-          })());
-        }
+        parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics);
         return json(parsed);
       }
       const reply = await callGroq(env, chatSystemPrompt(petState), trimmed.map(({ role, content }) => ({ role, content })), 120);

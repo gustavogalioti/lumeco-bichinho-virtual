@@ -75,6 +75,9 @@ function makeSandbox({ fetchImpl, ctxState } = {}) {
     AbortController,
     setTimeout, clearTimeout, setInterval, clearInterval,
     console,
+    // VOZ-4 PARTE C: fetchTtsAudio manda a escolha persistida de provedor -- aqui
+    // "ninguém escolheu nada" (segue a ordem padrão do Worker), igual ao padrão real.
+    vozConfig: () => ({ provedor: null, vozId: null, velocidade: 1.08 }),
   };
   vm.createContext(sandbox);
   vm.runInContext(trecho + `
@@ -164,6 +167,31 @@ function makeSandbox({ fetchImpl, ctxState } = {}) {
   await s.__playAudioForGen({ b64: "QUFB", provider: "azure" }, myGen);
   assert.equal(s.__elTts.src, "data:audio/mpeg;base64,QUFB", "tocou no ttsEl único, trocando só o src");
   console.log("playAudioForGen (elemento único reaproveitado): OK");
+}
+
+// ---------- VOZ-4 PARTE C: velocidade (vozConfig().velocidade) aplicada via playbackRate ----------
+{
+  const s = makeSandbox();
+  s.vozConfig = () => ({ provedor: null, vozId: null, velocidade: 1.2 });
+  s.__elTts._playImpl = () => { queueMicrotask(() => { s.__elTts.onplay && s.__elTts.onplay(); s.__elTts.onended && s.__elTts.onended(); }); return Promise.resolve(); };
+  const myGen = s.__getSpeechState().generation;
+  await s.__playAudioForGen({ b64: "QUFB", provider: "azure" }, myGen);
+  assert.equal(s.__elTts.playbackRate, 1.2, "aplica a velocidade escolhida em mem.config.voz.velocidade");
+  assert.equal(s.__elTts.preservesPitch, true, "mantém o tom (sem efeito esquilo) ao mudar a velocidade");
+  console.log("playAudioForGen (velocidade aplicada via playbackRate + preservesPitch): OK");
+}
+
+// ---------- VOZ-4 PARTE C: fetchTtsAudio manda a escolha persistida de provedor ----------
+{
+  let sentBody = null;
+  const s = makeSandbox({
+    fetchImpl: (url, opts) => { sentBody = JSON.parse(opts.body); return Promise.resolve({ ok: true, json: async () => ({ audio_b64: "QUFB", provider: "elevenlabs" }) }); },
+  });
+  s.vozConfig = () => ({ provedor: "elevenlabs", vozId: null, velocidade: 1.08 });
+  const r = await s.__fetchTtsAudioWithRetry("oi");
+  assert.equal(sentBody.vozPreferida.provedor, "elevenlabs", "manda a escolha persistida pro Worker, que a usa pra furar a fila da ordem padrão");
+  assert.equal(r.provider, "elevenlabs");
+  console.log("fetchTtsAudio (manda vozPreferida com a escolha persistida): OK");
 }
 
 // ---------- updateVoiceProviderLabel: mostra o motivo quando o provedor é o navegador ----------
