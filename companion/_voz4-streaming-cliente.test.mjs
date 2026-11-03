@@ -114,6 +114,7 @@ function makeSandbox({ fetchImpl } = {}) {
     applyPendenciaUpdate: (u) => calls.applyPendenciaUpdate.push(u),
     registerCreation: (c) => calls.registerCreation.push(c),
     addMemoryItem: (item, origem) => calls.addMemoryItem.push({ item, origem }),
+    callWorkerSyncMode: (mode, extra) => { calls.callWorkerSyncMode = calls.callWorkerSyncMode || []; calls.callWorkerSyncMode.push({ mode, extra }); return Promise.resolve({ ok: true }); },
   };
   vm.createContext(sandbox);
   vm.runInContext(trecho1 + "\n" + trecho2 + `
@@ -127,6 +128,10 @@ function makeSandbox({ fetchImpl } = {}) {
     this.__askRaizNonStreaming = askRaizNonStreaming;
     this.__buildCompanionState = buildCompanionState;
     this.__applyCompanionResult = applyCompanionResult;
+    this.__loadLatencyTraces = loadLatencyTraces;
+    this.__recordLatencyTrace = recordLatencyTrace;
+    this.__computeLatencyMedians = computeLatencyMedians;
+    this.__formatLatencyDiagnosticText = formatLatencyDiagnosticText;
   `, sandbox);
   sandbox.__elTts = elTts;
   sandbox.__elHint = elHint;
@@ -378,6 +383,80 @@ function sseFakeResponse(events, { ok = true, contentType = "text/event-stream" 
   assert.equal(result.parsed.reply, "Isso aqui foi dito.", "sem \"done\", fecha com o texto que já tinha sido streamado (nunca inventa outra coisa)");
   assert.deepEqual(ttsFetchTexts, ["Isso aqui foi dito."], "não tenta falar de novo o que já tinha sido falado via delta");
   console.log("askRaizStreaming (conexão cai depois de falar algo -- não lança, fecha com o que tem): OK");
+}
+
+// ---------- VOZ-4 PARTE A: recordLatencyTrace / computeLatencyMedians / diagnóstico ----------
+{
+  const s = makeSandbox();
+  assert.equal(s.__formatLatencyDiagnosticText(), "(ainda sem dados — converse por voz pra começar a medir)", "sem amostras ainda -> mensagem clara, nunca quebra");
+
+  // uma fala completa, com TODAS as etapas presentes
+  s.__recordLatencyTrace({
+    tUserEnd: 1000, tSent: 1010, tWorkerReceived: 1090, tFirstToken: 1300, tLlmComplete: 1900,
+    tFirstSpeakable: 1350, tFirstTtsStart: 1360, tFirstTtsReady: 1960, tPlaybackStart: 1980,
+  }, "https://worker.test");
+  const list = s.__loadLatencyTraces();
+  assert.equal(list.length, 1);
+  // objeto vem do sandbox (outro "realm") -- compara pelo JSON, não por identidade de protótipo
+  assert.equal(JSON.stringify(list[0]), JSON.stringify({ redeIdaMs: 80, primeiroTokenMs: 210, llmCompletoMs: 810, primeiraFraseProntaMs: 260, ttsMs: 600, totalMs: 980 }));
+
+  const m = s.__computeLatencyMedians();
+  assert.equal(m.amostras, 1);
+  assert.equal(m.totalMs, 980, "mediana de 1 amostra é ela mesma");
+  assert.match(s.__formatLatencyDiagnosticText(), /980ms/);
+  assert.match(s.__formatLatencyDiagnosticText(), /INÍCIO DA FALA/);
+  console.log("recordLatencyTrace/computeLatencyMedians (1 amostra completa): OK");
+}
+
+{
+  // uma etapa faltando (ex: a conexão caiu antes do "timing") nunca derruba as outras --
+  // só essa etapa fica null, e a mediana ignora nulls sem quebrar.
+  const s = makeSandbox();
+  s.__recordLatencyTrace({ tUserEnd: 1000, tSent: 1010, tPlaybackStart: 1500 }, "https://worker.test");
+  const stage = s.__loadLatencyTraces()[0];
+  assert.equal(stage.redeIdaMs, null, "sem tWorkerReceived -> essa etapa fica null");
+  assert.equal(stage.totalMs, 500, "mas a etapa que TINHA os dois lados (a e g) ainda é calculada");
+  console.log("recordLatencyTrace (etapa faltando nunca derruba as outras): OK");
+}
+
+{
+  // janela de 20 amostras (mais antiga cai fora) + relatório agregado a cada 20
+  const s = makeSandbox();
+  for (let i = 0; i < 25; i++) {
+    s.__recordLatencyTrace({ tUserEnd: 0, tSent: 0, tPlaybackStart: 1000 + i }, "https://worker.test");
+  }
+  assert.equal(s.__loadLatencyTraces().length, 20, "nunca guarda mais que as últimas 20 amostras");
+  assert.equal(s.__calls.callWorkerSyncMode.length, 1, "manda o resumo pro Diário exatamente 1x a cada 20 amostras (não 1x por fala)");
+  assert.equal(s.__calls.callWorkerSyncMode[0].mode, "latencia_relatar");
+  assert.equal(s.__calls.callWorkerSyncMode[0].extra.amostras, 20);
+  console.log("recordLatencyTrace (janela de 20 + relatório agregado 1x a cada 20): OK");
+}
+
+// ---------- askRaizStreaming: preenche o trace a partir do evento "timing" ----------
+{
+  const s = makeSandbox({
+    fetchImpl: (url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (body.mode === "tts") return Promise.resolve({ ok: true, json: async () => ({ audio_b64: Buffer.from(body.text, "utf8").toString("base64"), provider: "azure" }) });
+      return Promise.resolve(sseFakeResponse([
+        { event: "timing", data: { tReceived: 2000, tFirstToken: 2100, tLlmComplete: 2400, tFirstSpeakable: 2150 } },
+        { event: "delta", data: { text: "Prontinho, já falei isso tudo." } },
+        { event: "done", data: { emotion: "neutro", reply: "Prontinho, já falei isso tudo." } },
+      ]));
+    },
+  });
+  s.__elTts._playImpl = function () { queueMicrotask(() => { this.onplay && this.onplay(); this.onended && this.onended(); }); return Promise.resolve(); };
+  const trace = { tUserEnd: 1950 };
+  await s.__askRaizStreaming("https://worker.test", {}, () => {}, trace);
+  assert.equal(trace.tWorkerReceived, 2000);
+  assert.equal(trace.tFirstToken, 2100);
+  assert.equal(trace.tLlmComplete, 2400);
+  assert.equal(trace.tFirstSpeakable, 2150);
+  assert.equal(typeof trace.tSent, "number", "tSent foi marcado antes do fetch");
+  assert.equal(typeof trace.tFirstTtsStart, "number", "hook de início do TTS foi chamado");
+  assert.equal(typeof trace.tFirstTtsReady, "number", "hook de TTS pronto foi chamado");
+  assert.equal(typeof trace.tPlaybackStart, "number", "hook de início da reprodução foi chamado");
+  console.log("askRaizStreaming (preenche o trace a partir do evento timing + hooks de TTS/reprodução): OK");
 }
 
 console.log("_voz4-streaming-cliente.test.mjs: todos os testes passaram");

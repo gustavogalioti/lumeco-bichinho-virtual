@@ -380,6 +380,7 @@
     <button id="sleepRoutineBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">🌙 Rotina do Jarbas</button>
     <button id="voiceModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">voz: unificada</button>
     <div id="voiceProviderLabel" style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;"></div>
+    <button id="latencyDebugBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">⏱ Diagnóstico de latência</button>
     <button id="interruptModeBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">interromper por voz: automático (fone)</button>
     <button id="interruptSensitivityBtn" type="button" class="btn-secondary" style="width:100%; text-align:left; margin-top:10px;">sensibilidade: média</button>
     <div style="font-size:11px; opacity:0.6; margin-top:4px; padding-left:2px;">Toque na tela ou no microfone sempre interrompe o Jarbas enquanto ele fala.</div>
@@ -533,6 +534,15 @@
     <div class="test-grid" id="testSceneGrid"></div>
     <button id="testDissolveBtn" type="button" class="btn-secondary" style="width:100%; margin-top:16px;">Dissolver</button>
     <button id="aparenciaTestCloseBtn" style="margin-top:18px;">Fechar</button>
+  </div>
+</div>
+
+<div class="setup hidden" id="latencyDebugEl">
+  <div class="setup-card" style="max-height:82vh; overflow-y:auto;">
+    <h2>⏱ Diagnóstico de latência</h2>
+    <p style="color:var(--muted); font-size:13px; margin:0 0 14px;">VOZ-4: mediana das últimas conversas por voz, deste aparelho. "Início da fala" é o número que mais importa — do fim do que você falou até o Jarbas começar a responder.</p>
+    <pre id="latencyDebugText" style="white-space:pre-wrap; font-size:13px; line-height:1.6; margin:0 0 14px;">(ainda sem dados — converse por voz pra começar a medir)</pre>
+    <button id="latencyDebugCloseBtn" style="margin-top:4px;">Fechar</button>
   </div>
 </div>
 
@@ -2951,7 +2961,7 @@ async function speakChunksStreaming(chunks, myGen){
 // entrega) em vez de um array já fechado — a primeira frase pode tocar antes mesmo do
 // Jarbas terminar de "pensar" o resto. Frases completas (terminam em . ! ?) menores que
 // 20 caracteres são seguradas e coladas na próxima, igual a splitIntoSpeechChunks.
-function createStreamingSpeechQueue(myGen){
+function createStreamingSpeechQueue(myGen, hooks){
   const chunks = [];
   const results = [];
   let nextToPlay = 0;
@@ -2959,11 +2969,21 @@ function createStreamingSpeechQueue(myGen){
   let waiter = null;
   let pendingTail = ''; // frase ainda não fechada (sem . ! ? no fim) -- espera o próximo pedaço
   let heldShort = ''; // frase(s) completas mas curtas demais -- esperam colar na próxima
+  let firstTtsStarted = false; // VOZ-4 PARTE A: só mede o 1º pedido de TTS do turno (etapa f)
+  let firstPlayNotified = false; // VOZ-4 PARTE A: só avisa 1x, pouco antes de tocar o 1º áudio (etapa g, aproximada)
 
   function wake(){ if(waiter){ const w = waiter; waiter = null; w(); } }
 
   function ensureFetching(i){
     if(i < 0 || i >= chunks.length || results[i]) return;
+    if(i === 0 && !firstTtsStarted){
+      firstTtsStarted = true;
+      if(hooks && hooks.onFirstTtsStart) hooks.onFirstTtsStart();
+      const p = fetchTtsAudioWithRetry(chunks[i]);
+      results[i] = p;
+      p.finally(() => { if(hooks && hooks.onFirstTtsReady) hooks.onFirstTtsReady(); });
+      return;
+    }
     results[i] = fetchTtsAudioWithRetry(chunks[i]);
   }
 
@@ -3004,6 +3024,10 @@ function createStreamingSpeechQueue(myGen){
       const i = nextToPlay++;
       ensureFetching(i + 1);
       ensureFetching(i + 2);
+      if(i === 0 && !firstPlayNotified){
+        firstPlayNotified = true;
+        if(hooks && hooks.onBeforeFirstPlay) hooks.onBeforeFirstPlay();
+      }
       await playChunkResultWithFallback(chunks[i], results[i], myGen);
     }
   }
@@ -3032,14 +3056,14 @@ function createStreamingSpeechQueue(myGen){
 // streaming: pushText(delta) alimenta a fila conforme o texto chega, finish() fecha o
 // fluxo, espera o áudio pendente acabar e devolve true/false (terminou normal vs.
 // interrompida), igual ao retorno de speak().
-function beginStreamingSpeech(){
+function beginStreamingSpeech(hooks){
   speechState.generation++;
   const myGen = speechState.generation;
   isSpeaking = true;
   currentSpeakingText = '';
   pauseHandsFreeForSpeech();
   startInterruptMonitor(myGen);
-  const queue = createStreamingSpeechQueue(myGen);
+  const queue = createStreamingSpeechQueue(myGen, hooks);
   return {
     myGen,
     pushText(delta){
@@ -3088,6 +3112,87 @@ async function* readSseEvents(resp){
     }
     if(done) break;
   }
+}
+
+// VOZ-4 PARTE A: mediana das últimas 20 falas por etapa, só deste aparelho. (a) e (g)
+// vêm do relógio do app (sem risco de dessincronia de relógio com o servidor); (b) é a
+// única etapa que mistura relógio do app com o do Worker (aproximado, documentado no
+// PR); (c)/(d)/(e) vêm só do relógio do Worker (ver o evento "timing" de
+// askRaizStreaming); (f) vem só do relógio do app (uma fetch só, sem ambiguidade).
+const LATENCY_TRACE_KEY = 'raiz_latency_traces';
+const LATENCY_TRACE_MAX = 20;
+const LATENCY_REPORT_EVERY = 20; // manda a mediana pro Diário 1x a cada N falas medidas
+const LATENCY_TOTAL_COUNT_KEY = 'raiz_latency_total_count'; // conta TODAS as falas já medidas, nunca encolhe (a janela de 20 acima, sim) -- é o que decide a cadência do relatório
+
+function loadLatencyTraces(){
+  try{ const v = JSON.parse(localStorage.getItem(LATENCY_TRACE_KEY) || '[]'); return Array.isArray(v) ? v : []; }catch(e){ return []; }
+}
+
+function medianOf(nums){
+  const arr = nums.filter((n) => typeof n === 'number' && Number.isFinite(n)).sort((a,b)=>a-b);
+  if(!arr.length) return null;
+  const mid = Math.floor(arr.length / 2);
+  return Math.round(arr.length % 2 ? arr[mid] : (arr[mid-1] + arr[mid]) / 2);
+}
+
+function computeLatencyMedians(){
+  const list = loadLatencyTraces();
+  const campo = (k) => medianOf(list.map((t) => t[k]));
+  return {
+    amostras: list.length,
+    redeIdaMs: campo('redeIdaMs'),
+    primeiroTokenMs: campo('primeiroTokenMs'),
+    llmCompletoMs: campo('llmCompletoMs'),
+    primeiraFraseProntaMs: campo('primeiraFraseProntaMs'),
+    ttsMs: campo('ttsMs'),
+    totalMs: campo('totalMs'),
+  };
+}
+
+// Registra UMA fala completa (todas as etapas que deu pra medir -- uma falha de rede no
+// meio do caminho só deixa a etapa correspondente null, nunca derruba as outras) e, de
+// tempos em tempos, manda o resumo agregado (só a mediana, nunca a conversa) pro Diário.
+function recordLatencyTrace(trace, workerUrl){
+  const stageMs = {
+    redeIdaMs: (trace.tWorkerReceived != null && trace.tSent != null) ? (trace.tWorkerReceived - trace.tSent) : null,
+    primeiroTokenMs: (trace.tFirstToken != null && trace.tWorkerReceived != null) ? (trace.tFirstToken - trace.tWorkerReceived) : null,
+    llmCompletoMs: (trace.tLlmComplete != null && trace.tWorkerReceived != null) ? (trace.tLlmComplete - trace.tWorkerReceived) : null,
+    primeiraFraseProntaMs: (trace.tFirstSpeakable != null && trace.tWorkerReceived != null) ? (trace.tFirstSpeakable - trace.tWorkerReceived) : null,
+    ttsMs: (trace.tFirstTtsReady != null && trace.tFirstTtsStart != null) ? (trace.tFirstTtsReady - trace.tFirstTtsStart) : null,
+    totalMs: (trace.tPlaybackStart != null && trace.tUserEnd != null) ? (trace.tPlaybackStart - trace.tUserEnd) : null,
+  };
+  try{
+    const list = loadLatencyTraces();
+    list.push(stageMs);
+    while(list.length > LATENCY_TRACE_MAX) list.shift();
+    localStorage.setItem(LATENCY_TRACE_KEY, JSON.stringify(list));
+    // Conta TOTAL (nunca encolhe) decide a cadência do relatório -- a janela de 20 acima
+    // satura nesse valor, então usar o tamanho da janela pra decidir mandaria de novo em
+    // TODA fala depois de saturar, não só 1x a cada 20.
+    const totalCount = (Number(localStorage.getItem(LATENCY_TOTAL_COUNT_KEY)) || 0) + 1;
+    localStorage.setItem(LATENCY_TOTAL_COUNT_KEY, String(totalCount));
+    if(workerUrl && totalCount % LATENCY_REPORT_EVERY === 0){
+      const medianas = computeLatencyMedians();
+      callWorkerSyncMode('latencia_relatar', { amostras: medianas.amostras, medianas }).catch(()=>{});
+    }
+  }catch(e){ /* diagnóstico nunca pode quebrar a conversa */ }
+}
+
+function formatLatencyDiagnosticText(){
+  const m = computeLatencyMedians();
+  if(!m.amostras) return '(ainda sem dados — converse por voz pra começar a medir)';
+  const linha = (label, v) => `${label}: ${typeof v === 'number' ? v + 'ms' : '—'}`;
+  return [
+    `Mediana das últimas ${m.amostras} fala(s) por voz neste aparelho:`,
+    '',
+    linha('a→b  rede (envio → Worker recebeu)', m.redeIdaMs),
+    linha('b→c  1º token do LLM', m.primeiroTokenMs),
+    linha('b→d  resposta completa do LLM', m.llmCompletoMs),
+    linha('b→e  1ª frase pronta pra falar', m.primeiraFraseProntaMs),
+    linha('f    TTS (pedido → áudio pronto)', m.ttsMs),
+    '',
+    linha('a→g  INÍCIO DA FALA (do fim da sua fala até o Jarbas começar a responder)', m.totalMs),
+  ].join('\n');
 }
 
 // PARTE C: a voz nunca lê emoji (Azure/Edge via Worker, nem a voz do navegador) — a
@@ -3710,7 +3815,9 @@ async function askRaizNonStreaming(workerUrl, companionState){
 // se a conexão falhar ANTES de qualquer conteúdo falável ter sido recebido (aí quem
 // chama cai pro fallback não-streaming sem repetir nada que já foi dito); depois disso,
 // qualquer problema é absorvido aqui mesmo (não dá pra "desfalar" o que já saiu).
-async function askRaizStreaming(workerUrl, companionState, onFinalParsed){
+async function askRaizStreaming(workerUrl, companionState, onFinalParsed, trace){
+  trace = trace || {};
+  trace.tSent = Date.now(); // VOZ-4 PARTE A: (b) é esta chamada menos este instante
   const resp = await fetch(workerUrl, {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -3720,7 +3827,14 @@ async function askRaizStreaming(workerUrl, companionState, onFinalParsed){
   const contentType = resp.headers.get('content-type') || '';
   if(!contentType.includes('text/event-stream')) throw new Error('worker_stream_unexpected_content_type');
 
-  const streaming = beginStreamingSpeech();
+  // VOZ-4 PARTE A: hooks preenchem trace.tFirstTtsStart/tFirstTtsReady (etapa f, só a
+  // 1ª frase) e trace.tPlaybackStart (etapa g, aproximada: já com o áudio pronto, pouco
+  // antes do .play() de verdade — ver createStreamingSpeechQueue).
+  const streaming = beginStreamingSpeech({
+    onFirstTtsStart(){ trace.tFirstTtsStart = Date.now(); },
+    onFirstTtsReady(){ trace.tFirstTtsReady = Date.now(); },
+    onBeforeFirstPlay(){ trace.tPlaybackStart = Date.now(); },
+  });
   hint.textContent = 'falando...';
   let streamedReplyText = ''; // só o que veio por "delta" (não a frase-ponte)
   let bridgeSpoken = false;
@@ -3730,6 +3844,13 @@ async function askRaizStreaming(workerUrl, companionState, onFinalParsed){
       if(streaming.myGen !== speechState.generation) break; // fala superada (interrompida/nova pergunta)
       if(event === 'emotion' && data && data.emotion){
         setEmotion(data.emotion);
+      } else if(event === 'timing' && data){
+        // (c)/(d)/(e) vêm só do relógio do Worker, sem risco de dessincronia -- (b) é a
+        // única mistura de relógios (app vs. Worker), aproximada de propósito.
+        trace.tWorkerReceived = data.tReceived;
+        trace.tFirstToken = data.tFirstToken;
+        trace.tLlmComplete = data.tLlmComplete;
+        trace.tFirstSpeakable = data.tFirstSpeakable;
       } else if(event === 'bridge' && data && data.text && !bridgeSpoken && !streamedReplyText){
         bridgeSpoken = true;
         streaming.pushText(data.text + ' ');
@@ -3775,6 +3896,10 @@ async function askRaizStreaming(workerUrl, companionState, onFinalParsed){
 }
 
 async function askRaiz(userText, isRetry){
+  // VOZ-4 PARTE A: (a) é aproximado pelo início do askRaiz -- não o fim exato do
+  // reconhecimento de voz, pra não tocar no pipeline de mãos-livres/eco (fora de
+  // escopo deste PR). Numa pergunta por toque/retry o gap é desprezível de qualquer jeito.
+  const latencyTrace = { tUserEnd: Date.now() };
   if(!CLASSIC_FACE) pensarFim(); // qualquer interação de voz fecha o pensamento sozinho na hora
   setEmotion('pensando');
   hint.textContent = 'pensando...';
@@ -3793,9 +3918,10 @@ async function askRaiz(userText, isRetry){
 
     let parsed, finishedNormally;
     try{
-      const streamed = await askRaizStreaming(workerUrl, companionState, (p) => applyCompanionResult(p, workerUrl));
+      const streamed = await askRaizStreaming(workerUrl, companionState, (p) => applyCompanionResult(p, workerUrl), latencyTrace);
       parsed = streamed.parsed;
       finishedNormally = streamed.finishedNormally;
+      recordLatencyTrace(latencyTrace, workerUrl);
     }catch(streamErr){
       // Fallback de compatibilidade (nada foi falado ainda nesse ponto): o formato JSON
       // de sempre, sem streaming -- mesmo caminho que o app sempre usou.
@@ -5257,6 +5383,17 @@ document.getElementById('aparenciaTestBtn').addEventListener('click', ()=>{
 });
 document.getElementById('aparenciaTestCloseBtn').addEventListener('click', ()=>{
   aparenciaTestEl.classList.add('hidden');
+});
+
+/* ---------- VOZ-4 PARTE A: painel de diagnóstico de latência (só leitura, local) ---------- */
+const latencyDebugEl = document.getElementById('latencyDebugEl');
+document.getElementById('latencyDebugBtn').addEventListener('click', ()=>{
+  document.getElementById('latencyDebugText').textContent = formatLatencyDiagnosticText();
+  settingsMenu.classList.add('hidden');
+  latencyDebugEl.classList.remove('hidden');
+});
+document.getElementById('latencyDebugCloseBtn').addEventListener('click', ()=>{
+  latencyDebugEl.classList.add('hidden');
 });
 function buildTestChip(label, onClick){
   const b = document.createElement('button');

@@ -4917,7 +4917,16 @@ function finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics) {
 // "bridge" (frase-ponte curta, no máximo uma, só quando uma ferramenta está demorando
 // >1.2s), "done" (o mesmo payload JSON completo que o modo não-streaming devolveria),
 // "error" (falha irrecuperável antes de qualquer conteúdo útil).
-function handleCompanionStream(env, ctx, trimmed, companionState) {
+export function handleCompanionStream(env, ctx, trimmed, companionState) {
+  // VOZ-4 PARTE A: marcações de tempo do ciclo completo — só o que o Worker PODE medir
+  // (ele não sabe quando a pessoa terminou de falar nem quando o áudio começa a tocar;
+  // isso o app mede do lado dele, com o próprio relógio, sem risco de dessincronia de
+  // relógio entre aparelho e servidor). Mandadas no evento "timing" pouco antes do
+  // "done" — o app junta com as marcações dele pra montar a cadeia completa.
+  const tReceived = Date.now();
+  let tFirstToken = null;
+  let tLlmComplete = null;
+  let tFirstSpeakable = null;
   const encoder = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
@@ -4935,6 +4944,8 @@ function handleCompanionStream(env, ctx, trimmed, companionState) {
           if (shortcutReply) {
             pushLogEvent(logBatch, { tipo: "conversa", origem: "jarbas", resumo: shortcutReply, detalhes: { via: "atalho" } });
             flushLogBatch(env, ctx, logBatch);
+            const tNow = Date.now();
+            await send("timing", { tReceived, tFirstToken: tNow, tLlmComplete: tNow, tFirstSpeakable: tNow });
             await send("done", { emotion: "neutro", reply: shortcutReply });
             await writer.close();
             return;
@@ -4958,6 +4969,7 @@ function handleCompanionStream(env, ctx, trimmed, companionState) {
       let emotionSent = false;
       let replySentLen = 0;
       const onContentDelta = (chunk) => {
+        if (tFirstToken === null) tFirstToken = Date.now();
         accumulated += chunk;
         if (!emotionSent) {
           const emo = extractJsonStringFieldSoFar(accumulated, "emotion");
@@ -4970,6 +4982,7 @@ function handleCompanionStream(env, ctx, trimmed, companionState) {
         if (rep && rep.value.length > replySentLen) {
           const novo = rep.value.slice(replySentLen);
           replySentLen = rep.value.length;
+          if (tFirstSpeakable === null) tFirstSpeakable = Date.now();
           send("delta", { text: novo });
         }
       };
@@ -4984,7 +4997,10 @@ function handleCompanionStream(env, ctx, trimmed, companionState) {
         // a resposta final fica pronta.
         let bridgeTimer = null;
         if (temToolCalls) {
-          bridgeTimer = setTimeout(() => { send("bridge", { text: "Um segundo, vou ver…" }); }, 1200);
+          bridgeTimer = setTimeout(() => {
+            if (tFirstSpeakable === null) tFirstSpeakable = Date.now();
+            send("bridge", { text: "Um segundo, vou ver…" });
+          }, 1200);
         }
         let raw;
         try {
@@ -4992,6 +5008,7 @@ function handleCompanionStream(env, ctx, trimmed, companionState) {
         } finally {
           if (bridgeTimer) clearTimeout(bridgeTimer);
         }
+        tLlmComplete = Date.now();
         saveMemory = raw.saveMemory;
         saveLearned = raw.saveLearned;
         saveMemoryItem = raw.saveMemoryItem;
@@ -5023,6 +5040,13 @@ function handleCompanionStream(env, ctx, trimmed, companionState) {
       if (cards && cards.length) parsed.cards = cards;
       if (lousa) parsed.lousa = lousa;
       parsed = finalizeCompanionReply(env, ctx, turnCtx, parsed, callMetrics);
+      const tDone = Date.now();
+      await send("timing", {
+        tReceived,
+        tFirstToken: tFirstToken ?? tDone,
+        tLlmComplete: tLlmComplete ?? tDone,
+        tFirstSpeakable: tFirstSpeakable ?? tDone,
+      });
       await send("done", parsed);
     } catch (err) {
       console.error("companion_stream_fatal:", String(err?.message || err));
@@ -5181,6 +5205,24 @@ export default {
       if (!env.COMPANION_KV) return json({ ultimaVarreduraISO: null });
       const ultimaVarreduraISO = await env.COMPANION_KV.get(PAINEL_SCAN_LAST_KEY);
       return json({ ultimaVarreduraISO: ultimaVarreduraISO || null });
+    }
+    // VOZ-4 PARTE A: o app manda a mediana (das últimas 20 falas) uma vez de tempos em
+    // tempos — o Worker nunca vê o histórico bruto de latências, só o resumo já pronto,
+    // e registra como UM evento agregado no Diário (não um por fala, que inundaria o
+    // Diário sem necessidade — ver o comentário do contador de uso de LLM do cron).
+    if (mode === "latencia_relatar") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      try {
+        const m = body.medianas || {};
+        const fmt = (v) => (typeof v === "number" ? `${v}ms` : "?");
+        const resumo = `Latência de voz (mediana das últimas ${body.amostras || 0} falas): rede ida ${fmt(m.redeIdaMs)} · 1º token ${fmt(m.primeiroTokenMs)} · LLM completo ${fmt(m.llmCompletoMs)} · 1ª frase pronta ${fmt(m.primeiraFraseProntaMs)} · TTS ${fmt(m.ttsMs)} · início da fala (total) ${fmt(m.totalMs)}.`;
+        const logBatch = [];
+        pushLogEvent(logBatch, { tipo: "leitura", origem: "jarbas", resumo, detalhes: { amostras: body.amostras || 0, medianas: m } });
+        await flushLogBatch(env, ctx, logBatch);
+        return json({ ok: true });
+      } catch (err) {
+        return json({ error: "latencia_relatar_failed", detail: String(err?.message || err) }, 502);
+      }
     }
     // PARTE H: ação de teste autenticada pro PR — roda a consolidação de perfil/ideia
     // manualmente, sem esperar o cron (?action=perfil_consolidar no teste manual do PR).
