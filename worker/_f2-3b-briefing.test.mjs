@@ -112,12 +112,13 @@ console.log("filtrarFilaParaBriefing: OK");
     pendenciasTextos: ['"ligar pro Pedro"'],
     filaItens: [{ tipo: "tarefa", texto: 'Tarefa "X" está parada em Para Agora.' }],
   });
-  assert.equal(cheio.title, "Bom dia");
-  // A FALA é curta (resumo/contagem/destaques), nunca a lista crua inteira.
-  for (const trecho of ["São Paulo", "Reunião com o time", "2 tarefas", "Revisar relatório", "ligar pro Pedro", "1 tarefa continua parada"]) {
-    assert.ok(cheio.fala.includes(trecho), `fala curta deveria mencionar "${trecho}" (fala: "${cheio.fala}")`);
+  assert.equal(cheio.title, "Resumo do dia", "manhã (hour padrão=9) -> título \"Resumo do dia\"");
+  // FIX-3 PARTE B: a fala agora cobre TUDO (nunca só uma amostra) — todo item do card
+  // precisa aparecer na fala.
+  for (const trecho of ["São Paulo", "Reunião com o time", "Dentista", "2 tarefas", "Revisar relatório", "Responder e-mail", "ligar pro Pedro", "1 tarefa continua parada"]) {
+    assert.ok(cheio.fala.includes(trecho), `fala completa deveria mencionar "${trecho}" (fala: "${cheio.fala}")`);
   }
-  assert.ok(cheio.fala.length <= 450, "fala sempre <= 450 caracteres");
+  assert.ok(cheio.fala.length <= 1400, "fala sempre <= 1400 caracteres");
   assert.ok(cheio.body.length <= 140, "body (push/compat) sempre <= 140 caracteres");
   // O card SIM carrega os dados estruturados completos (pro pop-up/cartão na tela).
   assert.deepEqual(cheio.card.agenda, [{ hora: "09:00", titulo: "Reunião com o time" }, { hora: "14:00", titulo: "Dentista" }]);
@@ -130,7 +131,7 @@ console.log("filtrarFilaParaBriefing: OK");
   const vazio = montarBriefingDeterministico({
     climaTexto: "", agendaTexto: "", tarefasItens: [], contasTextos: [], pendenciasTextos: [], filaItens: [],
   });
-  assert.equal(vazio.title, "Bom dia");
+  assert.equal(vazio.title, "Resumo do dia");
   assert.ok(vazio.fala.length > 0, "dia tranquilo ainda produz uma fala (nunca vazia)");
   // Esse é exatamente o texto usado como fallback do gerarBriefing quando a chamada ao
   // LLM falha — e é montado inteiramente por esta função pura, sem nenhuma chamada de
@@ -147,12 +148,15 @@ console.log("filtrarFilaParaBriefing: OK");
     climaTexto: "", agendaTexto: "", tarefasItens: vinte, contasTextos: [], pendenciasTextos: [], filaItens: [],
   });
   assert.ok(comVinteTarefas.fala.includes("20 tarefas"), "fala conta as 20 tarefas");
-  assert.ok(comVinteTarefas.fala.length <= 450, "fala com 20 tarefas ainda cabe em 450 (nunca despeja a lista)");
-  for (let i = 5; i < 20; i++) {
-    assert.ok(!comVinteTarefas.fala.includes(`Tarefa número ${i}`), `fala NUNCA lista a tarefa ${i} (só os até-3 destaques)`);
+  assert.ok(comVinteTarefas.fala.length <= 1400, "fala com 20 tarefas ainda cabe em 1400 (nunca despeja a lista inteira)");
+  // FIX-3 PARTE A/B: destaques sobem de 5 pra 8 (contagem honesta, nunca corta sem avisar).
+  for (let i = 8; i < 20; i++) {
+    assert.ok(!comVinteTarefas.fala.includes(`Tarefa número ${i}`), `fala NUNCA lista a tarefa ${i} (só os até-8 destaques + "e mais N")`);
   }
-  assert.equal(comVinteTarefas.card.tarefas.total, 20, "o card guarda o total certo");
-  assert.equal(comVinteTarefas.card.tarefas.destaques.length, 5, "o card limita destaques a 5");
+  assert.ok(comVinteTarefas.fala.includes("e mais 12"), "fala cita o marcador 'e mais N' pro resto das tarefas");
+  assert.equal(comVinteTarefas.card.tarefas.total, 20, "o card guarda o total certo (já deduplicado)");
+  assert.equal(comVinteTarefas.card.tarefas.destaques.length, 9, "8 destaques + 1 marcador 'e mais N'");
+  assert.equal(comVinteTarefas.card.tarefas.destaques[8], "e mais 12");
 
   // ---- limite de 8 itens + "e mais N" nas listas do card ----
   const dezContas = Array.from({ length: 10 }, (_, i) => `Conta "C${i}" vence hoje.`);
