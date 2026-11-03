@@ -195,32 +195,87 @@ console.log("construirTelasTarefas/construirTelasContas: dedupe + nunca quebra s
     for (const chave of c.chaves) {
       assert.ok(r.fala.includes(chave), `[${c.nome}] fala deveria conter "${chave}" (fala: "${r.fala}")`);
     }
-    assert.ok(r.fala.length <= 1400, `[${c.nome}] fala <= 1400 caracteres`);
-    assert.ok(r.body.length <= 140, `[${c.nome}] body <= 140 caracteres`);
-    // a própria fala determinística é fiel a si mesma, por construção
-    assert.ok(falaEhFielAoDeterministico(r.fala, r.fala), `[${c.nome}] fala é fiel a si mesma`);
+    assert.ok(r.body.length <= 140, `[${c.nome}] body <= 140 caracteres (o teto de 1400 vale só pra reescrita do LLM, não pro determinístico)`);
+    // a própria fala determinística é fiel a si mesma (cobre 100% do seu próprio card), por construção
+    assert.ok(falaEhFielAoDeterministico(r.fala, r.card), `[${c.nome}] fala é fiel ao próprio card`);
     if (c.extra) c.extra(r);
   }
 }
 console.log("PARTE B (12 cenários): fala determinística cobre todo item do card: OK");
 
-// ---------- falaEhFielAoDeterministico: aprova reescrita fiel, reprova omissão real ----------
+// ---------- falaEhFielAoDeterministico: checagem ZERO TOLERÂNCIA por item do card (não mais % de palavras-chave) ----------
 {
-  const determinado = 'Bom dia, Gustavo! Deixa eu te contar como tá o dia. Você tem 1 compromisso hoje: Reunião com o Vini, às 09:00. São 2 tarefas pedindo atenção: Revisar proposta e Ligar pro fornecedor. Conta "Internet" vence hoje. Bora pro dia!';
+  const card = {
+    agenda: [{ hora: "09:00", titulo: "Reunião com o Vini" }],
+    tarefas: { destaques: ["Revisar proposta", "Ligar pro fornecedor"] },
+    contas: ['Conta "Internet" vence hoje.'],
+    pendencias: ['"ligar pro Pedro"'],
+  };
 
-  const reescritaFiel = 'Bom dia, Gustavo! Vem ver o que te espera. Hoje às 09:00 você tem a Reunião com o Vini. Tem 2 tarefas pedindo atenção: Revisar proposta e Ligar pro fornecedor. E a conta de Internet vence hoje também. Bora!';
-  assert.equal(falaEhFielAoDeterministico(reescritaFiel, determinado), true, "reescrita natural, mas mantendo todos os fatos, é aprovada");
+  const reescritaFiel = 'Bom dia, Gustavo! Vem ver o que te espera. Hoje às 09:00 você tem a Reunião com o Vini. Tem 2 tarefas pedindo atenção: Revisar proposta e Ligar pro fornecedor. E a conta de Internet vence hoje também. Você tinha dito que ia ligar pro Pedro. Bora!';
+  assert.equal(falaEhFielAoDeterministico(reescritaFiel, card), true, "reescrita natural, mas com todo item do card presente, é aprovada");
 
-  const reescritaOmitindoConta = 'Bom dia, Gustavo! Vem ver o que te espera. Hoje às 09:00 você tem a Reunião com o Vini. Tem 2 tarefas pedindo atenção: Revisar proposta e Ligar pro fornecedor. Bora!';
-  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoConta, determinado), false, "reescrita que OMITE a conta (fato real) é reprovada");
+  // horário por extenso/formato alternativo também conta como presente
+  const reescritaHoraPorExtenso = reescritaFiel.replace("às 09:00", "às nove horas");
+  assert.equal(falaEhFielAoDeterministico(reescritaHoraPorExtenso, card), true, "horário por extenso ('nove horas') também é aceito");
+  const reescritaHoraCurta = reescritaFiel.replace("às 09:00", "às 9h");
+  assert.equal(falaEhFielAoDeterministico(reescritaHoraCurta, card), true, "horário em '9h' também é aceito");
 
-  const reescritaOmitindoTarefa = 'Bom dia, Gustavo! Vem ver o que te espera. Hoje às 09:00 você tem a Reunião com o Vini. Conta de Internet vence hoje. Bora!';
-  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoTarefa, determinado), false, "reescrita que OMITE as duas tarefas é reprovada");
+  const reescritaOmitindoConta = reescritaFiel.replace(" E a conta de Internet vence hoje também.", "");
+  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoConta, card), false, "reescrita que OMITE a conta (fato real) é reprovada");
 
-  assert.equal(falaEhFielAoDeterministico("", determinado), false, "fala vazia nunca é fiel a um determinístico com conteúdo");
-  assert.equal(falaEhFielAoDeterministico("qualquer coisa", ""), true, "determinístico vazio (sem palavras-chave) -> sempre considerado fiel");
+  const reescritaOmitindoUmaTarefa = reescritaFiel.replace(" e Ligar pro fornecedor", "");
+  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoUmaTarefa, card), false, "reescrita que omite SÓ 1 das 2 tarefas já é reprovada (zero tolerância por item)");
+
+  const reescritaOmitindoPendencia = reescritaFiel.replace(" Você tinha dito que ia ligar pro Pedro.", "");
+  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoPendencia, card), false, "reescrita que OMITE a pendência é reprovada");
+
+  const reescritaOmitindoHorario = reescritaFiel.replace("às 09:00 ", "");
+  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoHorario, card), false, "reescrita que mantém o título do compromisso mas OMITE o horário é reprovada");
+
+  assert.equal(falaEhFielAoDeterministico("", card), false, "fala vazia nunca é fiel a um card com conteúdo");
+  assert.equal(falaEhFielAoDeterministico("qualquer coisa", {}), true, "card vazio -> sempre considerado fiel (nada obrigatório)");
 }
-console.log("falaEhFielAoDeterministico (aprova fiel, reprova omissão real): OK");
+console.log("falaEhFielAoDeterministico (zero tolerância por item, inclusive horário): OK");
+
+// ---------- falaEhFielAoDeterministico: 20 tarefas, LLM omite só 1 -> reprovado ----------
+{
+  const r = montarBriefingDeterministico({
+    climaTexto: "", agendaTexto: "", contasTextos: [], pendenciasTextos: [], filaItens: [], hour: 9,
+    tarefasItens: Array.from({ length: 20 }, (_, i) => ({ id: String(i), titulo: `Tarefa Beta ${i}`, status: "now" })),
+  });
+  // destaques tem 8 tarefas (Beta 0..7) + marcador "e mais 12" — reescreve citando só 7
+  // delas (omite "Tarefa Beta 3"), mantendo o resto do texto igual.
+  const reescritaOmitindoUma = r.fala.replace("Tarefa Beta 3 e ", "").replace("Tarefa Beta 3, ", "").replace(", Tarefa Beta 3", "");
+  assert.ok(!reescritaOmitindoUma.includes("Tarefa Beta 3"), "setup do teste: a reescrita realmente não cita mais a Tarefa Beta 3");
+  assert.equal(falaEhFielAoDeterministico(reescritaOmitindoUma, r.card), false, "20 tarefas no card, LLM omite 1 só -> reprovado (zero tolerância, mesmo entre tantos itens)");
+  assert.equal(falaEhFielAoDeterministico(r.fala, r.card), true, "a fala original (sem nada omitido) continua aprovada");
+}
+console.log("falaEhFielAoDeterministico (20 tarefas, omite 1 só -> reprovado): OK");
+
+// ---------- dia lotado: 8 de cada categoria, NADA é cortado no texto determinístico ----------
+{
+  const r = montarBriefingDeterministico({
+    climaTexto: "Em São Paulo agora: nublado, 20°C.",
+    hour: 8, minute: 0,
+    agendaTexto: Array.from({ length: 8 }, (_, i) => `0${i}:00 Compromisso número ${i} com nome bem específico`).join("; "),
+    tarefasItens: Array.from({ length: 8 }, (_, i) => ({ id: String(i), titulo: `Tarefa número ${i} com descrição razoavelmente longa`, status: i % 2 ? "now" : "today" })),
+    contasTextos: Array.from({ length: 8 }, (_, i) => `Conta "Fornecedor Número ${i}" vence hoje.`),
+    pendenciasTextos: Array.from({ length: 8 }, (_, i) => `"resolver a pendência número ${i} com o cliente"`),
+    filaItens: Array.from({ length: 8 }, (_, i) => ({ tipo: "tarefa", texto: `Tarefa dormindo ${i}` })),
+  });
+
+  assert.ok(r.fala.length > 1400, `dia lotado deveria passar de 1400 caracteres (tem ${r.fala.length}) — senão o teste não está testando o corte de verdade`);
+  assert.ok(falaEhFielAoDeterministico(r.fala, r.card), "mesmo passando de 1400 caracteres, TODO item do card aparece na fala (nada foi cortado)");
+  for (let i = 0; i < 8; i++) {
+    assert.ok(r.fala.includes(`Compromisso número ${i}`), `compromisso ${i} não pode ter sido cortado`);
+    assert.ok(r.fala.includes(`Tarefa número ${i}`), `tarefa ${i} não pode ter sido cortada`);
+    assert.ok(r.fala.includes(`Fornecedor Número ${i}`), `conta ${i} não pode ter sido cortada`);
+    assert.ok(r.fala.includes(`pendência número ${i}`), `pendência ${i} não pode ter sido cortada`);
+  }
+  assert.ok(r.body.length <= 140, "o body (push) continua capado em 140, mesmo com a fala inteira passando de 1400");
+}
+console.log("dia lotado (8 de cada categoria): texto determinístico nunca é cortado, mesmo > 1400 caracteres: OK");
 
 // ═══════════════════════════ PARTE C: consciência de hora em todo texto fixo ═══════════════
 

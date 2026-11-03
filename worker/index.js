@@ -2633,33 +2633,79 @@ Responda SEMPRE em JSON puro, numa única linha, sem markdown, sem crases, exata
 {"fala":"o texto reescrito, com TODOS os fatos do original, começando pela mesma saudação"}
 Nunca deixe o JSON incompleto.`;
 
-// FIX-3 PARTE B: valida se a reescrita do LLM manteve TODOS os fatos do texto
-// determinístico (que, por construção, já cobre tudo) — comparação por palavras
-// significativas (>=4 letras, fora conectivos/narrativa genérica comuns — inclusive o
-// vocabulário das próprias aberturas/fechamentos determinísticos, que o LLM tem
-// liberdade de reformular), tolerando pequenas reescritas (plural, artigo, sinônimo de
-// conector) sem tolerar OMISSÃO de verdade. Se a fala do LLM "perder" mais de ~15% das
-// palavras-chave do determinístico (nunca menos de 1), é tratada como infiel — o
-// chamador descarta e usa o texto determinístico puro.
-const FIDELIDADE_STOPWORDS = new Set([
-  "voce", "hoje", "para", "esta", "sao", "tem", "uma", "umas", "uns", "que", "como",
-  "ainda", "pra", "dia", "seu", "sua", "tambem", "depois", "antes", "mais", "menos",
-  "esse", "essa", "isso", "aqui", "muito", "pouco", "bem", "tudo", "nada", "gustavo",
-  "bom", "boa", "noite", "tarde", "manha", "vai", "vou", "ser", "ter", "ela", "ele",
-  "deixa", "contar", "compromisso", "compromissos", "vem", "ver", "espera", "espero",
-  "separei", "importa", "resumo", "rapido", "olha", "pela", "frente", "fechar",
-  "fechamento", "bora", "firme", "rende", "falta", "pouco", "nessa", "amanha",
-]);
+// FIX-3 PARTE B (revisão pós-review): valida se a reescrita do LLM manteve TODOS os
+// itens do CARD — não mais uma comparação "por palavras-chave com tolerância", e sim
+// item por item (cada compromisso, tarefa, conta e pendência), ZERO tolerância: falhar
+// em UM item já reprova a reescrita inteira. ("Enquanto você dormia" e a ideia do dia
+// ficam de fora de propósito — a fala resume aquilo em UMA frase agregada por tipo, por
+// design, nunca lista os itens individualmente, então não há "item" fixo pra cobrar ali.)
+function palavrasSignificativasDoTitulo(texto) {
+  const STOP = new Set(["de", "da", "do", "das", "dos", "e", "a", "o", "as", "os", "em", "no", "na", "com", "pro", "pra", "para", "um", "uma"]);
+  // Números (mesmo curtos, tipo "3") NUNCA são descartados por tamanho — "Tarefa Beta 3"
+  // vs "Tarefa Beta 4" só se diferenciam pelo número, então ele tem que ser conferido.
+  return normalizeText(texto).split(" ").filter((w) => (w.length >= 3 || /^\d+$/.test(w)) && !STOP.has(w));
+}
 
-export function falaEhFielAoDeterministico(falaCandidata, falaDeterministica) {
-  const candNorm = normalizeText(falaCandidata);
-  const palavrasChave = [...new Set(
-    normalizeText(falaDeterministica).split(" ").filter((w) => w.length >= 4 && !FIDELIDADE_STOPWORDS.has(w))
-  )];
-  if (!palavrasChave.length) return true;
-  const faltando = palavrasChave.filter((w) => !candNorm.includes(w));
-  const tolerancia = Math.max(1, Math.ceil(palavrasChave.length * 0.15));
-  return faltando.length <= tolerancia;
+// Um título "aparece" na fala se TODAS as suas palavras significativas (>=3 letras, fora
+// artigos/preposições) estiverem presentes — permite reescrita natural ao redor do nome,
+// mas nunca aceita o nome em si sumir.
+function tituloApareceNaFala(titulo, falaNormalizada) {
+  const palavras = palavrasSignificativasDoTitulo(titulo);
+  if (!palavras.length) return true;
+  return palavras.every((w) => falaNormalizada.includes(w));
+}
+
+function numeroPorExtensoPT(n) {
+  const UNIDADES = ["zero", "um", "dois", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+  if (n < 20) return UNIDADES[n];
+  const DEZENAS = ["", "", "vinte", "trinta", "quarenta", "cinquenta"];
+  const dezena = Math.floor(n / 10), resto = n % 10;
+  return resto === 0 ? DEZENAS[dezena] : `${DEZENAS[dezena]} e ${UNIDADES[resto]}`;
+}
+
+// Um horário "HH:MM" aparece na fala em qualquer formato razoável que um reescritor
+// natural usaria: "10:00", "10h00"/"10h", ou por extenso ("dez horas", "dez e trinta",
+// "dez e meia", "meio-dia", "meia-noite").
+function horaApareceNaFala(hora, falaNormalizada) {
+  const m = /^(\d{2}):(\d{2})$/.exec(hora || "");
+  if (!m) return true; // horário em formato inesperado — não é isso que estamos validando
+  const h = Number(m[1]), min = Number(m[2]);
+  const candidatos = [`${m[1]}:${m[2]}`, `${h}h${m[2]}`];
+  if (min === 0) candidatos.push(`${h}h`, `${h} horas`, `${numeroPorExtensoPT(h)} horas`);
+  else if (min === 30) candidatos.push(`${numeroPorExtensoPT(h)} e meia`);
+  else candidatos.push(`${numeroPorExtensoPT(h)} e ${numeroPorExtensoPT(min)}`);
+  if (h === 12 && min === 0) candidatos.push("meio-dia");
+  if (h === 0 && min === 0) candidatos.push("meia-noite");
+  return candidatos.some((c) => falaNormalizada.includes(normalizeText(c)));
+}
+
+// Extrai os itens que precisam aparecer na fala, a partir do MESMO card que o
+// determinístico monta (nunca "e mais N", que é só o marcador de corte).
+function itensObrigatoriosDoCard(card) {
+  const semMarcador = (s) => typeof s === "string" && !/^e mais /i.test(s);
+  const itens = [];
+  for (const a of (card.agenda || [])) {
+    if (a && a.titulo && !/^e mais /i.test(a.titulo)) itens.push({ texto: a.titulo, hora: a.hora || "" });
+  }
+  for (const t of (card.tarefas?.destaques || [])) if (semMarcador(t)) itens.push({ texto: t });
+  for (const c of (card.contas || [])) {
+    if (!semMarcador(c)) continue;
+    const m = c.match(/"([^"]+)"/); // o nome entre aspas é o que de fato identifica a conta
+    itens.push({ texto: m ? m[1] : c });
+  }
+  for (const p of (card.pendencias || [])) {
+    if (semMarcador(p)) itens.push({ texto: String(p).replace(/^"|"$/g, "") });
+  }
+  return itens;
+}
+
+export function falaEhFielAoDeterministico(falaCandidata, card) {
+  const falaNormalizada = normalizeText(falaCandidata);
+  for (const item of itensObrigatoriosDoCard(card || {})) {
+    if (!tituloApareceNaFala(item.texto, falaNormalizada)) return false;
+    if (item.hora && !horaApareceNaFala(item.hora, falaNormalizada)) return false;
+  }
+  return true;
 }
 
 // ---------- F2-3b/PARTE B: monta o briefing matinal — SEM IA reúne os dados (clima,
@@ -2723,10 +2769,12 @@ async function gerarBriefing(env, config, companionState) {
   // já foi gerado e cabe no limite (se não couber, truncarNaUltimaFrase corta fora
   // a frase inteira, nunca deixa pela metade).
   const ideiaFraseFinal = anexarIdeiaDoDiaNoBriefing(companionState?.ideias, hoje);
-  // FIX-3 PARTE B: este É o texto completo e fiel (cobre 100% do card) — o LLM só
-  // reescreve ele, nunca compõe a partir dos dados brutos. É também o fallback direto se
-  // o LLM falhar ou devolver uma versão infiel.
-  const determinadoComIdeia = truncarNaUltimaFrase(`${determinado.fala}${ideiaFraseFinal}`, 1400);
+  // FIX-3 PARTE B (revisão pós-review): este É o texto completo e fiel (cobre 100% do
+  // card) — o LLM só reescreve ele, nunca compõe a partir dos dados brutos. É também o
+  // fallback direto se o LLM falhar ou devolver uma versão infiel. NUNCA é cortado: o
+  // teto de 1.400 caracteres vale só pra reescrita do LLM (abaixo), não pro
+  // determinístico — um dia muito cheio pode passar de 1.400 e sai inteiro assim mesmo.
+  const determinadoComIdeia = `${determinado.fala}${ideiaFraseFinal}`;
 
   let llmCalls = 0;
   let fidelidadeFallback = false;
@@ -2739,7 +2787,7 @@ async function gerarBriefing(env, config, companionState) {
     const parsed = JSON.parse(clean);
     if (!parsed.fala) throw new Error("no_fala_field");
     const falaCandidata = truncarNaUltimaFrase(parsed.fala, 1400);
-    if (!falaEhFielAoDeterministico(falaCandidata, determinadoComIdeia)) {
+    if (!falaEhFielAoDeterministico(falaCandidata, determinado.card)) {
       fidelidadeFallback = true;
       throw new Error("fala_infiel_ao_determinado");
     }
@@ -4068,8 +4116,10 @@ export function montarBriefingDeterministico({ climaTexto, agendaTexto, tarefasI
   const temAlgoAlemDaAgenda = Boolean(climaTexto) || cardTarefas.total > 0 || contas.length > 0 || pendencias.length > 0 || Boolean(filaFrase);
   const corpo = (!temAlgoAlemDaAgenda && !agendaLista.length) ? diaVazioTexto : frases.filter(Boolean).join(" ");
 
-  const fala = `${saudacao} ${abertura} ${corpo} ${fechamento}`.replace(/\s+/g, " ").trim();
-  const falaFinal = truncarNaUltimaFrase(fala, 1400);
+  // FIX-3 PARTE B (revisão pós-review): o texto determinístico NUNCA é cortado — o teto
+  // de 1.400 caracteres vale só pra reescrita do LLM (ver gerarBriefing), nunca pra esta
+  // função, que é a fonte de verdade completa (e o fallback direto se o LLM falhar).
+  const falaFinal = `${saudacao} ${abertura} ${corpo} ${fechamento}`.replace(/\s+/g, " ").trim();
 
   const card = {
     clima: climaTexto || "",
