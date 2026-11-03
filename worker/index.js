@@ -853,6 +853,45 @@ export function montarNovidadesPainelLine(fila) {
   return `Novidades do painel que você percebeu numa varredura periódica (ele ainda não sabe que você viu) — se fizer sentido na conversa, comente com naturalidade ("vi que você..."), sem forçar e nunca como lista: ${linhas}`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// ADMIN-1 PARTE A.3: "o que o Jarbas sabe do painel" entra no prompt de forma
+// compacta — a partir do CACHE de ?action=painel_resumo (atualizado pelo cron a
+// cada tick, ~15min; nunca buscado na hora, pra não atrasar a resposta). Pura e
+// testável: recebe o objeto já lido do KV (ou null) e devolve texto pronto,
+// cortado num orçamento fixo de caracteres (~900 tokens, a ~4 chars/token).
+// Também é onde a "leitura" da janela de verificação mais recente (PARTE B)
+// entra na conversa, se houver uma de hoje — ver executarJanelaDeVerificacao.
+// ─────────────────────────────────────────────────────────────────────────
+const PAINEL_RESUMO_PROMPT_LABEL = {
+  compromisso: "Agenda próxima", tarefa: "Tarefas (Para Agora/De Hoje)", conta: "Contas pendentes",
+  ideia: "Ideias recentes", diario: "Últimas entradas do diário", lista: "Listas ativas", nota: "Notas recentes",
+};
+const PAINEL_RESUMO_PROMPT_ORDEM = ["compromisso", "tarefa", "conta", "ideia", "diario", "lista", "nota"];
+const PAINEL_RESUMO_PROMPT_MAX_CHARS = 3600; // ~900 tokens
+
+export function montarResumoPainelLine(resumoCache) {
+  if (!resumoCache?.resumo) return "";
+  const resumo = resumoCache.resumo;
+  const linhas = [];
+  for (const dominio of PAINEL_RESUMO_PROMPT_ORDEM) {
+    const bloco = resumo[dominio];
+    if (!bloco?.itens?.length) continue;
+    const ativos = bloco.itens.filter((i) => i.status !== "done" && i.status !== "paga" && i.status !== "feito");
+    if (!ativos.length) continue;
+    const texto = ativos.slice(0, 5).map((i) => `${i.titulo}${i.data ? ` (${i.data})` : ""}`).join("; ");
+    linhas.push(`${PAINEL_RESUMO_PROMPT_LABEL[dominio] || dominio}: ${texto}`);
+  }
+  if (!linhas.length && !resumoCache.ultimaLeitura) return "";
+  const partes = [];
+  if (linhas.length) partes.push(`O que está no painel pessoal AGORA (pra você se pautar por tudo — use só o que for relevante pra essa resposta, nunca recite tudo de uma vez como lista):\n${linhas.join("\n")}`);
+  if (resumoCache.ultimaLeitura?.texto) {
+    partes.push(`Sua última leitura/opinião sobre o painel (janela ${resumoCache.ultimaLeitura.horario || ""}, ${resumoCache.ultimaLeitura.em || "hoje"}): ${resumoCache.ultimaLeitura.texto}`);
+  }
+  let bloco = partes.join("\n\n");
+  if (bloco.length > PAINEL_RESUMO_PROMPT_MAX_CHARS) bloco = bloco.slice(0, PAINEL_RESUMO_PROMPT_MAX_CHARS - 1) + "…";
+  return bloco;
+}
+
 // ---------- ideia do dia (PARTE C) — no máximo 1 por dia, disponível pra qualquer
 // conversa até a próxima ser gerada; nunca é empurrada, só fica à mão. ----
 export function montarIdeiaDoDiaLine(ideias) {
@@ -1019,7 +1058,7 @@ export const COMPANION_EMOTIONS = ["neutro", "feliz", "pensando", "surpreso", "f
 // coerente com 1-3 frases curtas faladas, o normal de uma resposta de voz.
 const COMPANION_MAX_TOKENS = 220;
 
-export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '', estadoConversaLine = '', novidadesPainelLine = '') {
+export function companionPrompt(companionState = {}, timeGapLine = '', selectedItemsText = '', estadoConversaLine = '', novidadesPainelLine = '', resumoPainelLine = '') {
   const knowledgeText = knowledgeToText(companionState.knowledge);
   const profileLine = knowledgeText
     ? `Base de conhecimento sobre a pessoa — é a fonte mais confiável que existe, sempre confie nisso acima de qualquer outra memória, mesmo que pareça contradizer algo. Linhas marcadas com "[Jarbas anotou, data]" foram registradas por você mesmo em conversas passadas; linhas sem esse marcador foram escritas pela própria pessoa direto na tela de conhecimento. Nunca leia esses marcadores ou formatação em voz alta, são só notas internas — fale o conteúdo com naturalidade:\n${knowledgeText}`
@@ -1114,6 +1153,7 @@ ${estadoConversaLine}
 ${canalLine}
 ${perfilLine}
 ${novidadesPainelLine}
+${resumoPainelLine}
 ${ideiaDoDiaLine}
 ${learnedLine}
 ${pendenciasLine}
@@ -1750,6 +1790,64 @@ const CONSULTAR_EMAIL_TOOL = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// ADMIN-1: o Jarbas como ADMINISTRADOR do painel — ferramenta genérica sobre
+// TODOS os domínios do inventário (tarefa/compromisso/conta/ideia/lembrete/lista/
+// nota), cobrindo o que as ferramentas gerenciar_* específicas (PAINEL-3) não
+// cobrem: mover de coluna/status, concluir conta/lembrete, arquivar em massa,
+// mover uma coluna inteira, item de lista. Ações destrutivas/em massa (apagar,
+// arquivar_varios, mover_todos, item_remover) exigem `confirmado:true` — SÓ passe
+// isso depois que a PRÓPRIA pessoa confirmou explicitamente na conversa (ex: "sim,
+// apaga", "confirma"); sem isso, a chamada é recusada e nada é apagado.
+// ─────────────────────────────────────────────────────────────────────────
+const PAINEL_GERENCIAR_TOOL = {
+  type: "function",
+  function: {
+    name: "painel_gerenciar",
+    description: "Cria, atualiza, move, conclui ou apaga itens em qualquer parte do painel pessoal (tarefas, compromissos, contas, ideias, lembretes, listas, notas) — use pra qualquer pedido de gerenciar o painel que as ferramentas mais específicas (gerenciar_tarefa/gerenciar_conta/etc.) não cubram, como mudar uma tarefa de coluna, marcar uma conta como paga, mover um compromisso de data/hora, arquivar várias tarefas de uma vez, ou adicionar/remover um item de uma lista.",
+    parameters: {
+      type: "object",
+      properties: {
+        dominio: { type: "string", enum: ["tarefa", "compromisso", "conta", "ideia", "lembrete", "lista", "nota"] },
+        acao: { type: "string", enum: ["criar", "atualizar", "mover", "concluir", "apagar", "arquivar_varios", "mover_todos", "item_adicionar", "item_remover"] },
+        params: {
+          type: "object",
+          description: "Parâmetros da ação: id (atualizar/mover/concluir/apagar/item_*); texto/titulo/nome (criar); campos (atualizar, objeto com os campos a mudar); status (mover tarefa: now|today|todo|doing|done|standby); data/hora (mover compromisso); item (item_adicionar, o texto do item novo); itemId (item_remover); deStatus/paraStatus (mover_todos, só tarefa).",
+          properties: {
+            id: { type: "string" }, texto: { type: "string" }, titulo: { type: "string" }, nome: { type: "string" },
+            campos: { type: "object" }, status: { type: "string" }, data: { type: "string" }, hora: { type: "string" },
+            item: { type: "string" }, itemId: { type: "string" }, deStatus: { type: "string" }, paraStatus: { type: "string" },
+          },
+        },
+        confirmado: { type: "boolean", description: "SÓ true depois que a pessoa confirmou explicitamente, na conversa, uma ação destrutiva/em massa (apagar, arquivar_varios, mover_todos, item_remover). Pra ações seguras (criar/atualizar/mover/concluir/item_adicionar), omita ou deixe false — não precisam de confirmação." },
+      },
+      required: ["dominio", "acao"],
+    },
+  },
+};
+
+const PAINEL_BUSCAR_TOOL = {
+  type: "function",
+  function: {
+    name: "painel_buscar",
+    description: "Busca uma palavra ou trecho em TODO o painel pessoal (tarefas, compromissos, contas, ideias, lembretes, listas, notas, diário) e devolve onde foi encontrado. Use quando ela perguntar algo como 'o que eu tenho sobre X', 'cadê aquilo do Y', ou quiser saber tudo relacionado a um assunto espalhado pelo painel.",
+    parameters: {
+      type: "object",
+      properties: { q: { type: "string", description: "O termo a buscar." } },
+      required: ["q"],
+    },
+  },
+};
+
+const DESFAZER_ACAO_PAINEL_TOOL = {
+  type: "function",
+  function: {
+    name: "desfazer_acao_painel",
+    description: "Desfaz a ÚLTIMA ação de escrita feita no painel (por painel_gerenciar ou pelas ferramentas gerenciar_*) nos últimos minutos/horas — use quando ela disser 'desfaz', 'desfaz isso', 'volta atrás', depois de uma ação que você acabou de executar no painel.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+};
+
 const GUARDAR_MEMORIA_TOOL = {
   type: "function",
   function: {
@@ -2297,6 +2395,14 @@ export function construirCardAgendaPorData(eventos, data, ate) {
   return { tipo: "lista", titulo, linhas };
 }
 
+// ADMIN-1 PARTE D: cartão de resultados do painel_buscar — "[domínio] título (status)".
+export function construirCardBusca(q, resultados) {
+  const itens = Array.isArray(resultados) ? resultados : [];
+  if (!itens.length) return null;
+  const linhas = itens.slice(0, 10).map((r) => `[${r.label}] ${r.titulo}${r.status ? ` · ${r.status}` : ""}`);
+  return { tipo: "lista", titulo: `Busca: "${q}"`, linhas };
+}
+
 async function callPainelCommandFull(env, comando, arg) {
   return await fetchPainelJson(PAINEL_API_URL, {
     method: "POST",
@@ -2329,6 +2435,30 @@ async function callPainelRead(env, action) {
     headers: { "x-jarbas-key": env.PAINEL_API_KEY },
   });
   return data.texto || "Não consegui ler os dados do painel agora.";
+}
+
+// ---------- ADMIN-1: administrador do painel (painel_gerenciar/painel_buscar/
+// painel_resumo/desfazer_ultima_acao) — mesmo par PAINEL_API_URL/PAINEL_API_KEY
+// de sempre, nenhum segredo novo. ----------
+async function callPainelGerenciar(env, payload) {
+  return callPainelCommandFull(env, "painel_gerenciar", payload);
+}
+
+async function callPainelDesfazerUltima(env) {
+  return callPainelCommandFull(env, "desfazer_ultima_acao", {});
+}
+
+async function callPainelBusca(env, q) {
+  const data = await fetchPainelJson(`${PAINEL_API_URL}?action=painel_buscar&q=${encodeURIComponent(q)}`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
+  return Array.isArray(data.resultados) ? data.resultados : [];
+}
+
+async function callPainelResumo(env) {
+  return fetchPainelJson(`${PAINEL_API_URL}?action=painel_resumo`, {
+    headers: { "x-jarbas-key": env.PAINEL_API_KEY },
+  });
 }
 
 export function normalizeText(text) {
@@ -3345,6 +3475,26 @@ async function runTool(env, call, canSearch, canPainel, companionState = {}, las
       return { content: "Recado marcado como tratado (não fale sobre essa ação, é de bastidor)." };
     }
     if (name === "consultar_email" && canPainel) return { content: await callPainelEmails(env, args.filtro || "", args.remetente || "", args.assunto || "") };
+    if (name === "painel_gerenciar" && canPainel) {
+      const data = await callPainelGerenciar(env, { dominio: args.dominio, acao: args.acao, params: args.params || {}, confirmado: !!args.confirmado });
+      if (data?.ok) return { content: data.reply || "Feito." };
+      if (data?.erro === "duplicado") return { content: data.reply || "Já existe algo parecido — confirme antes de eu criar outro." };
+      if (data?.erro === "confirmacao_necessaria") return { content: data.reply || "Essa ação precisa de confirmação explícita antes de eu executar." };
+      if (data?.erro === "admin_desativado" || data?.erro === "modo_sugerir") return { content: data.reply || "O modo administrador está desligado ou só sugerindo agora — não executei nada." };
+      if (data?.erro === "rate_limited") return { content: data.reply || "Fiz escrita demais no painel agora há pouco — vou esperar um instante antes da próxima." };
+      return { content: `Não consegui fazer essa alteração no painel agora (${data?.erro || "erro desconhecido"}).` };
+    }
+    if (name === "painel_buscar" && canPainel) {
+      const resultados = await callPainelBusca(env, args.q || "");
+      if (!resultados.length) return { content: `Não achei nada no painel sobre "${args.q}".` };
+      const content = resultados.map((r) => `- [${r.label}] ${r.titulo}${r.status ? ` (${r.status})` : ""}`).join("\n");
+      return { content, card: construirCardBusca(args.q, resultados) };
+    }
+    if (name === "desfazer_acao_painel" && canPainel) {
+      const data = await callPainelDesfazerUltima(env);
+      if (data?.ok) return { content: `Desfiz a última ação no painel (${data.label || data.collection || "item"}).` };
+      return { content: "Não achei nenhuma ação recente do painel pra desfazer." };
+    }
     if (name === "guardar_memoria") {
       // Aceita o campo antigo `fact` também (modelo em cache/few-shot pode ainda mandar
       // assim) — nunca quebra por causa de um nome de campo desatualizado.
@@ -3426,7 +3576,8 @@ function buildAllTools(canSearch, canPainel) {
       CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_TAREFA_TOOL, GERENCIAR_CONTA_TOOL, GERENCIAR_COMPROMISSO_TOOL,
       ANOTAR_DIARIO_TOOL, DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL,
       CONSULTAR_TAREFAS_TOOL, CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL, CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL,
-      CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL, CONSULTAR_EMAIL_TOOL
+      CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL, CONSULTAR_EMAIL_TOOL,
+      PAINEL_GERENCIAR_TOOL, PAINEL_BUSCAR_TOOL, DESFAZER_ACAO_PAINEL_TOOL
     );
   }
   return tools;
@@ -3449,25 +3600,35 @@ export function selectToolsForMessage(userText, canSearch, canPainel, companionS
   let matchedAny = false;
   const add = (...toolsToAdd) => { toolsToAdd.forEach((t) => selected.add(t)); matchedAny = true; };
 
-  if (canPainel && AGENDA_PEDIDO_REGEX.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_COMPROMISSO_TOOL);
-  if (canPainel && /\btarefa/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_TAREFAS_TOOL, GERENCIAR_TAREFA_TOOL);
-  if (canPainel && /\bconta(s)?\b/.test(n)) add(CONSULTAR_PAINEL_TOOL, GERENCIAR_CONTA_TOOL);
+  if (canPainel && AGENDA_PEDIDO_REGEX.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_AGENDA_TOOL, GERENCIAR_COMPROMISSO_TOOL, PAINEL_GERENCIAR_TOOL);
+  if (canPainel && /\btarefa/.test(n)) add(CONSULTAR_PAINEL_TOOL, CONSULTAR_TAREFAS_TOOL, GERENCIAR_TAREFA_TOOL, PAINEL_GERENCIAR_TOOL);
+  if (canPainel && /\bconta(s)?\b/.test(n)) add(CONSULTAR_PAINEL_TOOL, GERENCIAR_CONTA_TOOL, PAINEL_GERENCIAR_TOOL);
   if (canPainel && /\bdiari/.test(n)) add(ANOTAR_DIARIO_TOOL, DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL);
   // Mesmo sem a palavra "diário" — um pedido de seguimento tipo "apaga essa última
   // atualização e adiciona uma nova" (depois de já ter pedido pra anotar algo antes)
-  // também precisa oferecer desfazer/corrigir, não só o genérico.
-  if (canPainel && /\b(apaga|apague|desfaz|desfez|desfazer|remove|removeu|remova|corrige|corrigiu|corrigir|troca|trocar|troque)\b/.test(n)) {
-    add(DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL);
+  // também precisa oferecer desfazer/corrigir, não só o genérico. ADMIN-1: o mesmo
+  // gatilho também oferece desfazer_acao_painel (pra "desfaz"/"volta atrás" depois de
+  // uma ação do painel_gerenciar, não só do diário).
+  if (canPainel && /\b(apaga|apague|desfaz|desfez|desfazer|remove|removeu|remova|corrige|corrigiu|corrigir|troca|trocar|troque|volta atras)\b/.test(n)) {
+    add(DESFAZER_ANOTACAO_DIARIO_TOOL, CORRIGIR_ANOTACAO_DIARIO_TOOL, DESFAZER_ACAO_PAINEL_TOOL);
   }
-  if (canPainel && /\bideia/.test(n)) add(CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL);
-  if (canPainel && /\blembret/.test(n)) add(CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL);
-  if (canPainel && /\blista/.test(n)) add(CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL);
+  if (canPainel && /\bideia/.test(n)) add(CONSULTAR_IDEIAS_TOOL, GERENCIAR_IDEIA_TOOL, PAINEL_GERENCIAR_TOOL);
+  if (canPainel && /\blembret/.test(n)) add(CONSULTAR_LEMBRETES_TOOL, GERENCIAR_LEMBRETE_TOOL, PAINEL_GERENCIAR_TOOL);
+  if (canPainel && /\blista/.test(n)) add(CONSULTAR_LISTAS_TOOL, GERENCIAR_LISTA_TOOL, PAINEL_GERENCIAR_TOOL);
+  // ADMIN-1: rascunho/nota e pedidos genéricos de administração em massa (arquivar,
+  // organizar, mover tudo de uma coluna) — só o painel_gerenciar cobre isso, as
+  // ferramentas gerenciar_* específicas (PAINEL-3) não têm essas ações.
+  if (canPainel && /\b(rascunho|nota|notas)\b/.test(n)) add(PAINEL_GERENCIAR_TOOL);
+  if (canPainel && /\b(arquiv\w*|organiz\w*|administra\w*|tudo de uma vez|em massa)\b/.test(n)) add(PAINEL_GERENCIAR_TOOL);
   if (canPainel && (n.includes("email") || n.includes("e mail") || n.includes("caixa de entrada"))) add(CONSULTAR_EMAIL_TOOL);
   // PAINEL-3: além de quando a pessoa pergunta por "recado" explicitamente, oferece
   // a ferramenta numa saudação/início de conversa também — é quando ela normalmente
   // ficaria sabendo de um recado deixado pelo painel (ex: "@jarbas" numa nota), sem
   // precisar perguntar por ele. Offering a ferramenta não obriga o modelo a chamá-la.
   if (canPainel && (/\brecado/.test(n) || companionState?.saudacaoDetectada)) add(CONSULTAR_RECADOS_TOOL, CONCLUIR_RECADO_TOOL);
+  // ADMIN-1 PARTE D: "o que eu tenho sobre X", "cadê aquilo do Y" — busca ampla no
+  // painel inteiro, não só numa coleção específica.
+  if (canPainel && /\b(o que (eu )?tenho sobre|cade|onde (esta|ficou|anotei)|procura no painel|busca no painel|tem algo sobre)\b/.test(n)) add(PAINEL_BUSCAR_TOOL);
   if (/\b(clima|tempo|chuva|previsao)\b/.test(n)) add(WEATHER_TOOL);
   if (canSearch && /\b(pesquis|busca|noticia)/.test(n)) add(SEARCH_TOOL);
   if (n.includes("http") || n.includes("www") || /\blink/.test(n)) add(RESUMIR_LINK_TOOL);
@@ -5075,6 +5236,271 @@ export async function varrerPainelSeNecessario(env, mudancas, logBatch) {
   return { novosCompromissosHoje };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// ADMIN-1 PARTE B — janelas fixas de verificação do painel (07:00/12:00/16:00/
+// 20:00 America/Sao_Paulo, configuráveis em mem.config.janelas). Roda dentro do
+// MESMO tick de 15min do cron (nenhum Cron Trigger novo) — cada tick só checa se
+// "agora" cai dentro da tolerância de alguma janela ativa que ainda não rodou
+// hoje. Leitura DETERMINÍSTICA primeiro (sem IA); só chama o LLM (pra escrever
+// uma leitura com opinião) se achou algo E mudou desde a última vez, até 4x/dia.
+//
+// IMPORTANTE (evitar aviso duplicado): "conta vencendo"/"tarefa parada" já são
+// push-avisados a cada 15min por computeDeterministicTriggers (ver acima) — os
+// achados equivalentes aqui (achadosContasVencendo/achadosItensEsquecidos)
+// alimentam SÓ a leitura/opinião escrita e mem.insights, NUNCA o pipeline de
+// push: só achadosConflitoAgenda (um tipo que nenhum outro gatilho cobre) é
+// candidato a push, pelo MESMO pipeline de orçamento/sono que já existe.
+// ─────────────────────────────────────────────────────────────────────────
+export const JANELAS_PADRAO = { "07:00": true, "12:00": true, "16:00": true, "20:00": true };
+const JANELA_TOLERANCIA_MIN = 15; // mesmo passo do tick do cron
+const JANELA_LLM_MAX_DIA = 4;
+const JANELA_DIAS_TAREFA_ESQUECIDA = 3;
+const JANELA_DIAS_IDEIA_ESQUECIDA = 10;
+const JANELA_DIAS_LEMBRETE_ESQUECIDO = 5;
+const PAINEL_DOMINIO_LABEL = { tarefa: "Tarefa", compromisso: "Compromisso", conta: "Conta", ideia: "Ideia", lembrete: "Lembrete", lista: "Lista", nota: "Nota", diario: "Diário" };
+const PAINEL_RESUMO_CACHE_KEY = "painel:resumo:cache";
+
+// Pura — fácil de testar. {hour,minute} vem de saoPauloNow().
+export function janelaEstaNaHoraCerta({ hour, minute }, horarioHHMM, toleranciaMin = JANELA_TOLERANCIA_MIN) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(horarioHHMM || "");
+  if (!m) return false;
+  const alvoMin = Number(m[1]) * 60 + Number(m[2]);
+  const agoraMin = hour * 60 + minute;
+  return agoraMin >= alvoMin && agoraMin < alvoMin + toleranciaMin;
+}
+
+// Pura. `ultimaExecucaoISO` vem do KV (null se nunca rodou) — "já rodou hoje" se
+// a data (AAAA-MM-DD, fuso São Paulo) da última execução é a mesma de hoje.
+export function devoRodarJanelaAgora(horario, { hour, minute, dateStr }, ultimaExecucaoISO, { forcar = false } = {}) {
+  if (forcar) return true;
+  if (!janelaEstaNaHoraCerta({ hour, minute }, horario)) return false;
+  if (ultimaExecucaoISO && ultimaExecucaoISO.slice(0, 10) === dateStr) return false;
+  return true;
+}
+
+function diasEntreISO(dataISO, hojeISO) {
+  const a = new Date(`${(dataISO || "").slice(0, 10)}T00:00:00Z`);
+  const b = new Date(`${hojeISO}T00:00:00Z`);
+  if (isNaN(a) || isNaN(b)) return 0;
+  return Math.max(0, Math.round((b - a) / 86400000));
+}
+
+// Itens "esquecidos": tarefa parada em "Para Agora" há N dias, ideia sem destino
+// há N dias, lembrete pendente há N dias — leitura/opinião apenas, nunca push
+// (ver nota acima). Prioridade "alta" numa tarefa fica marcada no achado (pode
+// virar sinal pra uma leitura mais enfática, mesmo sem disparar push sozinha).
+export function achadosItensEsquecidos(resumo, hojeISO) {
+  const regras = [
+    { dominio: "tarefa", status: "now", dias: JANELA_DIAS_TAREFA_ESQUECIDA },
+    { dominio: "ideia", status: null, dias: JANELA_DIAS_IDEIA_ESQUECIDA },
+    { dominio: "lembrete", status: "pendente", dias: JANELA_DIAS_LEMBRETE_ESQUECIDO },
+  ];
+  const achados = [];
+  for (const { dominio, status, dias: limiar } of regras) {
+    for (const it of (resumo?.[dominio]?.itens || [])) {
+      if (status && it.status !== status) continue;
+      if (!/^\d{4}-\d{2}-\d{2}/.test(it.data || "")) continue;
+      const dias = diasEntreISO(it.data, hojeISO);
+      if (dias < limiar) continue;
+      achados.push({
+        tipo: "esquecido", dominio, titulo: it.titulo, dias, prioridadeAlta: it.prioridade === "alta",
+        texto: `${PAINEL_DOMINIO_LABEL[dominio]} "${it.titulo}" está parada há ${dias} dias${it.prioridade === "alta" ? " (prioridade alta)" : ""}.`,
+      });
+    }
+  }
+  return achados;
+}
+
+// Contas pendentes vencendo em até 2 dias — leitura/opinião apenas (nunca push,
+// ver nota acima; o push de "vence hoje/atrasada" já existe a cada 15min).
+export function achadosContasVencendo(resumo, dayOfMonth) {
+  const achados = [];
+  for (const it of (resumo?.conta?.itens || [])) {
+    if (it.status !== "pendente") continue;
+    const m = /dia (\d+)/.exec(it.data || "");
+    if (!m) continue;
+    const diff = Number(m[1]) - dayOfMonth;
+    if (diff < 0 || diff > 2) continue;
+    achados.push({ tipo: "conta_vencendo", titulo: it.titulo, diasRestantes: diff, texto: `Conta "${it.titulo}" vence ${diff === 0 ? "hoje" : `em ${diff} dia(s)`}.` });
+  }
+  return achados;
+}
+
+// Dois compromissos no MESMO horário (data+hora, já vem junto em `data` no
+// resumo) — tipo de achado que NENHUM gatilho de 15min cobre hoje, então é o
+// único que entra como candidato a push, se "hoje" (ver executarJanelaDeVerificacao).
+export function achadosConflitoAgenda(resumo, hojeISO) {
+  const porSlot = new Map();
+  for (const it of (resumo?.compromisso?.itens || [])) {
+    if (!it.data) continue;
+    if (!porSlot.has(it.data)) porSlot.set(it.data, []);
+    porSlot.get(it.data).push(it.titulo);
+  }
+  const achados = [];
+  for (const [data, titulos] of porSlot) {
+    if (titulos.length < 2) continue;
+    achados.push({ tipo: "conflito_agenda", data, hoje: data.startsWith(hojeISO), texto: `Dois compromissos marcados pra ${data}: ${titulos.join(" e ")}.` });
+  }
+  return achados;
+}
+
+// Dois itens com título normalizado idêntico no MESMO domínio — leitura/opinião
+// apenas; é o mesmo sinal que o dedup de painel_gerenciar usa pra não duplicar
+// na HORA de criar, aqui é só pra avisar de duplicatas que já existem.
+export function achadosDuplicados(resumo) {
+  const achados = [];
+  for (const [dominio, bloco] of Object.entries(resumo || {})) {
+    const vistos = new Map();
+    for (const it of (bloco?.itens || [])) {
+      const nq = normalizeText(it.titulo || "");
+      if (!nq) continue;
+      if (vistos.has(nq)) {
+        achados.push({ tipo: "duplicado", dominio, titulo: it.titulo, texto: `Parecem duplicados em ${PAINEL_DOMINIO_LABEL[dominio] || dominio}: "${vistos.get(nq)}" e "${it.titulo}".` });
+      } else {
+        vistos.set(nq, it.titulo);
+      }
+    }
+  }
+  return achados;
+}
+
+// Pura — reúne as quatro famílias de regra determinística (sem IA nenhuma).
+export function avaliarPainelParaJanela(resumo, { hojeISO, dayOfMonth }) {
+  return [
+    ...achadosItensEsquecidos(resumo, hojeISO),
+    ...achadosContasVencendo(resumo, dayOfMonth),
+    ...achadosConflitoAgenda(resumo, hojeISO),
+    ...achadosDuplicados(resumo),
+  ];
+}
+
+const JANELA_LEITURA_SYSTEM_PROMPT = `Você é o Jarbas, o administrador do painel pessoal do Gustavo. Uma varredura determinística (sem IA) encontrou os pontos abaixo sobre o estado atual do painel. Escreva uma leitura CURTA (2-4 frases), no seu jeito de falar (caloroso, direto, com opinião própria — "eu priorizaria X porque...", "essa ideia combina com aquela tarefa") — relacione dois achados entre si quando fizer sentido. Nunca invente nada que não esteja listado. Se algo for genuinamente urgente (conta vencendo hoje/amanhã, conflito de agenda hoje), deixe isso claro logo no início. Responda só com o texto da leitura — sem JSON, sem markdown, sem introdução tipo "aqui está".`;
+
+async function gerarLeituraComOpiniao(env, achados, leituraAnterior) {
+  const achadosTexto = achados.map((a) => `- ${a.texto}`).join("\n");
+  const userContent = leituraAnterior
+    ? `ACHADOS:\n${achadosTexto}\n\nSUA ÚLTIMA LEITURA (não repita do zero, pode referenciar):\n${leituraAnterior}`
+    : `ACHADOS:\n${achadosTexto}`;
+  const raw = await callGroq(env, JANELA_LEITURA_SYSTEM_PROMPT, [{ role: "user", content: userContent }], 300);
+  return raw.trim();
+}
+
+async function podeChamarLlmJanelaHoje(env, dateStr) {
+  const raw = await env.COMPANION_KV.get(`janela:llm_usage:${dateStr}`);
+  return (Number(raw) || 0) < JANELA_LLM_MAX_DIA;
+}
+
+async function incrementarLlmJanelaHoje(env, dateStr) {
+  const n = (Number(await env.COMPANION_KV.get(`janela:llm_usage:${dateStr}`)) || 0) + 1;
+  await env.COMPANION_KV.put(`janela:llm_usage:${dateStr}`, String(n), { expirationTtl: 3 * 24 * 60 * 60 });
+}
+
+// Atualiza o cache de painel_resumo (pro prompt de toda conversa, PARTE A.3) —
+// chamado em TODO tick do cron, pra nunca precisar buscar na hora de responder.
+async function refreshPainelResumoCache(env, mem) {
+  if (!env.COMPANION_KV || !env.PAINEL_API_KEY) return;
+  try {
+    const resumo = await callPainelResumo(env);
+    const ultimaLeitura = encontrarUltimaLeituraDeHoje(mem?.painelLeitura, saoPauloNow().dateStr);
+    await env.COMPANION_KV.put(PAINEL_RESUMO_CACHE_KEY, JSON.stringify({ resumo, ultimaLeitura, cachedAt: new Date().toISOString() }));
+  } catch (err) {
+    console.error("painel_resumo_cache_refresh_failed:", String(err?.message || err));
+  }
+}
+
+function encontrarUltimaLeituraDeHoje(painelLeitura, hojeISO) {
+  if (!painelLeitura) return null;
+  let melhor = null;
+  for (const [horario, entrada] of Object.entries(painelLeitura)) {
+    if (!entrada?.texto || !String(entrada.em || "").startsWith(hojeISO)) continue;
+    if (!melhor || entrada.em > melhor.em) melhor = { horario, em: entrada.em, texto: entrada.texto };
+  }
+  return melhor;
+}
+
+// Orquestrador — roda a cada tick do cron (15min); cada janela configurada só
+// executa de verdade dentro da sua tolerância, uma vez por dia (ou sob demanda,
+// via `forcar` + `janelaId`, pro botão "Verificar agora" do painel).
+export async function executarJanelaDeVerificacao(env, logBatch, cronMetrics, { forcar = false, janelaId = null } = {}) {
+  if (!env.PAINEL_API_KEY || !env.COMPANION_KV) return { rodou: false, motivo: "painel_not_configured" };
+
+  const { hour, minute, dateStr: hojeISO, dayOfMonth } = saoPauloNow();
+  const { config } = await loadJarbasMemCached(env);
+  const janelasConfig = { ...JANELAS_PADRAO, ...(config.janelas || {}) };
+  const candidatas = forcar && janelaId ? [janelaId] : Object.keys(janelasConfig).filter((h) => janelasConfig[h]);
+
+  const executadas = [];
+  const achadosUrgentesPush = [];
+  for (const horario of candidatas) {
+    const lastKey = `janela:last:${horario}`;
+    const ultimaISO = await env.COMPANION_KV.get(lastKey);
+    if (!devoRodarJanelaAgora(horario, { hour, minute, dateStr: hojeISO }, ultimaISO, { forcar })) continue;
+
+    let resumo;
+    try {
+      resumo = await callPainelResumo(env);
+    } catch (err) {
+      console.error("janela_resumo_failed:", String(err?.message || err));
+      continue;
+    }
+    const achados = avaliarPainelParaJanela(resumo, { hojeISO, dayOfMonth });
+
+    // "Mudou desde a última vez?" — compara o hash agregado por coleção que o
+    // próprio painel_resumo já calcula (sem precisar outro diff pra isso).
+    const snapKey = `janela:snapshot:${horario}`;
+    const hashesAtual = Object.fromEntries(Object.entries(resumo).map(([d, b]) => [d, b.hash]));
+    let hashesAnterior = null;
+    try { const raw = await env.COMPANION_KV.get(snapKey); hashesAnterior = raw ? JSON.parse(raw) : null; } catch { /* trata como mudou */ }
+    const mudou = !hashesAnterior || Object.keys(hashesAtual).some((d) => hashesAtual[d] !== hashesAnterior[d]);
+    await env.COMPANION_KV.put(snapKey, JSON.stringify(hashesAtual));
+    if (!forcar) await env.COMPANION_KV.put(lastKey, new Date().toISOString());
+
+    let leitura = "";
+    let llmUsado = false;
+    if (achados.length && (mudou || forcar)) {
+      // Limite de 4 chamadas de LLM/dia pras janelas é um teto ABSOLUTO — mesmo o
+      // botão "Verificar agora" (forcar:true) respeita, nunca abre uma brecha pra
+      // passar do limite só porque foi pedido manualmente.
+      const podeLlm = await podeChamarLlmJanelaHoje(env, hojeISO);
+      if (podeLlm) {
+        try {
+          const mem = (await callPainelMemoryLoad(env)) || {};
+          const leituraAnterior = mem.painelLeitura?.[horario]?.leitura || "";
+          leitura = await gerarLeituraComOpiniao(env, achados, leituraAnterior);
+          llmUsado = true;
+          if (cronMetrics) cronMetrics.llmCalls++;
+          await incrementarLlmJanelaHoje(env, hojeISO);
+          const novoPainelLeitura = { ...(mem.painelLeitura || {}), [horario]: { em: new Date().toISOString(), achados: achados.map((a) => a.texto), texto: leitura } };
+          // mem.insights (memória v2) — DIFERENTE de um item tipo "insight" em
+          // mem.items (guardar_memoria); este é um array próprio, só de leituras
+          // do painel, mesmo padrão de mem.ideias (cap 20, mais recente primeiro).
+          const novosInsights = [{ texto: leitura, em: new Date().toISOString(), janela: horario }, ...(mem.insights || [])].slice(0, 20);
+          await callPainelMemorySave(env, { ...mem, painelLeitura: novoPainelLeitura, insights: novosInsights });
+        } catch (err) {
+          console.error("janela_llm_failed:", String(err?.message || err));
+        }
+      }
+    }
+
+    if (Array.isArray(logBatch)) {
+      pushLogEvent(logBatch, {
+        tipo: "leitura", origem: "cron",
+        resumo: leitura || (achados.length ? `Janela ${horario}: ${achados.length} ponto(s) encontrados (sem chamar o LLM).` : `Janela ${horario}: nada de novo.`),
+        detalhes: { horario, achados: achados.length, llmUsado, mudou },
+      });
+    }
+
+    // Só conflito de agenda HOJE é candidato a push — ver nota no topo do bloco.
+    for (const a of achados) {
+      if (a.tipo === "conflito_agenda" && a.hoje) achadosUrgentesPush.push({ tipo: "janela", id: `janela-conflito-${a.data}`, texto: a.texto });
+    }
+
+    executadas.push({ horario, achados, leitura, llmUsado, mudou });
+  }
+
+  return { rodou: executadas.length > 0, janelas: executadas, achadosUrgentesPush };
+}
+
 async function runScheduledPush(env, ctx) {
   if (!env.COMPANION_KV || !env.PAINEL_API_KEY) return;
 
@@ -5110,6 +5536,24 @@ async function runScheduledPush(env, ctx) {
     cronMetrics.llmCalls += resultadoPerfil.llmCalls || 0;
   } catch (err) {
     console.error("cron_perfil_consolidacao_failed:", String(err?.message || err));
+  }
+
+  // ADMIN-1: cache de painel_resumo (pro prompt de toda conversa) atualizado em
+  // TODO tick, e as janelas fixas de verificação (só rodam de verdade dentro da
+  // própria tolerância, uma vez por dia cada) — ambos independentes de haver
+  // assinatura de push ou não.
+  let janelaResultado = { rodou: false, janelas: [], achadosUrgentesPush: [] };
+  try {
+    janelaResultado = await executarJanelaDeVerificacao(env, logBatch, cronMetrics);
+    cronMetrics.llmCalls += janelaResultado.janelas?.filter((j) => j.llmUsado).length || 0;
+  } catch (err) {
+    console.error("cron_janela_verificacao_failed:", String(err?.message || err));
+  }
+  try {
+    const memParaCache = await callPainelMemoryLoad(env);
+    await refreshPainelResumoCache(env, memParaCache);
+  } catch (err) {
+    console.error("cron_painel_resumo_cache_failed:", String(err?.message || err));
   }
 
   let notification = null;
@@ -5189,6 +5633,10 @@ async function runScheduledPush(env, ctx) {
               ...outrosGatilhos,
               ...pendenciaGatilhos,
               ...compromissosNovosGatilhos,
+              // ADMIN-1 PARTE B: só conflito de agenda HOJE, achado pela janela de
+              // verificação — o único tipo de achado de janela que vira push (ver nota
+              // em executarJanelaDeVerificacao sobre não duplicar avisos já existentes).
+              ...(janelaResultado.achadosUrgentesPush || []),
               ...(novelty ? [{ tipo: "espontaneo", id: "novelty", texto: novelty.content }] : []),
             ];
 
@@ -5323,6 +5771,17 @@ async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
   }
   const novidadesPainelLine = montarNovidadesPainelLine(novidadesFila);
 
+  // ADMIN-1 PARTE A.3: resumo compacto do painel, de um CACHE já pronto (atualizado
+  // pelo cron a cada tick, ~15min) — nunca busca na hora, pra não atrasar a resposta.
+  let resumoPainelCache = null;
+  if (env.COMPANION_KV) {
+    try {
+      const raw = await env.COMPANION_KV.get(PAINEL_RESUMO_CACHE_KEY);
+      resumoPainelCache = raw ? JSON.parse(raw) : null;
+    } catch (err) { console.error("resumo_painel_cache_read_failed:", String(err?.message || err)); }
+  }
+  const resumoPainelLine = montarResumoPainelLine(resumoPainelCache);
+
   const logBatch = [];
   pushLogEvent(logBatch, { tipo: "conversa", origem: "usuario", resumo: lastUserText });
 
@@ -5347,7 +5806,7 @@ async function prepareCompanionTurn(env, ctx, trimmed, companionState) {
   return {
     timestamped, timeGapLine, lastUserText, horaAtual, minutoAtual, diaAtual, hojeISOServidor,
     saudacaoDetectada, briefingPendente, briefingJaExistiaHoje, gatheredParaBriefing,
-    estadoConversaLine, novidadesFila, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit,
+    estadoConversaLine, novidadesFila, novidadesPainelLine, resumoPainelLine, logBatch, selectedItemsText, shortcutHit,
   };
 }
 
@@ -5431,7 +5890,7 @@ export function handleCompanionStream(env, ctx, trimmed, companionState) {
     let turnCtx;
     try {
       turnCtx = await prepareCompanionTurn(env, ctx, trimmed, companionState);
-      const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
+      const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, resumoPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
       companionState = { ...companionState, saudacaoDetectada: turnCtx.saudacaoDetectada };
 
       if (shortcutHit) {
@@ -5452,7 +5911,7 @@ export function handleCompanionStream(env, ctx, trimmed, companionState) {
         }
       }
 
-      const systemPrompt = companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine);
+      const systemPrompt = companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine, resumoPainelLine);
       const baseMessages = [{ role: "system", content: systemPrompt }, ...timestamped];
       const canSearch = !!env.TAVILY_API_KEY;
       const canPainel = !!env.PAINEL_API_KEY;
@@ -5732,6 +6191,23 @@ export default {
         return json({ error: "perfil_consolidar_failed", detail: String(err?.message || err) }, 502);
       }
     }
+    // ADMIN-1 PARTE B.4: botão "Verificar agora" no painel (bloco "Janelas de
+    // verificação") — roda uma janela sob demanda, sem esperar o horário dela nem
+    // se já rodou hoje; ainda respeita o limite de 4 chamadas de LLM/dia (teto
+    // absoluto, nunca contornado só porque foi um pedido manual).
+    if (mode === "painel_verificar_janela") {
+      if (!env.SYNC_KEY || body.key !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401);
+      if (!env.PAINEL_API_KEY) return json({ error: "painel_not_configured" }, 500);
+      try {
+        const janelaId = typeof body.janelaId === "string" && /^\d{1,2}:\d{2}$/.test(body.janelaId) ? body.janelaId : "07:00";
+        const logBatch = [];
+        const resultado = await executarJanelaDeVerificacao(env, logBatch, null, { forcar: true, janelaId });
+        await flushLogBatch(env, ctx, logBatch);
+        return json(resultado);
+      } catch (err) {
+        return json({ error: "painel_verificar_janela_failed", detail: String(err?.message || err) }, 502);
+      }
+    }
     // Botão "Ouvir o resumo de hoje agora" nas Configurações — gera e fala na hora,
     // SEM marcar briefing:done (o cron ainda dispara o briefing automático de manhã
     // normalmente, essa chamada manual não substitui nem adianta esse controle).
@@ -5939,7 +6415,7 @@ export default {
       }
       if (mode === "companion") {
         const turnCtx = await prepareCompanionTurn(env, ctx, trimmed, companionState);
-        const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
+        const { timestamped, timeGapLine, lastUserText, estadoConversaLine, novidadesPainelLine, resumoPainelLine, logBatch, selectedItemsText, shortcutHit } = turnCtx;
         companionState = { ...companionState, saudacaoDetectada: turnCtx.saudacaoDetectada };
         if (shortcutHit) {
           try {
@@ -5975,7 +6451,7 @@ export default {
           // FALADA (1-2 frases curtas, quase sempre); a chamada de síntese pós-ferramenta
           // (dentro de callGroqWithSearch) continua com no mínimo 400, pra relatar
           // resultados de ferramenta sem cortar pela metade.
-          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine), timestamped, COMPANION_MAX_TOKENS, companionState, logBatch);
+          const raw = await callGroqWithSearch(env, companionPrompt(companionState, timeGapLine, selectedItemsText, estadoConversaLine, novidadesPainelLine, resumoPainelLine), timestamped, COMPANION_MAX_TOKENS, companionState, logBatch);
           saveMemory = raw.saveMemory;
           saveLearned = raw.saveLearned;
           saveMemoryItem = raw.saveMemoryItem;
