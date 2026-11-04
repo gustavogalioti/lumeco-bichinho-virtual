@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>Feed quebrado de propósito</title>
+<item>
+<title>Notícia incompleta sem fechar o link</title>
+<link>https://example.com/incompleta
+<pubDate>Tue, 03 Nov 2026 10:00:00 +0000</pubDate>
+</item>
+<item>
+<title>Notícia válida depois da quebrada</title>
+<link>https://example.com/valida</link>
+<pubDate>Tue, 03 Nov 2026 11:00:00 +0000</pubDate>
+<description>Resumo ok</description>
+</item>
+</channel>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Feed Atom de exemplo</title>
+  <link href="https://example.com/" />
+  <updated>2026-11-03T20:00:00Z</updated>
+  <id>urn:uuid:60a76c80-d399-11d9-b93C-0003939e0af6</id>
+  <entry>
+    <title>Banco Central mantém Selic e mercado reage &amp; se ajusta</title>
+    <link href="https://example.com/noticias/selic-mantida" rel="alternate" />
+    <id>urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6a</id>
+    <updated>2026-11-03T19:30:00Z</updated>
+    <published>2026-11-03T19:00:00Z</published>
+    <summary><![CDATA[O Copom decidiu manter a taxa Selic, citando <b>riscos fiscais</b> e inflação ainda acima da meta.]]></summary>
+    <category term="economia" />
+  </entry>
+  <entry>
+    <title>Tecnologia: nova lei de dados entra em vigor</title>
+    <link href="https://example.com/noticias/lei-dados" rel="alternate" />
+    <id>urn:uuid:2225c695-cfb8-4ebb-aaaa-80da344efa6b</id>
+    <updated>2026-11-03T18:00:00Z</updated>
+    <summary>Resumo simples sem CDATA e sem HTML embutido.</summary>
+  </entry>
+</feed>
