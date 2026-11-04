@@ -1527,12 +1527,33 @@ function renderTelaTarefas(){
   linhas.forEach(([label,v]) => { h += `<div class="bar"><span>${label}</span><i><u style="width:${Math.round(v/mx*100)}%"></u></i><b>${v}</b></div>`; });
   el.innerHTML = h;
 }
+// NEWS-1 PARTE C.1: a tela de Notícias roda um carrossel entre os destaques da
+// última janela (categoria + título curto), trocando a cada 7s — só quando há
+// mais de um destaque; sem fonte, nunca inventa dado, só esconde (ver telaTemDados).
+let tvIndex = 0;
+let tvRotateTimer = null;
+function pararRotacaoTv(){ if(tvRotateTimer){ clearInterval(tvRotateTimer); tvRotateTimer = null; } }
+function desenharTv(n){
+  const el = telaEl('tv'); if(!el) return;
+  el.innerHTML = `<h4><b class="live"></b>Notícias</h4><div class="tvscr"><small>${escapeHtmlTela(n.categoria||'')}</small><p>${escapeHtmlTela(n.titulo||'')}</p></div>`;
+}
+function iniciarRotacaoTv(total){
+  if(total <= 1){ pararRotacaoTv(); return; }
+  if(tvRotateTimer) return; // já rodando, não duplica o intervalo
+  tvRotateTimer = setInterval(() => {
+    const itens = dadosTelas.noticias || [];
+    if(!itens.length){ pararRotacaoTv(); return; }
+    tvIndex = (tvIndex + 1) % itens.length;
+    desenharTv(itens[tvIndex]);
+  }, 7000);
+}
 function renderTelaTv(){
   const el = telaEl('tv'); if(!el) return;
   const itens = dadosTelas.noticias || [];
-  if(!itens.length){ el.innerHTML = '<h4><b></b>Notícias</h4><p class="sem-fonte">sem fonte configurada</p>'; return; }
-  const n = itens[0];
-  el.innerHTML = `<h4><b class="live"></b>Notícias</h4><div class="tvscr"><small>${escapeHtmlTela(n.categoria||'')}</small><p>${escapeHtmlTela(n.titulo||'')}</p></div>`;
+  if(!itens.length){ el.innerHTML = '<h4><b></b>Notícias</h4><p class="sem-fonte">sem fonte configurada</p>'; pararRotacaoTv(); return; }
+  if(tvIndex >= itens.length) tvIndex = 0;
+  desenharTv(itens[tvIndex]);
+  iniciarRotacaoTv(itens.length);
 }
 function renderTelaMercado(){
   const el = telaEl('mercado'); if(!el) return;
